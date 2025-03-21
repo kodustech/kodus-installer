@@ -1,0 +1,176 @@
+services:
+  kodus-web:
+    image: localhost:5000/kodus-web:prod
+    container_name: kodus-web-prod
+    ports:
+      - "${WEB_PORT}:${WEB_PORT}"
+    networks:
+      - shared-network
+      - kodus-backend-services
+    restart: unless-stopped
+    env_file:
+      - .env
+
+  kodus-orchestrator:
+    image: localhost:5000/kodus-orchestrator:prod
+    platform: linux/amd64
+    container_name: kodus-orchestrator-prod
+    volumes:
+      - log_volume:/app/logs
+    logging:
+      options:
+        max-size: "200m"
+        max-file: "10"
+    ports:
+      - "3001:3001"
+    environment:
+      - ENV=production
+      - NODE_ENV=production
+    networks:
+      - shared-network
+      - kodus-backend-services
+    restart: unless-stopped
+    env_file:
+      - .env
+
+  rabbitmq:
+    image: localhost:5000/rabbitmq:prod
+    container_name: rabbitmq-prod
+    hostname: rabbitmq
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    networks:
+      - monitoring-network
+      - shared-network
+    environment:
+      - RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS=-rabbit heartbeat 60
+    restart: unless-stopped
+    env_file:
+      - .env
+
+  db_kodus_postgres:
+    image: postgres:latest
+    container_name: db_kodus_postgres
+    ports:
+      - "5432:5432"
+    environment:
+      # These variables must be defined in the .env file
+      POSTGRES_USER: ${API_PG_DB_USERNAME}
+      POSTGRES_PASSWORD: ${API_PG_DB_PASSWORD}
+      POSTGRES_DB: ${API_PG_DB_DATABASE}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks:
+      - kodus-backend-services
+
+  db_kodus_mongodb:
+    image: mongo:6
+    container_name: db_kodus_mongodb
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodbdata:/data/db
+    environment:
+      # These variables must be defined in the .env file
+      MONGO_INITDB_ROOT_USERNAME: ${API_MG_DB_USERNAME}
+      MONGO_INITDB_ROOT_PASSWORD: ${API_MG_DB_PASSWORD}
+      MONGO_INITDB_DATABASE: ${API_MG_DB_DATABASE}
+    networks:
+      - kodus-backend-services
+
+  prometheus:
+    container_name: prometheus-prod
+    image: prom/prometheus:latest
+    environment:
+      - ENV=production
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.retention.time=30d"
+      - "--storage.tsdb.retention.size=50GB"
+      - "--web.enable-lifecycle"
+      - "--web.enable-admin-api"
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 4G
+        reservations:
+          cpus: "0.75"
+          memory: 2G
+
+  grafana:
+    container_name: grafana-prod
+    image: grafana/grafana:latest
+    environment:
+      - ENV=production
+      - GF_AUTH_ANONYMOUS_ENABLED=false
+      - GF_SECURITY_ALLOW_EMBEDDING=false
+      - GF_SECURITY_DISABLE_GRAVATAR=true
+      - GF_SECURITY_COOKIE_SECURE=true
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 4G
+        reservations:
+          cpus: "0.75"
+          memory: 2G
+
+  migration:
+    image: localhost:5000/kodus-orchestrator:prod
+    platform: linux/amd64
+    container_name: migration
+    depends_on:
+      - db_kodus_postgres
+    environment:
+      - ENV=${API_DATABASE_ENV}
+      - NODE_ENV=${API_NODE_ENV}
+      - API_PG_DB_HOST=${API_PG_DB_HOST}
+      - API_PG_DB_PORT=${API_PG_DB_PORT}
+      - API_PG_DB_USERNAME=${API_PG_DB_USERNAME}
+      - API_PG_DB_PASSWORD=${API_PG_DB_PASSWORD}
+      - API_PG_DB_DATABASE=${API_PG_DB_DATABASE}
+      - PGSSLMODE=disable
+    command: >
+      sh -c '
+        echo "Debug: Printing environment variables..." &&
+        echo "API_PG_DB_HOST=" $$API_PG_DB_HOST &&
+        echo "Creating temporary datasource file..." &&
+        echo "const { DataSource } = require(\"typeorm\");
+        module.exports = new DataSource({
+          type: \"postgres\",
+          host: \"db_kodus_postgres\",
+          port: 5432,
+          username: \"$$API_PG_DB_USERNAME\",
+          password: \"$$API_PG_DB_PASSWORD\",
+          database: \"$$API_PG_DB_DATABASE\",
+          ssl: false,
+          entities: [\"./dist/modules/**/infra/typeorm/entities/*.js\"],
+          migrations: [\"./dist/config/database/typeorm/migrations/*.js\"]
+        });" > datasource.js &&
+        yarn typeorm migration:run -d datasource.js
+      '
+    networks:
+      - kodus-backend-services
+    env_file:
+      - .env
+
+volumes:
+  log_volume:
+  rabbitmq-data-prod:
+    name: rabbitmq-data-prod
+  pgdata:
+  mongodbdata:
+
+networks:
+  shared-network:
+    external: true
+  monitoring-network:
+    driver: bridge
+    name: monitoring-network
+    external: true
+  kodus-backend-services:
+    driver: bridge
+    name: kodus-backend-services
+    external: true
