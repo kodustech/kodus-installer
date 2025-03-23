@@ -5,32 +5,36 @@ echo "Setting up database..."
 
 # Criar arquivo de configuração dentro do container
 docker-compose exec -T kodus-orchestrator bash -c 'cat > /usr/src/app/datasource.js << EOL
+const MainSeeder = require("./dist/config/database/typeorm/seed/main.seeder").default;
 const { DataSource } = require("typeorm");
 module.exports = new DataSource({
   type: "postgres",
-  host: "db_kodus_postgres",
+  host: process.env.API_PG_DB_HOST,
   port: 5432,
   username: process.env.API_PG_DB_USERNAME,
   password: process.env.API_PG_DB_PASSWORD,
   database: process.env.API_PG_DB_DATABASE,
   ssl: false,
-  entities: ["./dist/modules/**/infra/typeorm/entities/*.js"],
-  migrations: ["./dist/config/database/typeorm/migrations/*.js"]
+  entities: ["./dist/core/infrastructure/adapters/repositories/typeorm/schema/*.model.js",],
+  migrations: ["./dist/config/database/typeorm/migrations/*.js"],
+  seeds: [MainSeeder]
 });
 EOL'
 
 # Criar arquivo de configuração temporário para o seed
 docker-compose exec -T kodus-orchestrator bash -c 'cat > /usr/src/app/seed-datasource.js << EOL
+const MainSeeder = require("./dist/config/database/typeorm/seed/main.seeder").default;
 const { DataSource } = require("typeorm");
 const dataSourceInstance = new DataSource({
   type: "postgres",
-  host: "db_kodus_postgres",
+  host: process.env.API_PG_DB_HOST,
   port: 5432,
   username: process.env.API_PG_DB_USERNAME,
   password: process.env.API_PG_DB_PASSWORD,
   database: process.env.API_PG_DB_DATABASE,
   ssl: false,
-  entities: ["./dist/modules/**/infra/typeorm/entities/*.js"]
+  entities: ["./dist/core/infrastructure/adapters/repositories/typeorm/schema/*.model.js",],
+  seeds: [MainSeeder]
 });
 module.exports = { dataSourceInstance };
 EOL'

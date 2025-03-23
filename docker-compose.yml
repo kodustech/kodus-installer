@@ -14,7 +14,7 @@ services:
   kodus-orchestrator:
     image: localhost:5000/kodus-orchestrator:prod
     platform: linux/amd64
-    container_name: kodus-orchestrator-prod
+    container_name: ${GLOBAL_API_CONTAINER_NAME}
     volumes:
       - log_volume:/app/logs
     logging:
@@ -23,6 +23,7 @@ services:
         max-file: "10"
     ports:
       - "3001:3001"
+      - '9229:9229'
     environment:
       - ENV=production
       - NODE_ENV=production

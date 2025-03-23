@@ -28,7 +28,7 @@ docker network create kodus-backend-services 2>/dev/null || true
 
 # Subir os containers
 echo -e "${YELLOW}Starting containers...${NC}"
-docker-compose up -d
+docker-compose up -d --force-recreate
 
 # Esperar o banco ficar pronto (você pode usar wait-for-it.sh aqui)
 echo -e "${YELLOW}Waiting for database to be ready...${NC}"
