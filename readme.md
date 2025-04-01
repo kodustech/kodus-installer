@@ -1,6 +1,6 @@
 <div align="center">
 
-![Kodus Logo](https://kodus.io/wp-content/uploads/2023/11/Kodus-logo-light.png.webp)
+<img src="https://kodus.io/wp-content/uploads/2025/04/kodusinstaller.png" alt="Kodus Installer Banner">
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
