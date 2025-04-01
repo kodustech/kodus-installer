@@ -52,8 +52,9 @@ services:
 
   db_kodus_postgres:
     build:
-      context: ./docker/postgres  
-    image: postgres:latest  
+      context: .
+      dockerfile: docker/postgres/Dockerfile
+    image: kodus-postgres:latest
     container_name: db_kodus_postgres
     ports:
       - "5432:5432"
