@@ -39,6 +39,10 @@ const dataSourceInstance = new DataSource({
 module.exports = { dataSourceInstance };
 EOL'
 
+# Criar extensão vector no banco de dados
+echo "Creating vector extension..."
+docker-compose exec -T kodus-orchestrator bash -c 'cd /usr/src/app && yarn typeorm query "CREATE EXTENSION IF NOT EXISTS vector;" -d datasource.js'
+
 # Rodar migrations dentro do container
 echo "Running migrations..."
 docker-compose exec -T kodus-orchestrator bash -c 'cd /usr/src/app && yarn typeorm migration:run -d datasource.js'
