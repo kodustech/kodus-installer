@@ -17,7 +17,9 @@ fi
 # Carregar variáveis do arquivo .env
 if [ -f .env ]; then
     echo -e "${YELLOW}Loading environment variables from .env file...${NC}"
-    export $(grep -v '^#' .env | xargs)
+    set -a
+    source .env
+    set +a
 fi
 
 # Criar networks Docker necessárias
