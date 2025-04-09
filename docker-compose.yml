@@ -70,7 +70,7 @@ services:
       - kodus-backend-services
 
   db_kodus_mongodb:
-    image: mongo:6
+    image: mongo:7
     container_name: db_kodus_mongodb
     ports:
       - "27017:27017"
