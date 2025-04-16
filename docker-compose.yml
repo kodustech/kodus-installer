@@ -1,6 +1,6 @@
 services:
   kodus-web:
-    image: localhost:5000/kodus-web:prod
+    image: ghcr.io/kodustech/kodus-web:latest
     container_name: kodus-web-prod
     ports:
       - "${WEB_PORT}:${WEB_PORT}"
@@ -12,7 +12,7 @@ services:
       - .env
 
   kodus-orchestrator:
-    image: localhost:5000/kodus-orchestrator:prod
+    image: ghcr.io/kodustech/kodus-ai:latest
     platform: linux/amd64
     container_name: ${GLOBAL_API_CONTAINER_NAME}
     volumes:
@@ -35,7 +35,7 @@ services:
       - .env
 
   rabbitmq:
-    image: localhost:5000/rabbitmq:prod
+    image: rabbitmq:3.13.4-management-alpine
     container_name: rabbitmq-prod
     hostname: rabbitmq
     ports:
@@ -70,7 +70,7 @@ services:
       - kodus-backend-services
 
   db_kodus_mongodb:
-    image: mongo:7
+    image: mongo:8
     container_name: db_kodus_mongodb
     ports:
       - "27017:27017"
