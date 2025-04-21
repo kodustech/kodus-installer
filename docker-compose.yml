@@ -85,7 +85,7 @@ services:
       - kodus-backend-services
 
   migration:
-    image: localhost:5000/kodus-orchestrator:prod
+    image: ghcr.io/kodustech/kodus-ai:latest
     platform: linux/amd64
     container_name: migration
     depends_on:
