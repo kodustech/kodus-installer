@@ -23,7 +23,7 @@ services:
         max-file: "10"
     ports:
       - "3001:3001"
-      - '9229:9229'
+      - "9229:9229"
     environment:
       - ENV=production
       - NODE_ENV=production
@@ -51,15 +51,11 @@ services:
       - .env
 
   db_kodus_postgres:
-    build:
-      context: .
-      dockerfile: docker/postgres/Dockerfile
-    image: kodus-postgres:latest
+    image: pgvector/pgvector:pg16
     container_name: db_kodus_postgres
     ports:
       - "5432:5432"
     environment:
-      # These variables must be defined in the .env file
       POSTGRES_USER: ${API_PG_DB_USERNAME}
       POSTGRES_PASSWORD: ${API_PG_DB_PASSWORD}
       POSTGRES_DB: ${API_PG_DB_DATABASE}
