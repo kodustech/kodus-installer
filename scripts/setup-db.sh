@@ -3,8 +3,18 @@
 
 echo "Setting up database..."
 
+# Detectar qual versão do Docker Compose está disponível
+if docker compose version &> /dev/null; then
+    DOCKER_COMPOSE="docker compose"
+elif command -v docker-compose &> /dev/null; then
+    DOCKER_COMPOSE="docker-compose"
+else
+    echo "Error: Docker Compose is not installed"
+    exit 1
+fi
+
 # Criar arquivo de configuração dentro do container
-docker-compose exec -T kodus-orchestrator bash -c 'cat > /usr/src/app/datasource.js << EOL
+$DOCKER_COMPOSE exec -T kodus-orchestrator bash -c 'cat > /usr/src/app/datasource.js << EOL
 const MainSeeder = require("./dist/config/database/typeorm/seed/main.seeder").default;
 const { DataSource } = require("typeorm");
 module.exports = new DataSource({
@@ -22,7 +32,7 @@ module.exports = new DataSource({
 EOL'
 
 # Criar arquivo de configuração temporário para o seed
-docker-compose exec -T kodus-orchestrator bash -c 'cat > /usr/src/app/seed-datasource.js << EOL
+$DOCKER_COMPOSE exec -T kodus-orchestrator bash -c 'cat > /usr/src/app/seed-datasource.js << EOL
 const MainSeeder = require("./dist/config/database/typeorm/seed/main.seeder").default;
 const { DataSource } = require("typeorm");
 const dataSourceInstance = new DataSource({
@@ -41,19 +51,19 @@ EOL'
 
 # Criar extensão vector no banco de dados
 echo "Creating vector extension..."
-docker-compose exec -T kodus-orchestrator bash -c 'cd /usr/src/app && yarn typeorm query "CREATE EXTENSION IF NOT EXISTS vector;" -d datasource.js'
+$DOCKER_COMPOSE exec -T kodus-orchestrator bash -c 'cd /usr/src/app && yarn typeorm query "CREATE EXTENSION IF NOT EXISTS vector;" -d datasource.js'
 
 # Verificar se a extensão foi criada com sucesso
 echo "Verifying vector extension..."
-docker-compose exec -T kodus-orchestrator bash -c 'cd /usr/src/app && yarn typeorm query "SELECT extname, extversion FROM pg_extension WHERE extname = '\''vector'\'';" -d datasource.js'
+$DOCKER_COMPOSE exec -T kodus-orchestrator bash -c 'cd /usr/src/app && yarn typeorm query "SELECT extname, extversion FROM pg_extension WHERE extname = '\''vector'\'';" -d datasource.js'
 
 # Rodar migrations dentro do container
 echo "Running migrations..."
-docker-compose exec -T kodus-orchestrator bash -c 'cd /usr/src/app && yarn typeorm migration:run -d datasource.js'
+$DOCKER_COMPOSE exec -T kodus-orchestrator bash -c 'cd /usr/src/app && yarn typeorm migration:run -d datasource.js'
 
 # Rodar seeds dentro do container com o novo arquivo de configuração
 echo "Running seeds..."
-docker-compose exec -T kodus-orchestrator bash -c '
+$DOCKER_COMPOSE exec -T kodus-orchestrator bash -c '
 cd /usr/src/app && 
 export NODE_PATH=/usr/src/app/dist && 
 node -e "
