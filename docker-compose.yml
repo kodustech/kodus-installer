@@ -110,7 +110,8 @@ services:
           database: \"$$API_PG_DB_DATABASE\",
           ssl: false,
           entities: [\"./dist/modules/**/infra/typeorm/entities/*.js\"],
-          migrations: [\"./dist/config/database/typeorm/migrations/*.js\"]
+          migrations: [\"./dist/config/database/typeorm/migrations/*.js\"],
+          migrationsTransactionMode: \"each\"
         });" > datasource.js &&
         yarn typeorm migration:run -d datasource.js
       '

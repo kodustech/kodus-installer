@@ -27,6 +27,7 @@ module.exports = new DataSource({
   ssl: false,
   entities: ["./dist/core/infrastructure/adapters/repositories/typeorm/schema/*.model.js",],
   migrations: ["./dist/config/database/typeorm/migrations/*.js"],
+  migrationsTransactionMode: "each",
   seeds: [MainSeeder]
 });
 EOL'
