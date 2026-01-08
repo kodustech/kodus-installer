@@ -21,6 +21,8 @@ API_JWT_SECRET=$(openssl rand -base64 32)
 API_JWT_REFRESHSECRET=$(openssl rand -base64 32)
 CODE_MANAGEMENT_SECRET=$(openssl rand -hex 32)
 CODE_MANAGEMENT_WEBHOOK_TOKEN=$(openssl rand -base64 32 | tr -d '=' | tr '/+' '_-')
+API_MCP_MANAGER_ENCRYPTION_SECRET=$(openssl rand -hex 32)
+API_MCP_MANAGER_JWT_SECRET=$(openssl rand -base64 32)
 
 update_or_add_var() {
     local key=$1
@@ -47,6 +49,7 @@ update_or_add_var "API_JWT_SECRET" "$API_JWT_SECRET"
 update_or_add_var "API_JWT_REFRESHSECRET" "$API_JWT_REFRESHSECRET"
 update_or_add_var "CODE_MANAGEMENT_SECRET" "$CODE_MANAGEMENT_SECRET"
 update_or_add_var "CODE_MANAGEMENT_WEBHOOK_TOKEN" "$CODE_MANAGEMENT_WEBHOOK_TOKEN"
+update_or_add_var "API_MCP_MANAGER_ENCRYPTION_SECRET" "$API_MCP_MANAGER_ENCRYPTION_SECRET"
+update_or_add_var "API_MCP_MANAGER_JWT_SECRET" "$API_MCP_MANAGER_JWT_SECRET"
 
 echo -e "\n${GREEN}All security keys have been generated and updated in .env file!${NC}"
-
