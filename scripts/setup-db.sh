@@ -3,6 +3,12 @@
 
 echo "Setting up database..."
 
+if [ "${RUN_LEGACY_DB_SETUP:-false}" != "true" ]; then
+    echo "Skipping legacy setup: migrations and seeds run automatically on app startup."
+    echo "If you need to run this script, set RUN_LEGACY_DB_SETUP=true."
+    exit 0
+fi
+
 # Detectar qual versão do Docker Compose está disponível
 if docker compose version &> /dev/null; then
     DOCKER_COMPOSE="docker compose"

@@ -14,7 +14,7 @@ services:
   api:
     image: ghcr.io/kodustech/kodus-ai-api:latest
     platform: linux/amd64
-    container_name: ${GLOBAL_API_CONTAINER_NAME:-kodus_api}
+    container_name: ${GLOBAL_API_CONTAINER_NAME:-kodus-api}
     volumes:
       - log_volume:/app/logs
     logging:
@@ -72,10 +72,11 @@ services:
         max-size: "200m"
         max-file: "10"
     ports:
-      - "${WEBHOOKS_PORT:-3332}:${WEBHOOKS_PORT:-3332}"
+      - "${API_WEBHOOKS_PORT:-3332}:${API_WEBHOOKS_PORT:-3332}"
     environment:
       - ENV=production
       - NODE_ENV=production
+      - API_WEBHOOKS_PORT=${API_WEBHOOKS_PORT:-3332}
     networks:
       - shared-network
       - kodus-backend-services
@@ -110,8 +111,8 @@ services:
     container_name: rabbitmq-prod
     hostname: ${RABBITMQ_HOSTNAME:-rabbitmq}
     ports:
-      - "5672:5672"
-      - "15672:15672"
+      - "5672"
+      - "15672"
       - "15692:15692"
     networks:
       - monitoring-network
@@ -138,7 +139,7 @@ services:
     image: pgvector/pgvector:pg16
     container_name: db_kodus_postgres
     ports:
-      - "5432:5432"
+      - "5432"
     environment:
       POSTGRES_USER: ${API_PG_DB_USERNAME}
       POSTGRES_PASSWORD: ${API_PG_DB_PASSWORD}
@@ -153,7 +154,7 @@ services:
     image: mongo:8
     container_name: db_kodus_mongodb
     ports:
-      - "27017:27017"
+      - "27017"
     volumes:
       - mongodbdata:/data/db
     environment:
@@ -163,49 +164,6 @@ services:
       MONGO_INITDB_DATABASE: ${API_MG_DB_DATABASE}
     networks:
       - kodus-backend-services
-
-  migration:
-    image: ghcr.io/kodustech/kodus-ai-api:latest
-    platform: linux/amd64
-    container_name: migration
-    depends_on:
-      - db_kodus_postgres
-    environment:
-      - ENV=${API_DATABASE_ENV}
-      - NODE_ENV=${API_NODE_ENV}
-      - API_PG_DB_HOST=${API_PG_DB_HOST}
-      - API_PG_DB_PORT=${API_PG_DB_PORT}
-      - API_PG_DB_USERNAME=${API_PG_DB_USERNAME}
-      - API_PG_DB_PASSWORD=${API_PG_DB_PASSWORD}
-      - API_PG_DB_DATABASE=${API_PG_DB_DATABASE}
-      - PGSSLMODE=disable
-    command: >
-      sh -c '
-        echo "Debug: Printing environment variables..." &&
-        echo "API_PG_DB_HOST=" $$API_PG_DB_HOST &&
-        echo "Creating temporary datasource file..." &&
-        echo "const { DataSource } = require(\"typeorm\");
-        module.exports = new DataSource({
-          type: \"postgres\",
-          host: process.env.API_PG_DB_HOST || \"db_kodus_postgres\",
-          port: 5432,
-          username: \"$$API_PG_DB_USERNAME\",
-          password: \"$$API_PG_DB_PASSWORD\",
-          database: \"$$API_PG_DB_DATABASE\",
-          ssl: false,
-          entities: [
-            \"./dist/core/infrastructure/adapters/repositories/typeorm/schema/*.model.js\",
-            \"./dist/modules/**/infra/typeorm/entities/*.js\"
-          ],
-          migrations: [\"./dist/config/database/typeorm/migrations/*.js\"],
-          migrationsTransactionMode: \"each\"
-        });" > datasource.js &&
-        yarn typeorm migration:run -d datasource.js
-      '
-    networks:
-      - kodus-backend-services
-    env_file:
-      - .env
 
 volumes:
   log_volume:

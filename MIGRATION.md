@@ -9,7 +9,8 @@ to upgrade safely.
 - RabbitMQ is now required and uses a custom image (plugins + metrics)
 - MCP manager service added (`kodus-mcp-manager`)
 - New required environment variables for RabbitMQ and MCP
-- Default API container name changed to `kodus_api`
+- Default API container name changed to `kodus-api`
+- `WEBHOOKS_PORT` renamed to `API_WEBHOOKS_PORT`
 
 ## Upgrade steps
 
@@ -32,7 +33,7 @@ git pull
 4) Update your `.env`
 Add or update the following variables:
 ```bash
-WEBHOOKS_PORT=3332
+API_WEBHOOKS_PORT=3332
 
 RABBITMQ_HOSTNAME=rabbitmq
 RABBITMQ_DEFAULT_USER=kodus
@@ -45,7 +46,7 @@ API_KODUS_SERVICE_MCP_MANAGER=http://kodus-mcp-manager:3101
 API_KODUS_MCP_SERVER_URL=http://localhost:3001/mcp
 
 # Optional: align API container name
-GLOBAL_API_CONTAINER_NAME=kodus_api
+GLOBAL_API_CONTAINER_NAME=kodus-api
 ```
 
 5) Start the new stack
@@ -61,5 +62,5 @@ GLOBAL_API_CONTAINER_NAME=kodus_api
 ## Notes
 
 - If you referenced the old container name (`kodus-orchestrator`) in reverse
-  proxies, monitoring, or scripts, update it to `api` or `kodus_api`.
+  proxies, monitoring, or scripts, update it to `api` or `kodus-api`.
 - Ports used by new services: `3101` and `9140` (MCP manager), `15692` (RabbitMQ metrics).
