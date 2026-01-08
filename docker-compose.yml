@@ -11,10 +11,10 @@ services:
     env_file:
       - .env
 
-  kodus-orchestrator:
-    image: ghcr.io/kodustech/kodus-ai:latest
+  api:
+    image: ghcr.io/kodustech/kodus-ai-api:latest
     platform: linux/amd64
-    container_name: ${GLOBAL_API_CONTAINER_NAME}
+    container_name: ${GLOBAL_API_CONTAINER_NAME:-kodus_api}
     volumes:
       - log_volume:/app/logs
     logging:
@@ -23,7 +23,6 @@ services:
         max-file: "10"
     ports:
       - "3001:3001"
-      - "9229:9229"
     environment:
       - ENV=production
       - NODE_ENV=production
@@ -33,22 +32,107 @@ services:
     restart: unless-stopped
     env_file:
       - .env
+    depends_on:
+      - db_kodus_postgres
+      - db_kodus_mongodb
+      - rabbitmq
+
+  worker:
+    image: ghcr.io/kodustech/kodus-ai-worker:latest
+    platform: linux/amd64
+    container_name: kodus-worker-prod
+    volumes:
+      - log_volume:/app/logs
+    logging:
+      options:
+        max-size: "200m"
+        max-file: "10"
+    environment:
+      - ENV=production
+      - NODE_ENV=production
+    networks:
+      - shared-network
+      - kodus-backend-services
+    restart: unless-stopped
+    env_file:
+      - .env
+    depends_on:
+      - db_kodus_postgres
+      - db_kodus_mongodb
+      - rabbitmq
+
+  webhooks:
+    image: ghcr.io/kodustech/kodus-ai-webhook:latest
+    platform: linux/amd64
+    container_name: kodus-webhooks-prod
+    volumes:
+      - log_volume:/app/logs
+    logging:
+      options:
+        max-size: "200m"
+        max-file: "10"
+    ports:
+      - "${WEBHOOKS_PORT:-3332}:${WEBHOOKS_PORT:-3332}"
+    environment:
+      - ENV=production
+      - NODE_ENV=production
+    networks:
+      - shared-network
+      - kodus-backend-services
+    restart: unless-stopped
+    env_file:
+      - .env
+    depends_on:
+      - db_kodus_postgres
+      - db_kodus_mongodb
+      - rabbitmq
+
+  kodus-mcp-manager:
+    image: ghcr.io/kodustech/kodus-mcp-manager:latest
+    platform: linux/amd64
+    container_name: kodus-mcp-manager
+    ports:
+      - "${API_MCP_MANAGER_PORT:-3101}:${API_MCP_MANAGER_PORT:-3101}"
+    environment:
+      - NODE_ENV=${API_MCP_MANAGER_NODE_ENV:-production}
+      - API_MCP_MANAGER_NODE_ENV=${API_MCP_MANAGER_NODE_ENV:-production}
+    env_file:
+      - .env
+    networks:
+      - kodus-backend-services
+      - shared-network
+    restart: unless-stopped
 
   rabbitmq:
-    image: rabbitmq:3.13.4-management-alpine
+    build:
+      context: ./docker/rabbitmq
+      dockerfile: Dockerfile
     container_name: rabbitmq-prod
-    hostname: rabbitmq
+    hostname: ${RABBITMQ_HOSTNAME:-rabbitmq}
     ports:
       - "5672:5672"
       - "15672:15672"
+      - "15692:15692"
     networks:
       - monitoring-network
       - shared-network
     environment:
+      - RABBITMQ_DEFAULT_USER=${RABBITMQ_DEFAULT_USER:-kodus}
+      - RABBITMQ_DEFAULT_PASS=${RABBITMQ_DEFAULT_PASS:-kodus}
       - RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS=-rabbit heartbeat 60
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "check_running"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+    volumes:
+      - rabbitmq-data-prod:/var/lib/rabbitmq
+    command: /usr/local/bin/init-definitions.sh
     restart: unless-stopped
-    env_file:
-      - .env
 
   db_kodus_postgres:
     image: pgvector/pgvector:pg16
@@ -81,7 +165,7 @@ services:
       - kodus-backend-services
 
   migration:
-    image: ghcr.io/kodustech/kodus-ai:latest
+    image: ghcr.io/kodustech/kodus-ai-api:latest
     platform: linux/amd64
     container_name: migration
     depends_on:
@@ -103,13 +187,16 @@ services:
         echo "const { DataSource } = require(\"typeorm\");
         module.exports = new DataSource({
           type: \"postgres\",
-          host: \"db_kodus_postgres\",
+          host: process.env.API_PG_DB_HOST || \"db_kodus_postgres\",
           port: 5432,
           username: \"$$API_PG_DB_USERNAME\",
           password: \"$$API_PG_DB_PASSWORD\",
           database: \"$$API_PG_DB_DATABASE\",
           ssl: false,
-          entities: [\"./dist/modules/**/infra/typeorm/entities/*.js\"],
+          entities: [
+            \"./dist/core/infrastructure/adapters/repositories/typeorm/schema/*.model.js\",
+            \"./dist/modules/**/infra/typeorm/entities/*.js\"
+          ],
           migrations: [\"./dist/config/database/typeorm/migrations/*.js\"],
           migrationsTransactionMode: \"each\"
         });" > datasource.js &&
