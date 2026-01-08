@@ -15,7 +15,7 @@ Private services:
 - worker (kodus-worker): `ghcr.io/kodustech/kodus-ai-worker:latest`
 - mcp-manager (kodus-mcp-manager): `ghcr.io/kodustech/kodus-mcp-manager:latest` (port 3101)
 - rabbitmq: build from `docker/rabbitmq/Dockerfile`
-- postgres: `pgvector/pgvector:pg16` (port 5432)
+- postgres: build from `docker/pgvector/Dockerfile` (port 5432)
 - mongodb: `mongo:8` (port 27017)
 
 If you rename any service, update the internal URLs accordingly.
@@ -54,7 +54,7 @@ Core URLs and ports
 - `NEXTAUTH_URL=https://web.yourdomain.com`
 
 Postgres (pgvector)
-- `API_PG_DB_HOST=postgres.railway.internal`
+- `API_PG_DB_HOST=${{postgres.RAILWAY_PRIVATE_DOMAIN}}`
 - `API_PG_DB_PORT=5432`
 - `API_PG_DB_USERNAME=${{postgres.POSTGRES_USER}}`
 - `API_PG_DB_PASSWORD=${{postgres.POSTGRES_PASSWORD}}`
@@ -106,7 +106,9 @@ RabbitMQ service:
 
 ## Postgres extension
 
-Run this once after deploy:
+The custom Postgres image copies `docker/pgvector/initdb.d/01-vector.sql` into
+`/docker-entrypoint-initdb.d`, so the `vector` extension is created automatically
+for new databases. If you attach an existing database, run the SQL once:
 ```sql
 CREATE EXTENSION IF NOT EXISTS vector;
 ```
