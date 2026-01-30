@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # scripts/setup-db.sh
 
 echo "Setting up database..."
