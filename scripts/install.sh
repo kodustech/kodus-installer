@@ -159,10 +159,6 @@ validate_webhook_url() {
     host=$(normalize_host "$url")
     if [ -z "$host" ]; then
         validation_errors+=("${var_name} (${label}) must include a valid host.")
-    elif [ -n "$expected_host" ] && [ "$host" != "$expected_host" ]; then
-        validation_errors+=("${var_name} (${label}) host must match WEB_HOSTNAME_API (${expected_host}).")
-    fi
-
     local path
     path=$(extract_url_path "$url")
     local path_ok="false"
