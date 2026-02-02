@@ -136,7 +136,7 @@ services:
     restart: unless-stopped
 
   db_kodus_postgres:
-    image: pgvector/pgvector:pg16
+    image: docker.io/pgvector/pgvector:pg16
     container_name: db_kodus_postgres
     ports:
       - "5432"
@@ -151,7 +151,7 @@ services:
       - kodus-backend-services
 
   db_kodus_mongodb:
-    image: mongo:8
+    image: docker.io/mongo:8
     container_name: db_kodus_mongodb
     ports:
       - "27017"
