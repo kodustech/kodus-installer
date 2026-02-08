@@ -258,9 +258,12 @@ fi
 if [ -n "$GLOBAL_AZURE_REPOS_CODE_MANAGEMENT_WEBHOOK" ]; then
     webhook_providers+=("azure-repos")
 fi
+if [ -n "$API_FORGEJO_CODE_MANAGEMENT_WEBHOOK" ]; then
+    webhook_providers+=("forgejo")
+fi
 
 if [ ${#webhook_providers[@]} -eq 0 ]; then
-    validation_errors+=("At least one Git webhook URL must be configured (GitHub, GitLab, Bitbucket, or Azure Repos). See https://docs.kodus.io/how_to_deploy/en/deploy_kodus/generic_vm#git-provider-configuration")
+    validation_errors+=("At least one Git webhook URL must be configured (GitHub, GitLab, Bitbucket, Azure Repos, or Forgejo). See https://docs.kodus.io/how_to_deploy/en/deploy_kodus/generic_vm#git-provider-configuration")
 else
     if [ -z "$WEB_HOSTNAME_API" ]; then
         validation_errors+=("WEB_HOSTNAME_API is required when configuring Git webhooks.")
@@ -270,6 +273,7 @@ else
         validate_webhook_url "GitLab" "API_GITLAB_CODE_MANAGEMENT_WEBHOOK" "$API_GITLAB_CODE_MANAGEMENT_WEBHOOK" "/gitlab/webhook" "$expected_host"
         validate_webhook_url "Bitbucket" "GLOBAL_BITBUCKET_CODE_MANAGEMENT_WEBHOOK" "$GLOBAL_BITBUCKET_CODE_MANAGEMENT_WEBHOOK" "/bitbucket/webhook" "$expected_host"
         validate_webhook_url "Azure Repos" "GLOBAL_AZURE_REPOS_CODE_MANAGEMENT_WEBHOOK" "$GLOBAL_AZURE_REPOS_CODE_MANAGEMENT_WEBHOOK" "/azdevops/webhook|/azure-repos/webhook" "$expected_host"
+        validate_webhook_url "Forgejo" "API_FORGEJO_CODE_MANAGEMENT_WEBHOOK" "$API_FORGEJO_CODE_MANAGEMENT_WEBHOOK" "/forgejo/webhook" "$expected_host"
     fi
 fi
 
