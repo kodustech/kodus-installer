@@ -17,7 +17,7 @@ server {
   proxy_set_header X-Forwarded-Proto $scheme;
   proxy_cache_bypass $http_upgrade;
 
-  location ~ ^/(github|gitlab|bitbucket|azure-repos|azdevops)/webhook {
+  location ~ ^/(github|gitlab|bitbucket|azure-repos|azdevops|forgejo)/webhook {
     proxy_pass ${WEBHOOKS_INTERNAL_URL};
   }
 
