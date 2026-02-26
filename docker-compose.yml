@@ -1,6 +1,6 @@
 services:
   kodus-web:
-    image: ghcr.io/kodustech/kodus-web:latest
+    image: ghcr.io/kodustech/kodus-ai-web:latest
     container_name: kodus-web-prod
     ports:
       - "${WEB_PORT}:${WEB_PORT}"

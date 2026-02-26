@@ -6,7 +6,7 @@ It uses the published Docker images for the app services, and builds RabbitMQ an
 ## Services and images
 
 Public services:
-- web (kodus-web): `ghcr.io/kodustech/kodus-web:latest` (port 3000)
+- web (kodus-web): `ghcr.io/kodustech/kodus-ai-web:latest` (port 3000)
 - edge (kodus-edge): build from `railway/nginx/Dockerfile` (port `$PORT`)
 
 Private services:
