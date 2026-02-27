@@ -22,6 +22,20 @@ For a full walkthrough on deploying, check out our docs: https://docs.kodus.io/h
 
 Upgrading from 1.x? See `MIGRATION.md`.
 
+### Guided install with Claude Code
+
+If you use [Claude Code](https://claude.ai/claude-code), you can run an interactive installation that walks you through every configuration option, generates secrets automatically, and verifies the deployment at the end.
+
+```bash
+npx skills add kodustech/kodus-installer@kodus-install
+```
+
+Then inside Claude Code, run:
+
+```
+/kodus-install
+```
+
 ## External Databases or RabbitMQ
 
 If you already have PostgreSQL/MongoDB or RabbitMQ, you can disable the local containers and point Kodus to the external services.

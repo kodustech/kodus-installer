@@ -178,6 +178,7 @@ validate_webhook_url() {
 use_local_db=$(normalize_bool "${USE_LOCAL_DB:-true}")
 use_local_rabbitmq=$(normalize_bool "${USE_LOCAL_RABBITMQ:-true}")
 api_mcp_enabled=$(normalize_bool "${API_MCP_SERVER_ENABLED:-false}")
+api_ast_enabled=$(normalize_bool "${API_ENABLE_CODE_REVIEW_AST:-true}")
 
 # Check required variables
 required_vars=(
@@ -311,6 +312,13 @@ if [ "$api_mcp_enabled" = "true" ]; then
     fi
 fi
 
+if [ "$api_ast_enabled" = "true" ]; then
+    if [ -z "${API_SERVICE_AST_URL}" ]; then
+        echo -e "${RED}Error: API_ENABLE_CODE_REVIEW_AST=true requires API_SERVICE_AST_URL to be set.${NC}"
+        exit 1
+    fi
+fi
+
 api_rabbitmq_enabled=$(printf '%s' "$API_RABBITMQ_ENABLED" | tr '[:upper:]' '[:lower:]')
 if [ "$api_rabbitmq_enabled" != "true" ]; then
     echo -e "${RED}Error: API_RABBITMQ_ENABLED must be true (RabbitMQ is required).${NC}"
@@ -414,6 +422,9 @@ echo -e "${YELLOW}Starting containers...${NC}"
 services=(kodus-web api worker webhooks)
 if [ "$api_mcp_enabled" = "true" ]; then
     services+=(kodus-mcp-manager)
+fi
+if [ "$api_ast_enabled" = "true" ]; then
+    services+=(kodus-service-ast)
 fi
 if [ "$use_local_rabbitmq" = "true" ]; then
     services+=(rabbitmq)
