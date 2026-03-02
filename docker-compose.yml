@@ -94,6 +94,7 @@ services:
     container_name: kodus-service-ast
     networks:
       - kodus-backend-services
+      - shared-network
     restart: unless-stopped
     env_file:
       - .env
