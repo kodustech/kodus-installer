@@ -93,7 +93,8 @@ Also ask about optional review enhancers:
 | Variable | Description |
 |---|---|
 | `API_MORPHLLM_API_KEY` | MorphLLM API key — improves code review quality (optional) |
-| `API_E2B_KEY` | E2B API key — enables sandbox code execution during review (optional) |
+| `SANDBOX_PROVIDER` | Sandbox for cross-file context: `local` (recommended for self-hosted), `e2b` (cloud, needs `API_E2B_KEY`), `none` (disabled), `auto` (default — uses E2B if key set, otherwise disabled) |
+| `API_E2B_KEY` | E2B API key — only needed if `SANDBOX_PROVIDER=e2b` (optional) |
 
 ### 3.5 — Git Provider Webhooks
 
