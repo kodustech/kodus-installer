@@ -240,6 +240,11 @@ services:
     probes:
       # Worker has no HTTP endpoint. Uses a script that verifies
       # the Node.js process is alive and connected to RabbitMQ.
+      # Exec probe checks the worker process is alive.
+      # NOTE: If the worker image uses a bundled build (webpack/esbuild),
+      # amqplib may not be directly require()-able. In that case, the
+      # worker image should include a /health-check.js script or expose
+      # a minimal HTTP health endpoint on a non-public port.
       type: exec
       command: ["node", "-e", "require('amqplib').connect(process.env.API_RABBITMQ_URI).then(() => process.exit(0)).catch(() => process.exit(1))"]
     resources:
@@ -330,7 +335,7 @@ The migration Job includes an `initContainer` that waits for PostgreSQL readines
 ```yaml
 initContainers:
   - name: wait-for-postgres
-    image: busybox
+    image: busybox:1.37.0
     command: ['sh', '-c', 'until nc -z {{ .Release.Name }}-postgresql 5432; do sleep 2; done']
 ```
 
@@ -388,12 +393,20 @@ global:
     # -- AST Service
     API_ENABLE_CODE_REVIEW_AST: "true"
     API_SERVICE_AST_URL: "http://{{ .Release.Name }}-service-ast:3002"
+    CONTAINER_NAME: "kodus-service-ast"
     AST_NODE_ENV: "production"
     AST_LOG_PRETTY: "false"
     AST_LOG_LEVEL: "info"
     AST_PORT: "3002"
     DB_SSL: "true"              # SOC 2: SSL enabled by default
-    RABBIT_URL: "amqp://$(RABBITMQ_USER):$(RABBITMQ_PASS)@{{ .Release.Name }}-rabbitmq:5672/kodus-ai"
+    # RABBIT_URL is NOT stored in the ConfigMap — it contains credentials.
+    # It is constructed in the deployment template via env: block using
+    # valueFrom references to the RabbitMQ secret, e.g.:
+    #   RABBIT_URL:
+    #     value: "amqp://$(RABBITMQ_USER):$(RABBITMQ_PASS)@{{ .Release.Name }}-rabbitmq:5672/kodus-ai"
+    # where RABBITMQ_USER and RABBITMQ_PASS are defined earlier in the same
+    # env: block as valueFrom.secretKeyRef. Kubernetes resolves $(VAR) refs
+    # only within the pod spec env: block, NOT in ConfigMaps.
     RABBIT_RETRY_QUEUE: "ast.jobs.retry.q"
     RABBIT_RETRY_TTL_MS: "60000"
     RABBIT_PREFETCH: "1"
@@ -574,7 +587,7 @@ networkPolicy:
   # - Allow api → postgresql, mongodb, rabbitmq, service-ast, mcp-manager
   # - Allow worker → postgresql, mongodb, rabbitmq
   # - Allow webhooks → postgresql, mongodb, rabbitmq
-  # - Allow service-ast → rabbitmq
+  # - Allow service-ast → postgresql, rabbitmq
   # - Allow ingress controller → web, api, webhooks (external traffic)
   # - Deny all other inter-pod traffic (default deny)
   ingressControllerLabels: {}
