@@ -2,7 +2,7 @@
 
 ## Goal
 
-Add Kubernetes and OpenShift deployment options to the kodus-installer alongside the existing Docker Compose setup. Users should be able to `helm install` the Kodus stack on vanilla Kubernetes or OpenShift with a single command.
+Add Kubernetes and OpenShift deployment options to the kodus-installer alongside the existing Docker Compose setup. Users should be able to `helm install` the Kodus stack on vanilla Kubernetes or OpenShift with a single command. The charts must meet **SOC 2 Type II** compliance requirements for production deployments.
 
 ## Architecture
 
@@ -15,15 +15,16 @@ charts/
 ├── kodus-common/          # Library chart (type: library)
 │   ├── Chart.yaml
 │   └── templates/
-│       ├── _helpers.tpl   # Names, labels, selectors
+│       ├── _helpers.tpl   # Names, labels, selectors, compliance labels
 │       ├── _env.tpl       # Shared env var blocks (DB, RabbitMQ, auth, git)
-│       └── _pod.tpl       # Shared PodSpec (image, resources, probes, securityContext)
+│       ├── _pod.tpl       # Shared PodSpec (image, resources, probes, securityContext)
+│       └── _security.tpl  # Shared security contexts, seccomp profiles
 │
 ├── kodus/                 # Kubernetes vanilla chart
 │   ├── Chart.yaml
-│   ├── values.yaml
+│   ├── values.yaml        # Production-hardened defaults
 │   ├── values-example.yaml
-│   ├── values-dev.yaml    # Dev overlay (low resources, single replica)
+│   ├── values-dev.yaml    # Dev overlay (relaxed security, low resources)
 │   └── templates/
 │       ├── _helpers.tpl
 │       ├── deployment.yaml
@@ -32,15 +33,18 @@ charts/
 │       ├── secrets.yaml
 │       ├── ingress.yaml
 │       ├── serviceaccount.yaml
+│       ├── role.yaml
+│       ├── rolebinding.yaml
 │       ├── networkpolicy.yaml
 │       ├── migration-job.yaml
+│       ├── resourcequota.yaml
 │       ├── hpa.yaml
 │       ├── pdb.yaml
 │       └── NOTES.txt
 │
 └── kodus-openshift/       # OpenShift chart
     ├── Chart.yaml
-    ├── values.yaml
+    ├── values.yaml        # Production-hardened defaults + OpenShift specifics
     ├── values-example.yaml
     ├── values-dev.yaml
     └── templates/
@@ -52,8 +56,11 @@ charts/
         ├── route.yaml
         ├── scc.yaml
         ├── serviceaccount.yaml
+        ├── role.yaml
+        ├── rolebinding.yaml
         ├── networkpolicy.yaml
         ├── migration-job.yaml
+        ├── resourcequota.yaml
         ├── hpa.yaml
         ├── pdb.yaml
         └── NOTES.txt
@@ -74,6 +81,107 @@ All three charts start at `0.1.0` and follow semver independently. The `appVersi
 4. **Bitnami sub-charts** for PostgreSQL, MongoDB, and RabbitMQ with `condition` toggle. When disabled, users point to external instances via `externalPostgresql`, `externalMongodb`, `externalRabbitmq` values.
 
 5. **Database migrations via Helm hook Job.** Migrations run as a pre-install/pre-upgrade Job (not inside every pod replica) to avoid race conditions with multiple replicas.
+
+6. **Production-hardened defaults.** The `values.yaml` ships with security-first defaults (TLS enabled, NetworkPolicy enabled, no inline secrets). The `values-dev.yaml` overlay relaxes these for local development.
+
+## SOC 2 Type II Compliance
+
+### Requirements Mapping
+
+| SOC 2 Control | Implementation |
+|---|---|
+| **CC6.1** Logical access controls | RBAC (Role/RoleBinding), ServiceAccount per release, NetworkPolicy |
+| **CC6.6** External system boundaries | TLS termination on all ingress, encrypted DB connections |
+| **CC6.7** Data transmission security | TLS required by default, `API_DATABASE_DISABLE_SSL: "false"` in production |
+| **CC6.8** Unauthorized changes prevention | Immutable image tags (no `latest`), `readOnlyRootFilesystem` where possible |
+| **CC7.1** System monitoring | Probes, resource quotas, structured logging to stdout |
+| **CC7.2** Anomaly detection | Resource limits, HPA, PDB for availability |
+| **CC8.1** Change management | Helm releases with versioned charts, migration Jobs with audit trail |
+| **A1.2** Recovery procedures | PVC-based persistence, VolumeSnapshot support |
+
+### Image Tag Policy
+
+**`latest` tag is NOT used in production defaults.** All service images use a pinned tag or SHA digest:
+
+```yaml
+services:
+  api:
+    image:
+      repository: ghcr.io/kodustech/kodus-ai-api
+      tag: ""       # REQUIRED — must be set by user (e.g., "2.1.0" or "sha256:abc...")
+      # digest: "" # Alternative: pin by SHA digest for maximum immutability
+```
+
+The chart validates that at least `tag` or `digest` is set and fails with a clear error if both are empty. The `values-dev.yaml` overlay sets `tag: latest` for convenience.
+
+### Secret Management
+
+**Inline secrets are disabled by default.** Production deployments MUST use one of:
+
+```yaml
+global:
+  # Option 1: Pre-created Kubernetes Secret
+  existingSecret: "kodus-credentials"
+
+  # Option 2: External secret operator (recommended for SOC 2)
+  externalSecrets:
+    enabled: false
+    # Supported backends: aws-secrets-manager, hashicorp-vault, azure-keyvault, gcp-secret-manager
+    backend: ""
+    # Backend-specific config
+    store: ""          # SecretStore or ClusterSecretStore name
+    refreshInterval: "1h"
+```
+
+When `externalSecrets.enabled: true`, the chart generates `ExternalSecret` resources (from the external-secrets operator) instead of native Kubernetes Secrets. This provides:
+- Automatic secret rotation
+- Audit trail for secret access
+- No secrets stored in Helm values or git
+
+The `values-dev.yaml` overlay re-enables inline secrets for local development.
+
+### Encryption in Transit
+
+TLS is **enabled by default** in production:
+
+```yaml
+# Ingress (kodus chart)
+ingress:
+  tls:
+    enabled: true         # Default: true (SOC 2)
+    secretName: ""        # TLS cert secret — or use cert-manager annotations
+  annotations:
+    cert-manager.io/cluster-issuer: ""  # Optional: auto-provision certs
+
+# Route (kodus-openshift chart)
+route:
+  tls:
+    termination: edge
+    insecureEdgePolicy: Redirect  # Force HTTPS
+
+# Database connections
+global:
+  config:
+    API_DATABASE_DISABLE_SSL: "false"  # Default: SSL enabled
+    DB_SSL: "true"
+```
+
+### Audit Labels
+
+All resources include compliance-relevant labels for traceability:
+
+```yaml
+global:
+  labels:
+    app.kubernetes.io/part-of: kodus
+    app.kubernetes.io/managed-by: helm
+    kodus.io/environment: ""      # REQUIRED: production, staging, development
+    kodus.io/team: ""             # REQUIRED: team owning this deployment
+    kodus.io/compliance: "soc2"
+    kodus.io/data-classification: "confidential"
+```
+
+The `_helpers.tpl` in `kodus-common` merges these with standard Helm labels on every resource.
 
 ## Dependencies
 
@@ -100,8 +208,9 @@ services:
     enabled: true
     image:
       repository: ghcr.io/kodustech/kodus-ai-web
-      tag: latest
+      tag: ""     # REQUIRED
     port: 3000
+    replicas: 2   # HA by default
     probes:
       path: /
     resources:
@@ -112,8 +221,9 @@ services:
     enabled: true
     image:
       repository: ghcr.io/kodustech/kodus-ai-api
-      tag: latest
+      tag: ""     # REQUIRED
     port: 3001
+    replicas: 2
     probes:
       path: /health
     resources:
@@ -124,8 +234,9 @@ services:
     enabled: true
     image:
       repository: ghcr.io/kodustech/kodus-ai-worker
-      tag: latest
+      tag: ""     # REQUIRED
     port: null  # no exposed port
+    replicas: 2
     probes:
       # Worker has no HTTP endpoint. Uses a script that verifies
       # the Node.js process is alive and connected to RabbitMQ.
@@ -139,8 +250,9 @@ services:
     enabled: true
     image:
       repository: ghcr.io/kodustech/kodus-ai-webhook
-      tag: latest
+      tag: ""     # REQUIRED
     port: 3332
+    replicas: 2
     probes:
       path: /health
     resources:
@@ -151,8 +263,9 @@ services:
     enabled: true
     image:
       repository: ghcr.io/kodustech/kodus-service-ast
-      tag: latest
+      tag: ""     # REQUIRED
     port: 3002
+    replicas: 1
     probes:
       path: /health
     resources:
@@ -163,8 +276,9 @@ services:
     enabled: false
     image:
       repository: ghcr.io/kodustech/kodus-mcp-manager
-      tag: latest
+      tag: ""     # REQUIRED when enabled
     port: 3101
+    replicas: 1
     probes:
       path: /health
     resources:
@@ -179,11 +293,13 @@ The template `deployment.yaml` iterates `range $name, $svc := .Values.services` 
 Images are hosted on `ghcr.io/kodustech/` (potentially private). The chart supports `imagePullSecrets`:
 
 ```yaml
+image:
+  pullPolicy: Always  # SOC 2: always verify image on pull
 imagePullSecrets: []
 # - name: ghcr-credentials
 ```
 
-When set, all Deployments and the migration Job include the pull secret reference.
+`pullPolicy: Always` ensures the runtime always validates the image against the registry, preventing use of tampered local cache.
 
 ## Database Migrations
 
@@ -194,7 +310,7 @@ migrations:
   enabled: true
   image:
     repository: ghcr.io/kodustech/kodus-ai-api
-    tag: latest
+    tag: ""   # REQUIRED — should match services.api.tag
   env:
     RUN_MIGRATIONS: "true"
     RUN_SEEDS: "true"
@@ -231,10 +347,10 @@ global:
   config:
     # -- Web
     WEB_NODE_ENV: "self-hosted"
-    WEB_HOSTNAME_API: "localhost"
+    WEB_HOSTNAME_API: ""          # REQUIRED — no default (must be explicit)
     WEB_PORT_API: "3001"
     WEB_PORT: "3000"
-    NEXTAUTH_URL: "http://localhost:3000"
+    NEXTAUTH_URL: ""              # REQUIRED — must be HTTPS in production
     WEB_SUPPORT_DOCS_URL: "https://docs.kodus.io"
     WEB_SUPPORT_DISCORD_INVITE_URL: "https://discord.gg/CceCdAke"
     WEB_SUPPORT_TALK_TO_FOUNDER_URL: "https://cal.com/gabrielmalinosqui/30min"
@@ -255,7 +371,7 @@ global:
 
     # -- Database
     API_DATABASE_ENV: "production"
-    API_DATABASE_DISABLE_SSL: "true"
+    API_DATABASE_DISABLE_SSL: "false"   # SOC 2: SSL enabled by default
     API_MG_DB_PRODUCTION_CONFIG: ""
 
     # -- RabbitMQ
@@ -276,7 +392,7 @@ global:
     AST_LOG_PRETTY: "false"
     AST_LOG_LEVEL: "info"
     AST_PORT: "3002"
-    DB_SSL: "false"
+    DB_SSL: "true"              # SOC 2: SSL enabled by default
     RABBIT_URL: "amqp://$(RABBITMQ_USER):$(RABBITMQ_PASS)@{{ .Release.Name }}-rabbitmq:5672/kodus-ai"
     RABBIT_RETRY_QUEUE: "ast.jobs.retry.q"
     RABBIT_RETRY_TTL_MS: "60000"
@@ -298,7 +414,7 @@ global:
     API_MCP_MANAGER_CORS_ORIGINS: "*"
     API_MCP_MANAGER_COMPOSIO_BASE_URL: "https://backend.composio.dev/api/v3"
     API_MCP_MANAGER_MCP_PROVIDERS: "kodusmcp,composio,custom"
-    API_MCP_MANAGER_REDIRECT_URI: "http://localhost:3000/setup/mcp/oauth"
+    API_MCP_MANAGER_REDIRECT_URI: ""  # REQUIRED when MCP enabled
     API_MCP_MANAGER_PG_DB_SCHEMA: "mcp-manager"
 
     # -- Git Provider Webhooks (fill only the one in use)
@@ -311,14 +427,21 @@ global:
 
 ### Secrets (sensitive)
 
-Two modes:
-
-- **Inline** (dev/test): passwords and keys set directly in `values.yaml`
-- **existingSecret** (production): reference a pre-created Kubernetes Secret
+**Inline secrets are disabled by default.** Production must use `existingSecret` or `externalSecrets`:
 
 ```yaml
 global:
-  existingSecret: ""  # when set, all inline secrets are ignored
+  # Option 1: reference pre-created K8s Secret
+  existingSecret: ""
+
+  # Option 2: external-secrets operator
+  externalSecrets:
+    enabled: false
+    backend: ""
+    store: ""
+    refreshInterval: "1h"
+
+  # Option 3: inline (ONLY for dev — ignored when existingSecret or externalSecrets is set)
   secrets:
     # -- Auth
     API_JWT_SECRET: ""
@@ -346,15 +469,26 @@ global:
 
 Sub-charts also support `existingSecret` for their own credentials.
 
-## ServiceAccount
+## RBAC
 
-Both charts create a ServiceAccount by default:
+Least-privilege RBAC for the Kodus ServiceAccount:
 
 ```yaml
 serviceAccount:
   create: true
-  name: ""           # auto-generated if empty
-  annotations: {}    # e.g., for IAM roles (EKS IRSA, GKE Workload Identity)
+  name: ""
+  annotations: {}    # e.g., eks.amazonaws.com/role-arn for IRSA
+
+rbac:
+  create: true
+  rules:
+    # Only permissions the app actually needs
+    - apiGroups: [""]
+      resources: ["configmaps", "secrets"]
+      verbs: ["get", "list", "watch"]
+    - apiGroups: [""]
+      resources: ["pods"]
+      verbs: ["get", "list"]
 ```
 
 On OpenShift, the SCC is bound to this ServiceAccount:
@@ -377,15 +511,18 @@ users:
 ingress:
   enabled: true
   className: nginx
-  annotations: {}
+  annotations:
+    cert-manager.io/cluster-issuer: ""    # Optional: auto TLS
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
   tls:
-    enabled: false
+    enabled: true          # SOC 2: TLS on by default
     secretName: ""
   hosts:
     web:
       host: kodus.example.com
       path: /
-      serviceName: web       # maps to services.web
+      serviceName: web
     api:
       host: api.kodus.example.com
       path: /
@@ -409,7 +546,7 @@ route:
   enabled: true
   tls:
     termination: edge
-    insecureEdgePolicy: Redirect
+    insecureEdgePolicy: Redirect  # Force HTTPS
   hosts:
     web:
       host: kodus.apps.cluster.example.com
@@ -427,35 +564,55 @@ Single `route.yaml` iterates over `hosts` map.
 
 ## NetworkPolicy
 
-Optional network isolation (mirrors docker-compose network segmentation):
+Network isolation is **enabled by default** (SOC 2 requirement):
 
 ```yaml
 networkPolicy:
-  enabled: false
-  # When enabled, creates policies that:
-  # - Allow web → api, webhooks
+  enabled: true   # SOC 2: enabled by default
+  # Creates policies that:
+  # - Allow web → api, webhooks (frontend to backend)
   # - Allow api → postgresql, mongodb, rabbitmq, service-ast, mcp-manager
   # - Allow worker → postgresql, mongodb, rabbitmq
   # - Allow webhooks → postgresql, mongodb, rabbitmq
   # - Allow service-ast → rabbitmq
-  # - Deny all other inter-pod traffic
+  # - Allow ingress controller → web, api, webhooks (external traffic)
+  # - Deny all other inter-pod traffic (default deny)
+  ingressControllerLabels: {}
+  # e.g., for nginx-ingress:
+  # ingressControllerLabels:
+  #   app.kubernetes.io/name: ingress-nginx
 ```
-
-Disabled by default for ease of setup. Recommended for production.
 
 ## Security
 
-### Kubernetes (both charts)
+### Pod Security (both charts)
 
 ```yaml
 podSecurityContext:
   runAsNonRoot: true
   fsGroup: 1001
+  seccompProfile:
+    type: RuntimeDefault     # SOC 2: seccomp enabled
 
 containerSecurityContext:
   runAsNonRoot: true
-  readOnlyRootFilesystem: false
+  readOnlyRootFilesystem: true   # SOC 2: read-only by default
   allowPrivilegeEscalation: false
+  capabilities:
+    drop: ["ALL"]            # SOC 2: drop all capabilities
+```
+
+**`readOnlyRootFilesystem: true`** — Node.js apps need writable `/tmp`. This is handled via an `emptyDir` volume mount:
+
+```yaml
+# In deployment.yaml template
+volumeMounts:
+  - name: tmp
+    mountPath: /tmp
+volumes:
+  - name: tmp
+    emptyDir:
+      sizeLimit: 100Mi
 ```
 
 ### OpenShift-specific
@@ -490,6 +647,33 @@ scc:
   name: kodus-scc
 ```
 
+### Pod Security Standards
+
+The chart is designed to comply with the Kubernetes **Restricted** Pod Security Standard. When using Pod Security Admission:
+
+```yaml
+# Namespace labels (user responsibility, documented in NOTES.txt)
+pod-security.kubernetes.io/enforce: restricted
+pod-security.kubernetes.io/audit: restricted
+pod-security.kubernetes.io/warn: restricted
+```
+
+## Resource Quotas
+
+Optional namespace-level resource quotas to prevent resource exhaustion:
+
+```yaml
+resourceQuota:
+  enabled: false   # Enable for multi-tenant clusters
+  hard:
+    requests.cpu: "8"
+    requests.memory: "16Gi"
+    limits.cpu: "16"
+    limits.memory: "32Gi"
+    pods: "50"
+    persistentvolumeclaims: "10"
+```
+
 ## Probes
 
 Default probes applied to all HTTP services. Per-service `probes.path` override is supported:
@@ -522,15 +706,52 @@ services:
 
 Startup probe allows up to 2.5 minutes for container initialization (Node.js + migrations).
 
+## Logging
+
+All containers log to stdout/stderr in structured JSON format (no log files on disk). This enables centralized log aggregation via:
+- EFK stack (Elasticsearch/Fluentd/Kibana)
+- Loki/Grafana
+- CloudWatch/Stackdriver/Azure Monitor
+- Any sidecar-based log shipper
+
+```yaml
+global:
+  config:
+    API_LOG_PRETTY: "false"    # JSON output, not human-readable
+    API_LOG_LEVEL: "error"     # Production: minimal log verbosity
+    AST_LOG_PRETTY: "false"
+```
+
+The chart does NOT include a logging stack — it integrates with whatever the cluster already has. NOTES.txt documents how to verify logs are flowing.
+
+## Backup & Recovery
+
+### VolumeSnapshots
+
+Optional VolumeSnapshot support for data PVCs:
+
+```yaml
+backup:
+  enabled: false
+  # When enabled, creates VolumeSnapshot resources on a schedule
+  schedule: "0 2 * * *"  # Daily at 2 AM
+  retention: 7            # Keep 7 snapshots
+  snapshotClassName: ""   # Must match cluster's VolumeSnapshotClass
+```
+
+When enabled, a CronJob creates VolumeSnapshots of PostgreSQL and MongoDB PVCs. This provides point-in-time recovery capability.
+
+**Note:** For production SOC 2 compliance, managed database services (RDS, Atlas, etc.) with built-in backup are recommended over in-cluster databases.
+
 ## Optional Features
 
 ### HPA (HorizontalPodAutoscaler)
 
 ```yaml
 autoscaling:
-  enabled: false
-  minReplicas: 1
-  maxReplicas: 5
+  enabled: true    # SOC 2: availability — enabled by default
+  minReplicas: 2
+  maxReplicas: 10
   targetCPU: 80
   targetMemory: 80
 ```
@@ -539,61 +760,116 @@ autoscaling:
 
 ```yaml
 pdb:
-  enabled: false
+  enabled: true    # SOC 2: availability — enabled by default
   minAvailable: 1
 ```
 
-Both are disabled by default. When enabled, they apply to all services in the `services` map.
+Both are enabled by default for production availability. The `values-dev.yaml` overlay disables them.
+
+### Topology Spread
+
+Optional pod scheduling constraints for multi-node HA:
+
+```yaml
+topologySpreadConstraints:
+  enabled: false
+  maxSkew: 1
+  topologyKey: kubernetes.io/hostname
+  whenUnsatisfiable: DoNotSchedule
+```
 
 ## Usage
 
 ```bash
-# Kubernetes
+# Kubernetes (production)
 cd charts/kodus
 helm dependency update
-helm install kodus . -f values.yaml -n kodus --create-namespace
+helm install kodus . \
+  -f values.yaml \
+  --set global.existingSecret=kodus-credentials \
+  --set ingress.hosts.web.host=kodus.mycompany.com \
+  --set ingress.hosts.api.host=api.kodus.mycompany.com \
+  -n kodus --create-namespace
 
-# Kubernetes (dev mode — low resources, single replica)
+# Kubernetes (dev mode — relaxed security, latest tags, single replica)
 helm install kodus . -f values.yaml -f values-dev.yaml -n kodus-dev --create-namespace
 
-# OpenShift
+# OpenShift (production)
 cd charts/kodus-openshift
 helm dependency update
-helm install kodus . -f values.yaml -n kodus --create-namespace
+helm install kodus . \
+  -f values.yaml \
+  --set global.existingSecret=kodus-credentials \
+  --set route.hosts.web.host=kodus.apps.cluster.mycompany.com \
+  -n kodus --create-namespace
 ```
 
 ## values-dev.yaml
 
-Development overlay with low resources and single replicas:
+Development overlay that relaxes production hardening:
 
 ```yaml
 # values-dev.yaml — overlay for local/dev environments
+# Relaxes SOC 2 defaults for development convenience
+
 services:
   web:
+    image: { tag: latest }
+    replicas: 1
     resources:
       requests: { cpu: 50m, memory: 128Mi }
       limits:   { cpu: 200m, memory: 256Mi }
   api:
+    image: { tag: latest }
+    replicas: 1
     resources:
       requests: { cpu: 100m, memory: 256Mi }
       limits:   { cpu: 500m, memory: 512Mi }
   worker:
+    image: { tag: latest }
+    replicas: 1
     resources:
       requests: { cpu: 100m, memory: 256Mi }
       limits:   { cpu: 500m, memory: 512Mi }
   webhooks:
+    image: { tag: latest }
+    replicas: 1
     resources:
       requests: { cpu: 50m, memory: 128Mi }
       limits:   { cpu: 200m, memory: 256Mi }
   service-ast:
+    image: { tag: latest }
+    replicas: 1
     resources:
       requests: { cpu: 50m, memory: 128Mi }
       limits:   { cpu: 200m, memory: 256Mi }
+
+image:
+  pullPolicy: IfNotPresent
+
+migrations:
+  image: { tag: latest }
 
 global:
   config:
     API_LOG_LEVEL: "debug"
     API_LOG_PRETTY: "true"
+    API_DATABASE_DISABLE_SSL: "true"
+    DB_SSL: "false"
+  # Dev mode: allow inline secrets
+  secrets:
+    API_JWT_SECRET: "dev-secret"
+    WEB_NEXTAUTH_SECRET: "dev-secret"
+    WEB_JWT_SECRET_KEY: "dev-secret"
+    API_CRYPTO_KEY: "dev-crypto-key-0000000000000000"
+    CODE_MANAGEMENT_SECRET: "dev-webhook-secret"
+
+containerSecurityContext:
+  readOnlyRootFilesystem: false  # Relaxed for dev
+
+ingress:
+  tls:
+    enabled: false  # No TLS in dev
 
 autoscaling:
   enabled: false
@@ -602,6 +878,9 @@ pdb:
   enabled: false
 
 networkPolicy:
+  enabled: false
+
+resourceQuota:
   enabled: false
 ```
 
@@ -672,7 +951,7 @@ externalPostgresql:
   username: kodusdev
   password: ""
   database: kodus_db
-  disableSsl: "true"
+  disableSsl: "false"    # SOC 2: SSL by default
   existingSecret: ""
 
 mongodb:
@@ -688,7 +967,7 @@ externalMongodb:
 rabbitmq:
   enabled: false
 externalRabbitmq:
-  uri: amqp://user:pass@your-rabbitmq-host:5672/kodus-ai
+  uri: amqps://user:pass@your-rabbitmq-host:5671/kodus-ai  # Note: amqps (TLS)
   existingSecret: ""
 ```
 
@@ -713,7 +992,15 @@ Kodus has been deployed to namespace {{ .Release.Namespace }}.
 3. View logs:
    kubectl logs -f deploy/{{ .Release.Name }}-api -n {{ .Release.Namespace }}
 
-4. Documentation: https://docs.kodus.io
+4. SOC 2 checklist:
+   - [ ] TLS enabled on ingress
+   - [ ] Secrets via existingSecret or externalSecrets (no inline)
+   - [ ] NetworkPolicy enabled
+   - [ ] Image tags pinned (no :latest)
+   - [ ] Pod Security Standards enforced on namespace
+   - [ ] Centralized logging configured
+
+5. Documentation: https://docs.kodus.io
 ```
 
 ## Files Not Changed
