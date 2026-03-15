@@ -209,6 +209,15 @@ annotations:
   "helm.sh/hook-delete-policy": before-hook-creation
 ```
 
+The migration Job includes an `initContainer` that waits for PostgreSQL readiness before running migrations. This handles the case where sub-chart pods (PostgreSQL, MongoDB) are still starting:
+
+```yaml
+initContainers:
+  - name: wait-for-postgres
+    image: busybox
+    command: ['sh', '-c', 'until nc -z {{ .Release.Name }}-postgresql 5432; do sleep 2; done']
+```
+
 This ensures migrations complete before any application pods start. The API pods run with `RUN_MIGRATIONS=false`.
 
 ## Configuration
@@ -247,6 +256,7 @@ global:
     # -- Database
     API_DATABASE_ENV: "production"
     API_DATABASE_DISABLE_SSL: "true"
+    API_MG_DB_PRODUCTION_CONFIG: ""
 
     # -- RabbitMQ
     API_RABBITMQ_ENABLED: "true"
@@ -256,6 +266,9 @@ global:
     API_CRON_KODY_LEARNING: "0 0 * * 6"
     API_CRON_CHECK_IF_PR_SHOULD_BE_APPROVED: "*/2 * * * *"
 
+    # -- General (set on all containers)
+    NODE_ENV: "production"
+
     # -- AST Service
     API_ENABLE_CODE_REVIEW_AST: "true"
     API_SERVICE_AST_URL: "http://{{ .Release.Name }}-service-ast:3002"
@@ -264,6 +277,7 @@ global:
     AST_LOG_LEVEL: "info"
     AST_PORT: "3002"
     DB_SSL: "false"
+    RABBIT_URL: "amqp://$(RABBITMQ_USER):$(RABBITMQ_PASS)@{{ .Release.Name }}-rabbitmq:5672/kodus-ai"
     RABBIT_RETRY_QUEUE: "ast.jobs.retry.q"
     RABBIT_RETRY_TTL_MS: "60000"
     RABBIT_PREFETCH: "1"
@@ -548,6 +562,49 @@ helm dependency update
 helm install kodus . -f values.yaml -n kodus --create-namespace
 ```
 
+## values-dev.yaml
+
+Development overlay with low resources and single replicas:
+
+```yaml
+# values-dev.yaml — overlay for local/dev environments
+services:
+  web:
+    resources:
+      requests: { cpu: 50m, memory: 128Mi }
+      limits:   { cpu: 200m, memory: 256Mi }
+  api:
+    resources:
+      requests: { cpu: 100m, memory: 256Mi }
+      limits:   { cpu: 500m, memory: 512Mi }
+  worker:
+    resources:
+      requests: { cpu: 100m, memory: 256Mi }
+      limits:   { cpu: 500m, memory: 512Mi }
+  webhooks:
+    resources:
+      requests: { cpu: 50m, memory: 128Mi }
+      limits:   { cpu: 200m, memory: 256Mi }
+  service-ast:
+    resources:
+      requests: { cpu: 50m, memory: 128Mi }
+      limits:   { cpu: 200m, memory: 256Mi }
+
+global:
+  config:
+    API_LOG_LEVEL: "debug"
+    API_LOG_PRETTY: "true"
+
+autoscaling:
+  enabled: false
+
+pdb:
+  enabled: false
+
+networkPolicy:
+  enabled: false
+```
+
 ## PostgreSQL with pgvector
 
 The Bitnami PostgreSQL chart uses `bitnami/postgresql` image by default, which does not include pgvector. The chart overrides the image to match docker-compose parity (PostgreSQL 16):
@@ -601,6 +658,8 @@ rabbitmq:
 This mirrors the `init-definitions.sh` script from the docker-compose setup.
 
 ## External Services
+
+**Note:** The docker-compose `USE_LOCAL_DB` and `USE_LOCAL_RABBITMQ` flags are NOT used in the Helm charts. They are replaced by the sub-chart `enabled` toggles (`postgresql.enabled`, `mongodb.enabled`, `rabbitmq.enabled`). Setting these to `false` is equivalent to `USE_LOCAL_DB=false` / `USE_LOCAL_RABBITMQ=false`.
 
 When sub-charts are disabled, external service connection details are provided:
 
