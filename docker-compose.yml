@@ -4,6 +4,8 @@ services:
     container_name: kodus-web-prod
     ports:
       - "${WEB_PORT}:${WEB_PORT}"
+    environment:
+      - NODE_ENV=production
     networks:
       - shared-network
       - kodus-backend-services
@@ -92,12 +94,16 @@ services:
     image: ghcr.io/kodustech/kodus-service-ast:latest
     platform: linux/amd64
     container_name: kodus-service-ast
+    environment:
+      - API_PORT=${AST_PORT:-3002}
     networks:
       - kodus-backend-services
       - shared-network
     restart: unless-stopped
     env_file:
       - .env
+    depends_on:
+      - rabbitmq
 
   kodus-mcp-manager:
     image: ghcr.io/kodustech/kodus-mcp-manager:latest
