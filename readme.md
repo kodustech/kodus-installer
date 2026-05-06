@@ -20,8 +20,6 @@ This repository contains the configuration needed to deploy Kodus in your own in
 
 For a full walkthrough on deploying, check out our docs: https://docs.kodus.io/how_to_deploy/en/deploy_kodus/generic_vm
 
-Upgrading from 1.x? See `MIGRATION.md`.
-
 ### Guided install with Claude Code
 
 If you use [Claude Code](https://claude.ai/claude-code), you can run an interactive installation that walks you through every configuration option, generates secrets automatically, and verifies the deployment at the end.
@@ -61,7 +59,7 @@ Start with the doctor script to pinpoint common setup issues: `./scripts/doctor.
 
 Common fixes:
 - Docker daemon not running: `docker info`
-- Ports already in use: `3000`, `3001`, `3101`, `3332`, `5432`, `9140`, `27017`, `5672`, `15672`, `15692`
+- Ports already in use: `3000`, `3001`, `3101`, `3332`, `5432`, `27017`, `5672`, `15672`, `15692`
 - `.env` missing or invalid: copy `.env.example` and fill required vars
 - RabbitMQ connection errors: ensure `API_RABBITMQ_URI` matches `RABBITMQ_DEFAULT_USER`, `RABBITMQ_DEFAULT_PASS`, and vhost `kodus-ai`
 - Database errors: confirm Postgres/Mongo credentials, then rerun `./scripts/setup-db.sh`
@@ -90,13 +88,10 @@ flowchart LR
 - **api**: Application API
 - **worker**: Background jobs
 - **webhooks**: Webhooks service
-- **kodus-mcp-manager**: MCP manager service
+- **kodus-mcp-manager**: MCP manager service (optional, set `API_MCP_SERVER_ENABLED=true`)
 - **rabbitmq**: Message broker
 - **db_kodus_postgres**: PostgreSQL database
 - **db_kodus_mongodb**: MongoDB database
-- **migration**: One-off migrations runner
-- **prometheus**: Monitoring system
-- **grafana**: Metrics visualization dashboard
 
 ## 🔐 Security
 

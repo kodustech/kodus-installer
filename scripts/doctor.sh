@@ -208,22 +208,19 @@ if [ "$env_loaded" = true ]; then
     mcp_manager_port="${API_MCP_MANAGER_PORT:-3101}"
     mcp_manager_schema="${API_MCP_MANAGER_PG_DB_SCHEMA:-mcp-manager}"
 
-    required_vars=(
-        API_PG_DB_USERNAME
-        API_PG_DB_PASSWORD
-        API_PG_DB_DATABASE
-        API_MG_DB_USERNAME
-        API_MG_DB_PASSWORD
-        API_MG_DB_DATABASE
-        API_RABBITMQ_URI
-        API_RABBITMQ_ENABLED
-    )
-
-    for var in "${required_vars[@]}"; do
-        if [ -z "${!var}" ]; then
-            err "Missing required variable: ${var}"
-        fi
-    done
+    # Required-vars list is generated from kodus-ai/.env.schema (see install.sh).
+    SCHEMA_VARS_FILE="$(dirname "$0")/schema-vars.sh"
+    if [ ! -f "$SCHEMA_VARS_FILE" ]; then
+        err "scripts/schema-vars.sh not found. Pull the latest installer."
+    else
+        # shellcheck source=schema-vars.sh
+        . "$SCHEMA_VARS_FILE"
+        for var in "${KODUS_REQUIRED_VARS[@]}"; do
+            if [ -z "${!var}" ]; then
+                err "Missing required variable: ${var}"
+            fi
+        done
+    fi
 
     if [ -z "$API_WEBHOOKS_PORT" ] && [ -n "$WEBHOOKS_PORT" ]; then
         warn "WEBHOOKS_PORT is deprecated; use API_WEBHOOKS_PORT."
@@ -307,8 +304,8 @@ if [ "$env_loaded" = true ]; then
         warn "API_RABBITMQ_ENABLED is not true (RabbitMQ is required)."
     fi
 
-    if [ -n "$API_RABBITMQ_URI" ] && ! printf '%s' "$API_RABBITMQ_URI" | grep -Eq '/(kodus-ai|kodus-ast)$'; then
-        warn "API_RABBITMQ_URI does not end with /kodus-ai or /kodus-ast."
+    if [ -n "$API_RABBITMQ_URI" ] && ! printf '%s' "$API_RABBITMQ_URI" | grep -Eq '/kodus-ai$'; then
+        warn "API_RABBITMQ_URI does not end with /kodus-ai."
     fi
 
     if [ "$use_local_db" != "true" ]; then
