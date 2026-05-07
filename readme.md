@@ -36,6 +36,18 @@ Then inside Claude Code, run:
 /kodus-install
 ```
 
+## Kubernetes / Helm
+
+If you'd rather run Kodus on Kubernetes than via Docker Compose, there's a community-maintained Helm chart at [ilanmotiei/kodus-helm](https://github.com/ilanmotiei/kodus-helm).
+
+```bash
+helm repo add kodus https://ilanmotiei.github.io/kodus-helm
+helm repo update
+helm install kodus kodus/kodus -n kodus --create-namespace -f my-values.yaml
+```
+
+The chart packages all six application services (api, worker, webhooks, web, optional mcp-manager, optional ast), bundled Postgres/MongoDB/RabbitMQ (with the `rabbitmq_delayed_message_exchange` plugin auto-installed), and helpers that hide the wiring around `NEXTAUTH_URL`, GitHub App credentials, and the LLM provider env-var quirks. Tested on AKS, GKE, EKS, DigitalOcean, and k3s. See the [chart README](https://github.com/ilanmotiei/kodus-helm#readme) for full configuration.
+
 ## External Databases or RabbitMQ
 
 If you already have PostgreSQL/MongoDB or RabbitMQ, you can disable the local containers and point Kodus to the external services.
