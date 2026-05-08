@@ -57,6 +57,10 @@ When set to `false`, the installer skips starting local services and related hea
 
 Start with the doctor script to pinpoint common setup issues: `./scripts/doctor.sh`
 
+For `.env` problems specifically, run the schema validator (also invoked by doctor): `./scripts/validate-env.sh`
+
+It checks each variable against the upstream schema (`.env.example` types + `scripts/schema-vars.sh` required list), flags type mismatches and missing required values, and — when containers are running — diffs your `.env` against what each container actually loaded so you can spot stale config that wasn't picked up by a recreate.
+
 Common fixes:
 - Docker daemon not running: `docker info`
 - Ports already in use: `3000`, `3001`, `3101`, `3332`, `5432`, `27017`, `5672`, `15672`, `15692`

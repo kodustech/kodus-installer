@@ -117,6 +117,14 @@ validate_webhook_url() {
     fi
 }
 
+DOCTOR_SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+if [ -x "$DOCTOR_SCRIPT_DIR/validate-env.sh" ]; then
+    if ! "$DOCTOR_SCRIPT_DIR/validate-env.sh"; then
+        errors=$((errors + 1))
+    fi
+fi
+
 section "Prerequisites"
 
 if ! command -v docker &> /dev/null; then
@@ -208,19 +216,9 @@ if [ "$env_loaded" = true ]; then
     mcp_manager_port="${API_MCP_MANAGER_PORT:-3101}"
     mcp_manager_schema="${API_MCP_MANAGER_PG_DB_SCHEMA:-mcp-manager}"
 
-    # Required-vars list is generated from kodus-ai/.env.schema (see install.sh).
-    SCHEMA_VARS_FILE="$(dirname "$0")/schema-vars.sh"
-    if [ ! -f "$SCHEMA_VARS_FILE" ]; then
-        err "scripts/schema-vars.sh not found. Pull the latest installer."
-    else
-        # shellcheck source=schema-vars.sh
-        . "$SCHEMA_VARS_FILE"
-        for var in "${KODUS_REQUIRED_VARS[@]}"; do
-            if [ -z "${!var}" ]; then
-                err "Missing required variable: ${var}"
-            fi
-        done
-    fi
+    # Required-vars + per-type checks are handled upstream by validate-env.sh
+    # (invoked at the top of this script). Here we only run the cross-var
+    # consistency checks the schema can't express.
 
     if [ -z "$API_WEBHOOKS_PORT" ] && [ -n "$WEBHOOKS_PORT" ]; then
         warn "WEBHOOKS_PORT is deprecated; use API_WEBHOOKS_PORT."
