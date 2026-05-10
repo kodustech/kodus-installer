@@ -90,21 +90,6 @@ services:
       - db_kodus_mongodb
       - rabbitmq
 
-  kodus-service-ast:
-    image: ghcr.io/kodustech/kodus-service-ast:latest
-    platform: linux/amd64
-    container_name: kodus-service-ast
-    environment:
-      - API_PORT=${AST_PORT:-3002}
-    networks:
-      - kodus-backend-services
-      - shared-network
-    restart: unless-stopped
-    env_file:
-      - .env
-    depends_on:
-      - rabbitmq
-
   kodus-mcp-manager:
     image: ghcr.io/kodustech/kodus-mcp-manager:latest
     platform: linux/amd64

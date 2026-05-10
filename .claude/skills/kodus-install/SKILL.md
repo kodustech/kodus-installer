@@ -111,15 +111,7 @@ For each selected provider, explain the expected webhook URL format and ask the 
 
 Example: if `WEB_HOSTNAME_API=api.yourdomain.com`, then GitHub webhook = `https://api.yourdomain.com/github/webhook`
 
-### 3.6 — AST Code Review (default: enabled)
-
-`API_ENABLE_CODE_REVIEW_AST` defaults to `true` — this starts the `kodus-service-ast` container which powers deeper code analysis during reviews.
-
-Ask if they want to keep it enabled. If they say no, set `API_ENABLE_CODE_REVIEW_AST=false`.
-
-If enabled, confirm `API_SERVICE_AST_URL=http://kodus-service-ast:3002` is set (this is the internal Docker network address — no changes needed when using local containers).
-
-### 3.7 — MCP (default: disabled)
+### 3.6 — MCP (default: disabled)
 
 `API_MCP_SERVER_ENABLED` defaults to `false`. Ask if they want to enable the MCP manager service.
 
@@ -138,7 +130,7 @@ Before installing, run the secrets generator to fill in all cryptographic keys a
 bash scripts/generate-secrets.sh
 ```
 
-This fills: `WEB_NEXTAUTH_SECRET`, `WEB_JWT_SECRET_KEY`, `API_CRYPTO_KEY`, `API_JWT_SECRET`, `API_JWT_REFRESHSECRET`, `CODE_MANAGEMENT_SECRET`, `CODE_MANAGEMENT_WEBHOOK_TOKEN`, `API_MCP_MANAGER_ENCRYPTION_SECRET`, `API_MCP_MANAGER_JWT_SECRET`.
+This fills: `WEB_NEXTAUTH_SECRET`, `NEXTAUTH_SECRET`, `API_CRYPTO_KEY`, `API_JWT_SECRET`, `API_JWT_REFRESH_SECRET`, `CODE_MANAGEMENT_SECRET`, `CODE_MANAGEMENT_WEBHOOK_TOKEN`, `API_MCP_MANAGER_ENCRYPTION_SECRET`, `API_MCP_MANAGER_JWT_SECRET`.
 
 Tell the user these are generated securely and do not need to be set manually.
 
@@ -153,7 +145,6 @@ Show the user a summary of the key settings before proceeding:
 - Database: local or external
 - RabbitMQ: local or external
 - Git providers configured
-- AST enabled/disabled
 - MCP enabled/disabled
 
 Ask for confirmation before starting the install.
@@ -200,5 +191,4 @@ If all checks pass, tell the user Kodus is ready and print the access URL:
 - Never overwrite `.env` wholesale. Always use targeted edits.
 - Never run `install.sh` without user confirmation.
 - Never generate or expose secrets to the user in plain text in the conversation — they are written directly to `.env`.
-- If the user is upgrading from a previous version, mention `MIGRATION.md` before proceeding.
 - If anything looks wrong or ambiguous, ask before acting.
