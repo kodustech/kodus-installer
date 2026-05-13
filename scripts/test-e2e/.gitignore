@@ -1,0 +1,6 @@
+node_modules/
+package-lock.json
+failure.png
+failure.html
+ui-smoke-*.png
+ui-smoke-*.html
