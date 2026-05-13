@@ -1,6 +1,6 @@
 // Headless signup flow for Kodus self-hosted.
 //
-// Driven by scripts/test-e2e.sh. The selectors below are best-effort —
+// Driven by tests/e2e/run-vm.sh (and run-local.sh). The selectors below are best-effort —
 // when the kodus-web UI changes, the FIRST place to look is the SELECTORS
 // block at the top of this file. We try a few common patterns (data-testid,
 // name, label, placeholder, role) so small UI tweaks don't break the test;
