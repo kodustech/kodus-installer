@@ -1,0 +1,144 @@
+name: "E2E: self-hosted install on fresh VM"
+
+# Runs tests/e2e/run-vm.sh against the just-published self-hosted images.
+# Provisions a fresh DigitalOcean droplet, installs Kodus end-to-end, drives
+# a real Kody review on a fixture PR, then destroys the droplet.
+#
+# Triggers:
+#   - repository_dispatch (selfhosted-image-published) — fired by
+#     kodus-ai's selfhosted-build-push workflow after a successful publish.
+#   - workflow_dispatch — manual run, useful before a release or to debug.
+#
+# Cost per run: ~$0.04 (CX22-equivalent droplet, ~6 min). Droplet is always
+# destroyed in the teardown trap, even on failure.
+
+on:
+    repository_dispatch:
+        types: [selfhosted-image-published]
+    workflow_dispatch:
+        inputs:
+            image_tag:
+                description: "Image tag to test against (default: latest)"
+                required: false
+                default: "latest"
+                type: string
+            keep_running:
+                description: "Skip teardown (keep droplet alive for debug)"
+                required: false
+                default: false
+                type: boolean
+
+concurrency:
+    # One e2e run at a time. Newer publish events cancel an in-flight run —
+    # the older one is testing a stale image anyway.
+    group: e2e-self-hosted
+    cancel-in-progress: true
+
+jobs:
+    run-e2e:
+        name: E2E on fresh droplet
+        runs-on: ubuntu-latest
+        # Hard cap so a stuck run doesn't burn billing minutes or leak a droplet.
+        # The script itself has a 600s polling timeout + always-on cleanup trap.
+        timeout-minutes: 25
+        outputs:
+            release_tag: ${{ steps.context.outputs.release_tag }}
+            image_tag: ${{ steps.context.outputs.image_tag }}
+        steps:
+            - uses: actions/checkout@v4
+
+            - name: Resolve context (dispatch payload vs manual input)
+              id: context
+              run: |
+                  tag="${{ github.event.client_payload.release_tag }}"
+                  image="${{ github.event.client_payload.image_tag }}"
+                  if [ -z "$image" ]; then
+                      image="${{ github.event.inputs.image_tag || 'latest' }}"
+                  fi
+                  echo "release_tag=${tag:-manual-${{ github.run_id }}}" >> "$GITHUB_OUTPUT"
+                  echo "image_tag=$image" >> "$GITHUB_OUTPUT"
+                  echo "trigger=${{ github.event_name }}" >> "$GITHUB_OUTPUT"
+                  echo "::notice::E2E for image_tag=$image, release_tag=${tag:-manual}"
+
+            - name: Install runtime deps (jq, openssl, rsync already on ubuntu-latest)
+              run: |
+                  set -e
+                  command -v jq >/dev/null
+                  command -v openssl >/dev/null
+                  command -v rsync >/dev/null
+                  command -v ssh >/dev/null
+                  # gh CLI ships on ubuntu-latest
+
+            - name: Verify required secrets are configured
+              env:
+                  DIGITALOCEAN_TOKEN: ${{ secrets.DIGITALOCEAN_TOKEN }}
+                  GH_TEST_TOKEN: ${{ secrets.GH_TEST_TOKEN }}
+                  TEST_REPO: ${{ secrets.TEST_REPO }}
+                  TEST_PR_NUMBER: ${{ secrets.TEST_PR_NUMBER }}
+              run: |
+                  missing=()
+                  [ -n "$DIGITALOCEAN_TOKEN" ] || missing+=(DIGITALOCEAN_TOKEN)
+                  [ -n "$GH_TEST_TOKEN" ]  || missing+=(GH_TEST_TOKEN)
+                  [ -n "$TEST_REPO" ]          || missing+=(TEST_REPO)
+                  [ -n "$TEST_PR_NUMBER" ]     || missing+=(TEST_PR_NUMBER)
+                  if [ ${#missing[@]} -gt 0 ]; then
+                      echo "::error::Missing required secrets: ${missing[*]}"
+                      exit 1
+                  fi
+
+            - name: Write tests/e2e/.env from secrets
+              env:
+                  DIGITALOCEAN_TOKEN: ${{ secrets.DIGITALOCEAN_TOKEN }}
+                  GH_TEST_TOKEN: ${{ secrets.GH_TEST_TOKEN }}
+                  TEST_REPO: ${{ secrets.TEST_REPO }}
+                  TEST_PR_NUMBER: ${{ secrets.TEST_PR_NUMBER }}
+              run: |
+                  umask 077
+                  cat > tests/e2e/.env <<EOF
+                  TEST_VM_PROVIDER=digitalocean
+                  DIGITALOCEAN_TOKEN=$DIGITALOCEAN_TOKEN
+                  TEST_REPO=$TEST_REPO
+                  TEST_PR_NUMBER=$TEST_PR_NUMBER
+                  GH_TEST_TOKEN=$GH_TEST_TOKEN
+                  EOF
+
+            - name: Authenticate gh CLI (used by the script)
+              env:
+                  GH_TOKEN: ${{ secrets.GH_TEST_TOKEN }}
+              run: gh auth status
+
+            - name: Run E2E
+              env:
+                  TEST_KEEP_RUNNING: ${{ github.event.inputs.keep_running == 'true' && '1' || '0' }}
+              run: ./tests/e2e/run-vm.sh
+
+    notify-discord-failure:
+        name: Discord notification (failure only)
+        needs: run-e2e
+        if: always() && needs.run-e2e.result != 'success'
+        runs-on: ubuntu-latest
+        environment: production
+        permissions: {}
+        steps:
+            - name: Check Discord webhook configuration
+              id: discord-webhook
+              run: |
+                  if [ -n "${{ secrets.DISCORD_WEBHOOK_E2E }}" ]; then
+                      echo "configured=true" >> "$GITHUB_OUTPUT"
+                  else
+                      echo "configured=false" >> "$GITHUB_OUTPUT"
+                      echo "::warning::DISCORD_WEBHOOK_E2E not configured for the production environment."
+                  fi
+
+            - name: Notify Discord on failure
+              if: steps.discord-webhook.outputs.configured == 'true'
+              uses: sarisia/actions-status-discord@v1.16.0
+              with:
+                  webhook: ${{ secrets.DISCORD_WEBHOOK_E2E }}
+                  content: ":rotating_light: Self-hosted E2E failed for `${{ needs.run-e2e.outputs.image_tag || 'latest' }}` (release `${{ needs.run-e2e.outputs.release_tag || 'manual' }}`)."
+                  title: "Self-Hosted E2E Failed"
+                  description: |
+                      The end-to-end test on a fresh droplet did not pass.
+                      [View run logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+                  username: "GitHub Actions"
+                  color: 0xff0000

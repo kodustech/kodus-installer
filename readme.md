@@ -114,6 +114,8 @@ Contributions are always welcome! Please read the contribution guidelines before
 4. Push to the Branch (`git push origin feat/amazing-feature`)
 5. Open a Pull Request
 
+Running the end-to-end test suite? See [tests/e2e/README.md](tests/e2e/README.md).
+
 ## 📝 License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.

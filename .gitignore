@@ -1,2 +1,4 @@
 .env
 .env.backup
+.env.e2e-backup.*
+tests/e2e/.env

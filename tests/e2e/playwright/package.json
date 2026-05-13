@@ -1,0 +1,9 @@
+{
+  "name": "kodus-e2e-signup",
+  "private": true,
+  "type": "module",
+  "version": "0.0.0",
+  "dependencies": {
+    "playwright": "^1.48.0"
+  }
+}
