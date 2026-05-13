@@ -8,6 +8,7 @@
 KODUS_REQUIRED_VARS=(
     API_PG_DB_PASSWORD
     API_MG_DB_PASSWORD
+    WORKER_ROLE
     API_JWT_SECRET
     API_JWT_REFRESH_SECRET
     API_CRYPTO_KEY
@@ -20,6 +21,8 @@ KODUS_REQUIRED_VARS=(
 # Format: VAR=method  (hex32 | base64-32 | base64url-32 | mirror:OTHER_VAR)
 # Derived from `kodus: autogen=...` in the schema.
 KODUS_AUTOGEN_SECRETS=(
+    "API_PG_DB_PASSWORD=hex32"
+    "API_MG_DB_PASSWORD=hex32"
     "API_JWT_SECRET=base64-32"
     "API_JWT_REFRESH_SECRET=base64-32"
     "API_CRYPTO_KEY=hex32"
