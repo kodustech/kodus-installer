@@ -1,6 +1,6 @@
 name: "E2E: self-hosted install on fresh VM"
 
-# Runs scripts/test-e2e-vm.sh against the just-published self-hosted images.
+# Runs tests/e2e/run-vm.sh against the just-published self-hosted images.
 # Provisions a fresh DigitalOcean droplet, installs Kodus end-to-end, drives
 # a real Kody review on a fixture PR, then destroys the droplet.
 #
@@ -86,7 +86,7 @@ jobs:
                       exit 1
                   fi
 
-            - name: Write .env.test-e2e from secrets
+            - name: Write tests/e2e/.env from secrets
               env:
                   DIGITALOCEAN_TOKEN: ${{ secrets.DIGITALOCEAN_TOKEN }}
                   GH_TEST_TOKEN: ${{ secrets.GH_TEST_TOKEN }}
@@ -94,7 +94,7 @@ jobs:
                   TEST_PR_NUMBER: ${{ secrets.TEST_PR_NUMBER }}
               run: |
                   umask 077
-                  cat > .env.test-e2e <<EOF
+                  cat > tests/e2e/.env <<EOF
                   TEST_VM_PROVIDER=digitalocean
                   DIGITALOCEAN_TOKEN=$DIGITALOCEAN_TOKEN
                   TEST_REPO=$TEST_REPO
@@ -110,7 +110,7 @@ jobs:
             - name: Run E2E
               env:
                   TEST_KEEP_RUNNING: ${{ github.event.inputs.keep_running == 'true' && '1' || '0' }}
-              run: ./scripts/test-e2e-vm.sh
+              run: ./tests/e2e/run-vm.sh
 
     notify-discord-failure:
         name: Discord notification (failure only)

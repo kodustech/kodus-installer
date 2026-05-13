@@ -53,52 +53,6 @@ API_RABBITMQ_URI=amqp://user:pass@your-rabbitmq-host:5672/kodus-ai
 
 When set to `false`, the installer skips starting local services and related health checks.
 
-## End-to-end smoke test (local)
-
-`scripts/test-e2e.sh` boots the full stack with a fresh `.env`, exposes the webhooks port through ngrok, opens a real PR on a test repo, waits for Kodus to post a review comment, and then tears everything down (containers, volumes, webhook, ngrok, PR).
-
-Designed for **local** use against the published `ghcr.io/kodustech/*` images — not for CI, since CI doesn't have the freshly-built images yet.
-
-One-time setup — create `.env.test-e2e` (gitignored) in the repo root:
-
-```bash
-TEST_REPO=your-org/kodus-test-sandbox        # GitHub repo to receive the PR
-GH_TEST_TOKEN=ghp_xxx                    # PAT with `repo` + `admin:repo_hook`
-NGROK_AUTHTOKEN=xxx                          # only if ngrok isn't already configured
-```
-
-Then run:
-
-```bash
-./scripts/test-e2e.sh
-```
-
-The script will (1) back up your current `.env`, (2) regenerate one from `.env.example` with fresh secrets, (3) inject the ngrok URL into the GitHub webhook config, (4) `./scripts/install.sh`, (5) sign up a test user via Playwright, (6) open a PR via `gh` on `TEST_REPO`, (7) poll the PR for a Kodus review comment, then (8) tear everything down. Pass `TEST_KEEP_RUNNING=1` to skip teardown for debugging.
-
-If signup fails, check `scripts/test-e2e/failure.png` — the Playwright selectors are best-effort and may need tweaking for your UI version (see the `SELECTORS` block at the top of `signup.mjs`).
-
-### On a Hetzner ephemeral VM (`scripts/test-e2e-vm.sh`)
-
-Same flow but provisions a fresh CX22 (~$0.006/h), installs Docker + cloudflared via cloud-init, exposes the webhooks port through a free `https://*.trycloudflare.com` tunnel (no ngrok required), runs the test, and destroys the server. Closer to a real customer's install.
-
-Extra env required in `.env.test-e2e`:
-
-```bash
-HCLOUD_TOKEN=xxx     # Hetzner Cloud API token (Read/Write)
-# Optional:
-HCLOUD_LOCATION=nbg1
-HCLOUD_SERVER_TYPE=cx22
-HCLOUD_IMAGE=ubuntu-24.04
-```
-
-Then:
-
-```bash
-./scripts/test-e2e-vm.sh
-```
-
-On failure, set `TEST_KEEP_RUNNING=1` to keep the VM up — the script prints the `ssh` command to connect and inspect logs (`docker compose logs api worker webhooks`). Remember to destroy the server manually afterwards at hetzner.cloud/servers, or it keeps billing.
-
 ## Troubleshooting
 
 Start with the doctor script to pinpoint common setup issues: `./scripts/doctor.sh`
@@ -159,6 +113,8 @@ Contributions are always welcome! Please read the contribution guidelines before
 3. Commit your changes (`git commit -m 'Add some AmazingFeature'`)
 4. Push to the Branch (`git push origin feat/amazing-feature`)
 5. Open a Pull Request
+
+Running the end-to-end test suite? See [tests/e2e/README.md](tests/e2e/README.md).
 
 ## 📝 License
 

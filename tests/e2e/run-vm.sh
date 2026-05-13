@@ -9,7 +9,7 @@
 # same signup-via-Playwright + open-PR + poll-for-review flow as test-e2e.sh,
 # but against the VM's public IP. Destroys the server at the end.
 #
-# Required env (or .env.test-e2e):
+# Required env (or tests/e2e/.env):
 #   TEST_REPO            owner/repo on GitHub
 #   GH_TEST_TOKEN    PAT with `repo` + `admin:repo_hook`
 #
@@ -47,9 +47,9 @@ ok()   { echo -e "${GREEN}[ok]${NC}    $*"; }
 warn() { echo -e "${YELLOW}[warn]${NC}  $*"; }
 err()  { echo -e "${RED}[err]${NC}   $*" >&2; }
 
-if [ -f "$REPO_ROOT/.env.test-e2e" ]; then
+if [ -f "$REPO_ROOT/tests/e2e/.env" ]; then
     # shellcheck disable=SC1091
-    set -a; . "$REPO_ROOT/.env.test-e2e"; set +a
+    set -a; . "$REPO_ROOT/tests/e2e/.env"; set +a
 fi
 
 TEST_VM_PROVIDER="${TEST_VM_PROVIDER:-digitalocean}"
@@ -349,7 +349,7 @@ rsync -az --delete \
     --exclude='.git/' \
     --exclude='node_modules/' \
     --exclude='.env' \
-    --exclude='.env.test-e2e' \
+    --exclude='tests/e2e/.env' \
     --exclude='.env.e2e-backup.*' \
     "$REPO_ROOT/" "root@$SERVER_IP:/opt/kodus-installer/"
 ssh_vm "chmod +x /opt/kodus-installer/scripts/*.sh"
@@ -479,7 +479,7 @@ fi
 # Does NOT submit forms — that path is bypassed via direct /auth/signUp.
 if [ "${SKIP_UI_SMOKE:-0}" != "1" ]; then
     log "UI smoke (Playwright, no form submit)..."
-    pushd "$REPO_ROOT/scripts/test-e2e" >/dev/null
+    pushd "$REPO_ROOT/tests/e2e/playwright" >/dev/null
     if [ ! -d node_modules ]; then
         log "  Installing Playwright (one-time, ~30s)..."
         npm install --silent
@@ -488,7 +488,7 @@ if [ "${SKIP_UI_SMOKE:-0}" != "1" ]; then
     if KODUS_WEB_URL="http://$SERVER_IP:3000" node ui-smoke.mjs; then
         ok "UI smoke passed"
     else
-        err "UI smoke failed. Screenshots at scripts/test-e2e/ui-smoke-*.png"
+        err "UI smoke failed. Screenshots at tests/e2e/playwright/ui-smoke-*.png"
         exit 1
     fi
     popd >/dev/null
@@ -586,7 +586,7 @@ ok "Webhook id: $GITHUB_HOOK_ID"
 # ends up calling it. Cut out the middleman.
 if [ "${TEST_USE_PLAYWRIGHT:-0}" = "1" ]; then
     log "Running signup via Playwright (TEST_USE_PLAYWRIGHT=1)..."
-    pushd "$REPO_ROOT/scripts/test-e2e" >/dev/null
+    pushd "$REPO_ROOT/tests/e2e/playwright" >/dev/null
     if [ ! -d node_modules ]; then
         npm install --silent
         npx playwright install chromium >/dev/null 2>&1 || npx playwright install chromium
@@ -771,7 +771,7 @@ EOF
     PR_URL=$(GH_TOKEN="$GH_TEST_TOKEN" gh pr create \
         --repo "$TEST_REPO" --base "$DEFAULT_BRANCH" --head "$PR_BRANCH" \
         --title "Kodus E2E: $RUN_ID" \
-        --body "Automated PR opened by scripts/test-e2e-vm.sh — safe to close.")
+        --body "Automated PR opened by tests/e2e/run-vm.sh — safe to close.")
     PR_NUMBER=$(echo "$PR_URL" | sed -E 's|.*/pull/([0-9]+).*|\1|')
     ok "PR #$PR_NUMBER: $PR_URL"
     cd "$REPO_ROOT"
