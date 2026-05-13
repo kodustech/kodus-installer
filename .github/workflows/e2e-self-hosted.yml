@@ -72,13 +72,13 @@ jobs:
             - name: Verify required secrets are configured
               env:
                   DIGITALOCEAN_TOKEN: ${{ secrets.DIGITALOCEAN_TOKEN }}
-                  GITHUB_TEST_TOKEN: ${{ secrets.GITHUB_TEST_TOKEN }}
+                  GH_TEST_TOKEN: ${{ secrets.GH_TEST_TOKEN }}
                   TEST_REPO: ${{ secrets.TEST_REPO }}
                   TEST_PR_NUMBER: ${{ secrets.TEST_PR_NUMBER }}
               run: |
                   missing=()
                   [ -n "$DIGITALOCEAN_TOKEN" ] || missing+=(DIGITALOCEAN_TOKEN)
-                  [ -n "$GITHUB_TEST_TOKEN" ]  || missing+=(GITHUB_TEST_TOKEN)
+                  [ -n "$GH_TEST_TOKEN" ]  || missing+=(GH_TEST_TOKEN)
                   [ -n "$TEST_REPO" ]          || missing+=(TEST_REPO)
                   [ -n "$TEST_PR_NUMBER" ]     || missing+=(TEST_PR_NUMBER)
                   if [ ${#missing[@]} -gt 0 ]; then
@@ -89,7 +89,7 @@ jobs:
             - name: Write .env.test-e2e from secrets
               env:
                   DIGITALOCEAN_TOKEN: ${{ secrets.DIGITALOCEAN_TOKEN }}
-                  GITHUB_TEST_TOKEN: ${{ secrets.GITHUB_TEST_TOKEN }}
+                  GH_TEST_TOKEN: ${{ secrets.GH_TEST_TOKEN }}
                   TEST_REPO: ${{ secrets.TEST_REPO }}
                   TEST_PR_NUMBER: ${{ secrets.TEST_PR_NUMBER }}
               run: |
@@ -99,12 +99,12 @@ jobs:
                   DIGITALOCEAN_TOKEN=$DIGITALOCEAN_TOKEN
                   TEST_REPO=$TEST_REPO
                   TEST_PR_NUMBER=$TEST_PR_NUMBER
-                  GITHUB_TEST_TOKEN=$GITHUB_TEST_TOKEN
+                  GH_TEST_TOKEN=$GH_TEST_TOKEN
                   EOF
 
             - name: Authenticate gh CLI (used by the script)
               env:
-                  GH_TOKEN: ${{ secrets.GITHUB_TEST_TOKEN }}
+                  GH_TOKEN: ${{ secrets.GH_TEST_TOKEN }}
               run: gh auth status
 
             - name: Run E2E

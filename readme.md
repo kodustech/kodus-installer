@@ -63,7 +63,7 @@ One-time setup — create `.env.test-e2e` (gitignored) in the repo root:
 
 ```bash
 TEST_REPO=your-org/kodus-test-sandbox        # GitHub repo to receive the PR
-GITHUB_TEST_TOKEN=ghp_xxx                    # PAT with `repo` + `admin:repo_hook`
+GH_TEST_TOKEN=ghp_xxx                    # PAT with `repo` + `admin:repo_hook`
 NGROK_AUTHTOKEN=xxx                          # only if ngrok isn't already configured
 ```
 

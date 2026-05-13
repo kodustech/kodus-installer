@@ -7,7 +7,7 @@
 #
 # Required env (or .env.test-e2e in repo root):
 #   TEST_REPO            owner/repo of a GitHub repo to use as the test target
-#   GITHUB_TEST_TOKEN    PAT with `repo` + `admin:repo_hook` on TEST_REPO
+#   GH_TEST_TOKEN    PAT with `repo` + `admin:repo_hook` on TEST_REPO
 #   NGROK_AUTHTOKEN      ngrok auth token (or pre-configured ~/.config/ngrok)
 #
 # Optional env:
@@ -77,7 +77,7 @@ cleanup() {
 
     if [ -n "$GITHUB_HOOK_ID" ] && [ -n "${TEST_REPO:-}" ]; then
         curl -sS -X DELETE \
-            -H "Authorization: Bearer ${GITHUB_TEST_TOKEN}" \
+            -H "Authorization: Bearer ${GH_TEST_TOKEN}" \
             -H "Accept: application/vnd.github+json" \
             "https://api.github.com/repos/${TEST_REPO}/hooks/${GITHUB_HOOK_ID}" >/dev/null \
             && ok "Removed GitHub webhook $GITHUB_HOOK_ID" \
@@ -181,7 +181,7 @@ fi
 ok "Using: $DOCKER_COMPOSE"
 
 require_env TEST_REPO
-require_env GITHUB_TEST_TOKEN
+require_env GH_TEST_TOKEN
 # NGROK_AUTHTOKEN only required if not already configured globally
 if ! ngrok config check >/dev/null 2>&1; then
     require_env NGROK_AUTHTOKEN
@@ -254,7 +254,7 @@ wait_for_http "webhooks"  "http://localhost:${API_WEBHOOKS_PORT:-3332}" 180
 # ---------- GitHub webhook ----------
 log "Creating webhook on $TEST_REPO -> $NGROK_PUBLIC_URL/github/webhook"
 HOOK_RESP=$(curl -sS -X POST \
-    -H "Authorization: Bearer ${GITHUB_TEST_TOKEN}" \
+    -H "Authorization: Bearer ${GH_TEST_TOKEN}" \
     -H "Accept: application/vnd.github+json" \
     "https://api.github.com/repos/${TEST_REPO}/hooks" \
     -d "$(jq -nc \
@@ -279,7 +279,7 @@ if [ "${SKIP_PLAYWRIGHT:-0}" != "1" ]; then
     TEST_USER_EMAIL="$TEST_USER_EMAIL" \
     TEST_USER_PASSWORD="$TEST_USER_PASSWORD" \
     TEST_REPO="$TEST_REPO" \
-    GITHUB_TEST_TOKEN="$GITHUB_TEST_TOKEN" \
+    GH_TEST_TOKEN="$GH_TEST_TOKEN" \
     node signup.mjs
     popd >/dev/null
     ok "Signup complete"
@@ -296,7 +296,7 @@ if [ -n "${TEST_PR_NUMBER:-}" ]; then
     REUSE_PR=1
     PR_NUMBER="$TEST_PR_NUMBER"
     log "Triggering review on PR #$PR_NUMBER via @kody review comment..."
-    TRIGGER_RESP=$(GH_TOKEN="$GITHUB_TEST_TOKEN" gh api \
+    TRIGGER_RESP=$(GH_TOKEN="$GH_TEST_TOKEN" gh api \
         --method POST \
         "repos/${TEST_REPO}/issues/${PR_NUMBER}/comments" \
         -f body="@kody review")
@@ -309,7 +309,7 @@ else
     SINCE_ISO=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
     TEST_REPO_CLONE="$(mktemp -d -t kodus-e2e-XXXXXX)/repo"
     log "Cloning test repo and opening a new PR..."
-    GH_TOKEN="$GITHUB_TEST_TOKEN" gh repo clone "$TEST_REPO" "$TEST_REPO_CLONE" -- --depth=1
+    GH_TOKEN="$GH_TEST_TOKEN" gh repo clone "$TEST_REPO" "$TEST_REPO_CLONE" -- --depth=1
     cd "$TEST_REPO_CLONE"
     DEFAULT_BRANCH=$(git symbolic-ref --short HEAD)
     PR_BRANCH="kodus-e2e/$RUN_ID"
@@ -325,9 +325,9 @@ EOF
     git -c user.email=e2e@kodus.test -c user.name="Kodus E2E" \
         commit -m "chore: kodus e2e smoke commit" >/dev/null
 
-    GH_TOKEN="$GITHUB_TEST_TOKEN" git push -u origin "$PR_BRANCH" >/dev/null 2>&1
+    GH_TOKEN="$GH_TEST_TOKEN" git push -u origin "$PR_BRANCH" >/dev/null 2>&1
 
-    PR_URL=$(GH_TOKEN="$GITHUB_TEST_TOKEN" gh pr create \
+    PR_URL=$(GH_TOKEN="$GH_TEST_TOKEN" gh pr create \
         --repo "$TEST_REPO" \
         --base "$DEFAULT_BRANCH" \
         --head "$PR_BRANCH" \
@@ -346,15 +346,15 @@ FOUND=""
 # the PR author. So we can't filter by `user.login != author`. Filter only
 # the explicit trigger comment + any other "@kody …" command comments.
 while true; do
-    REVIEW_COMMENTS=$(GH_TOKEN="$GITHUB_TEST_TOKEN" gh api \
+    REVIEW_COMMENTS=$(GH_TOKEN="$GH_TEST_TOKEN" gh api \
         "repos/${TEST_REPO}/pulls/${PR_NUMBER}/comments?since=${SINCE_ISO}" 2>/dev/null \
         | jq --argjson trigger "${TRIGGER_COMMENT_ID:-0}" \
             '[.[] | select(.id != $trigger) | select((.body // "") | ascii_downcase | startswith("@kody") | not)] | length')
-    ISSUE_COMMENTS=$(GH_TOKEN="$GITHUB_TEST_TOKEN" gh api \
+    ISSUE_COMMENTS=$(GH_TOKEN="$GH_TEST_TOKEN" gh api \
         "repos/${TEST_REPO}/issues/${PR_NUMBER}/comments?since=${SINCE_ISO}" 2>/dev/null \
         | jq --argjson trigger "${TRIGGER_COMMENT_ID:-0}" \
             '[.[] | select(.id != $trigger) | select((.body // "") | ascii_downcase | startswith("@kody") | not)] | length')
-    REVIEWS=$(GH_TOKEN="$GITHUB_TEST_TOKEN" gh api \
+    REVIEWS=$(GH_TOKEN="$GH_TEST_TOKEN" gh api \
         "repos/${TEST_REPO}/pulls/${PR_NUMBER}/reviews" 2>/dev/null \
         | jq --arg since "$SINCE_ISO" \
             '[.[] | select((.submitted_at // .created_at // "") > $since) | select((.body // "") | ascii_downcase | startswith("@kody") | not)] | length')

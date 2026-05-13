@@ -11,7 +11,7 @@
 #
 # Required env (or .env.test-e2e):
 #   TEST_REPO            owner/repo on GitHub
-#   GITHUB_TEST_TOKEN    PAT with `repo` + `admin:repo_hook`
+#   GH_TEST_TOKEN    PAT with `repo` + `admin:repo_hook`
 #
 #   # DigitalOcean (default):
 #   DIGITALOCEAN_TOKEN   DO API token (read+write)
@@ -229,7 +229,7 @@ cleanup() {
     fi
     if [ -n "$GITHUB_HOOK_ID" ] && [ -n "${TEST_REPO:-}" ]; then
         curl -sS -X DELETE \
-            -H "Authorization: Bearer ${GITHUB_TEST_TOKEN}" \
+            -H "Authorization: Bearer ${GH_TEST_TOKEN}" \
             -H "Accept: application/vnd.github+json" \
             "https://api.github.com/repos/${TEST_REPO}/hooks/${GITHUB_HOOK_ID}" >/dev/null \
             && ok "Removed GitHub webhook $GITHUB_HOOK_ID" \
@@ -277,7 +277,7 @@ require_cmd git
 require_cmd openssl
 
 require_env TEST_REPO
-require_env GITHUB_TEST_TOKEN
+require_env GH_TEST_TOKEN
 case "$TEST_VM_PROVIDER" in
     digitalocean) require_env DIGITALOCEAN_TOKEN ;;
     hetzner)      require_env HCLOUD_TOKEN ;;
@@ -570,7 +570,7 @@ esac
 # ---------- GitHub webhook ----------
 log "Creating GitHub webhook on $TEST_REPO..."
 HOOK_RESP=$(curl -sS -X POST \
-    -H "Authorization: Bearer ${GITHUB_TEST_TOKEN}" \
+    -H "Authorization: Bearer ${GH_TEST_TOKEN}" \
     -H "Accept: application/vnd.github+json" \
     "https://api.github.com/repos/${TEST_REPO}/hooks" \
     -d "$(jq -nc --arg url "$SERVER_TUNNEL_URL/github/webhook" \
@@ -595,7 +595,7 @@ if [ "${TEST_USE_PLAYWRIGHT:-0}" = "1" ]; then
         TEST_USER_EMAIL="$TEST_USER_EMAIL" \
         TEST_USER_PASSWORD="$TEST_USER_PASSWORD" \
         TEST_REPO="$TEST_REPO" \
-        GITHUB_TEST_TOKEN="$GITHUB_TEST_TOKEN" \
+        GH_TEST_TOKEN="$GH_TEST_TOKEN" \
         node signup.mjs
     popd >/dev/null
 else
@@ -690,7 +690,7 @@ ok "Org=$ORG_ID  Team=$TEAM_ID"
 log "Registering GitHub integration with PAT..."
 AUTH_INT_RESP=$(curl -sS -X POST --max-time 30 \
     -H "Authorization: Bearer $ACCESS_TOKEN" -H "Content-Type: application/json" \
-    -d "$(jq -nc --arg token "$GITHUB_TEST_TOKEN" --arg orgId "$ORG_ID" --arg teamId "$TEAM_ID" \
+    -d "$(jq -nc --arg token "$GH_TEST_TOKEN" --arg orgId "$ORG_ID" --arg teamId "$TEAM_ID" \
         '{integrationType:"GITHUB", authMode:"token", token:$token,
           organizationAndTeamData:{organizationId:$orgId, teamId:$teamId}}')" \
     "http://$SERVER_IP:3001/code-management/auth-integration")
@@ -709,7 +709,7 @@ TARGET_REPO_JSON=$(curl -sS -G --max-time 30 \
     | jq -c --arg fn "$TEST_REPO" '.data[]? | select(.full_name==$fn)')
 if [ -z "$TARGET_REPO_JSON" ] || [ "$TARGET_REPO_JSON" = "null" ]; then
     err "Repo $TEST_REPO not found in the integration's available list."
-    err "Make sure GITHUB_TEST_TOKEN has access to it (PAT scopes: repo, admin:repo_hook)."
+    err "Make sure GH_TEST_TOKEN has access to it (PAT scopes: repo, admin:repo_hook)."
     exit 1
 fi
 ok "Found: $(echo "$TARGET_REPO_JSON" | jq -r .full_name) (id $(echo "$TARGET_REPO_JSON" | jq -r .id))"
@@ -741,7 +741,7 @@ if [ -n "${TEST_PR_NUMBER:-}" ]; then
     REUSE_PR=1
     PR_NUMBER="$TEST_PR_NUMBER"
     log "Triggering review on existing PR #$PR_NUMBER via @kody review comment..."
-    TRIGGER_RESP=$(GH_TOKEN="$GITHUB_TEST_TOKEN" gh api \
+    TRIGGER_RESP=$(GH_TOKEN="$GH_TEST_TOKEN" gh api \
         --method POST \
         "repos/${TEST_REPO}/issues/${PR_NUMBER}/comments" \
         -f body="@kody review")
@@ -754,7 +754,7 @@ else
     SINCE_ISO=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
     TEST_REPO_CLONE="$(mktemp -d -t kodus-e2e-XXXXXX)/repo"
     log "Opening new PR on $TEST_REPO..."
-    GH_TOKEN="$GITHUB_TEST_TOKEN" gh repo clone "$TEST_REPO" "$TEST_REPO_CLONE" -- --depth=1
+    GH_TOKEN="$GH_TEST_TOKEN" gh repo clone "$TEST_REPO" "$TEST_REPO_CLONE" -- --depth=1
     cd "$TEST_REPO_CLONE"
     DEFAULT_BRANCH=$(git symbolic-ref --short HEAD)
     PR_BRANCH="kodus-e2e/$RUN_ID"
@@ -767,8 +767,8 @@ EOF
     git -c user.email=e2e@kodus.test -c user.name="Kodus E2E" add kodus-e2e-touch.md
     git -c user.email=e2e@kodus.test -c user.name="Kodus E2E" \
         commit -m "chore: kodus e2e smoke" >/dev/null
-    GH_TOKEN="$GITHUB_TEST_TOKEN" git push -u origin "$PR_BRANCH" >/dev/null 2>&1
-    PR_URL=$(GH_TOKEN="$GITHUB_TEST_TOKEN" gh pr create \
+    GH_TOKEN="$GH_TEST_TOKEN" git push -u origin "$PR_BRANCH" >/dev/null 2>&1
+    PR_URL=$(GH_TOKEN="$GH_TEST_TOKEN" gh pr create \
         --repo "$TEST_REPO" --base "$DEFAULT_BRANCH" --head "$PR_BRANCH" \
         --title "Kodus E2E: $RUN_ID" \
         --body "Automated PR opened by scripts/test-e2e-vm.sh — safe to close.")
@@ -787,15 +787,15 @@ START=$(date +%s)
 #   * any other "@kody …" command comment (body starts with @kody).
 # Anything else new since SINCE_ISO is a Kody response.
 while true; do
-    RC=$(GH_TOKEN="$GITHUB_TEST_TOKEN" gh api \
+    RC=$(GH_TOKEN="$GH_TEST_TOKEN" gh api \
         "repos/${TEST_REPO}/pulls/${PR_NUMBER}/comments?since=${SINCE_ISO}" 2>/dev/null \
         | jq --argjson trigger "${TRIGGER_COMMENT_ID:-0}" \
             '[.[] | select(.id != $trigger) | select((.body // "") | ascii_downcase | startswith("@kody") | not)] | length')
-    IC=$(GH_TOKEN="$GITHUB_TEST_TOKEN" gh api \
+    IC=$(GH_TOKEN="$GH_TEST_TOKEN" gh api \
         "repos/${TEST_REPO}/issues/${PR_NUMBER}/comments?since=${SINCE_ISO}" 2>/dev/null \
         | jq --argjson trigger "${TRIGGER_COMMENT_ID:-0}" \
             '[.[] | select(.id != $trigger) | select((.body // "") | ascii_downcase | startswith("@kody") | not)] | length')
-    RV=$(GH_TOKEN="$GITHUB_TEST_TOKEN" gh api \
+    RV=$(GH_TOKEN="$GH_TEST_TOKEN" gh api \
         "repos/${TEST_REPO}/pulls/${PR_NUMBER}/reviews" 2>/dev/null \
         | jq --arg since "$SINCE_ISO" \
             '[.[] | select((.submitted_at // .created_at // "") > $since) | select((.body // "") | ascii_downcase | startswith("@kody") | not)] | length')
