@@ -107,9 +107,15 @@ services:
     restart: unless-stopped
 
   rabbitmq:
-    build:
-      context: ./docker/rabbitmq
-      dockerfile: Dockerfile
+    # Pre-built image bundling the rabbitmq_delayed_message_exchange plugin
+    # (required by Kodus workflow delayed retries — see kodus-ai issue #873).
+    # Published by kodus-ai .github/workflows/rabbitmq-build-push.yml: base
+    # digest-pinned, plugin/rabbitmqadmin SHA256-verified, Trivy-scanned, and
+    # it provisions both the kodus-ai and kodus-ast vhosts. Pinned to a fixed
+    # tag rather than :latest because this image tracks the RabbitMQ + plugin
+    # version, not the Kodus release. The local docker/rabbitmq/ build context
+    # is kept as a fallback but is no longer used.
+    image: ghcr.io/kodustech/kodus-rabbitmq:4.2.2-kodus
     container_name: rabbitmq-prod
     hostname: ${RABBITMQ_HOSTNAME:-rabbitmq}
     ports:
