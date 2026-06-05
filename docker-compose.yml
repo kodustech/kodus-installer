@@ -1,6 +1,6 @@
 services:
   kodus-web:
-    image: ghcr.io/kodustech/kodus-ai-web:latest
+    image: ghcr.io/kodustech/kodus-ai-web:${IMAGE_TAG:-latest}
     container_name: kodus-web-prod
     ports:
       - "${WEB_PORT}:${WEB_PORT}"
@@ -14,7 +14,7 @@ services:
       - .env
 
   api:
-    image: ghcr.io/kodustech/kodus-ai-api:latest
+    image: ghcr.io/kodustech/kodus-ai-api:${IMAGE_TAG:-latest}
     platform: linux/amd64
     container_name: ${GLOBAL_API_CONTAINER_NAME:-kodus-api}
     volumes:
@@ -40,7 +40,7 @@ services:
       - rabbitmq
 
   worker:
-    image: ghcr.io/kodustech/kodus-ai-worker:latest
+    image: ghcr.io/kodustech/kodus-ai-worker:${IMAGE_TAG:-latest}
     platform: linux/amd64
     container_name: kodus-worker-prod
     volumes:
@@ -64,7 +64,7 @@ services:
       - rabbitmq
 
   webhooks:
-    image: ghcr.io/kodustech/kodus-ai-webhook:latest
+    image: ghcr.io/kodustech/kodus-ai-webhook:${IMAGE_TAG:-latest}
     platform: linux/amd64
     container_name: kodus-webhooks-prod
     volumes:
@@ -91,7 +91,7 @@ services:
       - rabbitmq
 
   kodus-mcp-manager:
-    image: ghcr.io/kodustech/kodus-mcp-manager:latest
+    image: ghcr.io/kodustech/kodus-mcp-manager:${IMAGE_TAG:-latest}
     platform: linux/amd64
     container_name: kodus-mcp-manager
     ports:
