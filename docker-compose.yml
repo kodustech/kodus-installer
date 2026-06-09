@@ -63,6 +63,41 @@ services:
       - db_kodus_mongodb
       - rabbitmq
 
+  # Analytics ingestion worker (Enterprise / Cockpit). Same image as `worker`,
+  # only WORKER_ROLE differs: this process runs the cockpit warehouse ingestion
+  # + PR classifier crons and writes the `analytics` Postgres schema. The main
+  # `worker` stays role=code-review and never touches analytics.
+  #
+  # Opt-in: gated behind the `analytics` compose profile so community installs
+  # don't pay for an idle worker. Enable with `COMPOSE_PROFILES=analytics`
+  # (and set the ANALYTICS_* block in .env). See docs → Analytics Worker.
+  worker-analytics:
+    image: ghcr.io/kodustech/kodus-ai-worker:${IMAGE_TAG:-latest}
+    platform: linux/amd64
+    container_name: kodus-worker-analytics
+    profiles:
+      - analytics
+    volumes:
+      - log_volume:/app/logs
+    logging:
+      options:
+        max-size: "200m"
+        max-file: "10"
+    environment:
+      - ENV=production
+      - NODE_ENV=production
+      - WORKER_ROLE=analytics
+    networks:
+      - shared-network
+      - kodus-backend-services
+    restart: unless-stopped
+    env_file:
+      - .env
+    depends_on:
+      - db_kodus_postgres
+      - db_kodus_mongodb
+      - rabbitmq
+
   webhooks:
     image: ghcr.io/kodustech/kodus-ai-webhook:${IMAGE_TAG:-latest}
     platform: linux/amd64
