@@ -52,6 +52,12 @@ services:
     environment:
       - ENV=production
       - NODE_ENV=production
+      # Only `api` runs DB migrations on boot — it runs the OLTP *and* the
+      # analytics-warehouse migrations from the shared prod-entrypoint. If
+      # worker/webhooks/worker-analytics also migrated concurrently they would
+      # race on CREATE TYPE (duplicate key pg_type_typname_nsp_index) and
+      # crash-loop the first boot. Override the .env default to false here.
+      - RUN_MIGRATIONS=false
     networks:
       - shared-network
       - kodus-backend-services
@@ -87,6 +93,8 @@ services:
       - ENV=production
       - NODE_ENV=production
       - WORKER_ROLE=analytics
+      # Migrations belong to `api` only — see the note on the `worker` service.
+      - RUN_MIGRATIONS=false
     networks:
       - shared-network
       - kodus-backend-services
@@ -114,6 +122,8 @@ services:
       - ENV=production
       - NODE_ENV=production
       - API_WEBHOOKS_PORT=${API_WEBHOOKS_PORT:-3332}
+      # Migrations belong to `api` only — see the note on the `worker` service.
+      - RUN_MIGRATIONS=false
     networks:
       - shared-network
       - kodus-backend-services
