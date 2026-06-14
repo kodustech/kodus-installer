@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # AUTO-GENERATED from kodus-ai/.env.schema. Do NOT edit by hand.
 # Sourced by scripts/install.sh, scripts/doctor.sh, scripts/generate-secrets.sh
-# Run `yarn env:generate --apply --installer` in kodus-ai to regenerate.
+# Run `pnpm run env:generate --apply --installer` in kodus-ai to regenerate.
 
 # Vars the installer must see set before booting the stack.
 # Derived from `@required` in the schema (self-hosted audience).
