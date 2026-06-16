@@ -1,0 +1,67 @@
+services:
+  kodus-web:
+    ports: !override
+      - "127.0.0.1:${WEB_PORT:-3010}:3000"
+    environment:
+      WEB_OAUTH_GITHUB_CLIENT_ID: ${API_GITHUB_CLIENT_ID}
+      WEB_OAUTH_GITHUB_CLIENT_SECRET: ${API_GITHUB_CLIENT_SECRET}
+
+  api:
+    ports: !override
+      - "127.0.0.1:${KODUS_API_HOST_PORT:-3011}:3001"
+    networks:
+      shared-network:
+      kodus-backend-services:
+        aliases:
+          - kodus.automedia.lat
+
+  webhooks:
+    ports: !override
+      - "127.0.0.1:${API_WEBHOOKS_PORT:-3332}:${API_WEBHOOKS_PORT:-3332}"
+
+  kodus-edge:
+    build:
+      context: ./railway/nginx
+    container_name: kodus-edge-prod
+    environment:
+      PORT: 8080
+      API_INTERNAL_URL: http://api:3001
+      WEB_INTERNAL_URL: http://kodus-web:3000
+      WEBHOOKS_INTERNAL_URL: http://webhooks:3332
+      AGENT_ROUTER_INTERNAL_URL: http://host.docker.internal:3420
+    ports:
+      - "127.0.0.1:${KODUS_EDGE_PORT:-3012}:8080"
+    networks:
+      - shared-network
+      - kodus-backend-services
+    depends_on:
+      - api
+      - kodus-web
+      - webhooks
+    restart: unless-stopped
+
+  kodus-cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: kodus-cloudflared
+    command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN}
+    networks:
+      - shared-network
+      - kodus-backend-services
+    depends_on:
+      - kodus-edge
+    restart: unless-stopped
+
+  kodus-mcp-manager:
+    ports: !override
+      - "127.0.0.1:${API_MCP_MANAGER_PORT:-3111}:${API_MCP_MANAGER_PORT:-3111}"
+
+  rabbitmq:
+    environment:
+      RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS: "-rabbit heartbeat 60 disk_free_limit 2147483648"
+    ports: !override []
+
+  db_kodus_postgres:
+    ports: !override []
+
+  db_kodus_mongodb:
+    ports: !override []
