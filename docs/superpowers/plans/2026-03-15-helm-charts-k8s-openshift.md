@@ -390,10 +390,24 @@ RabbitMQ connection env vars.
 
 {{/*
 App secrets env vars — from existingSecret or inline secret.
+Required secrets are NON-optional: the pod fails to start if the key is
+missing, a deliberate guard against booting with empty auth/crypto secrets
+(silent security failure). Optional secrets (LLM keys, MCP manager, webhook
+token) stay optional so a minimal install boots without them.
+Note the underscore in API_JWT_REFRESH_SECRET (the no-underscore legacy name
+is a typo no longer read by code), and NEXTAUTH_SECRET is distinct from
+WEB_NEXTAUTH_SECRET (both required, mirrored to the same value).
 */}}
 {{- define "kodus-common.appSecretsEnv" -}}
 {{- $secretName := default (printf "%s-secrets" .Release.Name) .Values.global.existingSecret -}}
-{{- range $key := list "API_JWT_SECRET" "API_JWT_REFRESHSECRET" "WEB_NEXTAUTH_SECRET" "WEB_JWT_SECRET_KEY" "API_CRYPTO_KEY" "CODE_MANAGEMENT_SECRET" "CODE_MANAGEMENT_WEBHOOK_TOKEN" "API_OPEN_AI_API_KEY" "API_OPENAI_FORCE_BASE_URL" "API_LLM_PROVIDER_MODEL" "API_MORPHLLM_API_KEY" "API_E2B_KEY" "API_MCP_MANAGER_JWT_SECRET" "API_MCP_MANAGER_ENCRYPTION_SECRET" "API_MCP_MANAGER_COMPOSIO_API_KEY" }}
+{{- range $key := list "API_JWT_SECRET" "API_JWT_REFRESH_SECRET" "WEB_NEXTAUTH_SECRET" "NEXTAUTH_SECRET" "API_CRYPTO_KEY" "CODE_MANAGEMENT_SECRET" }}
+- name: {{ $key }}
+  valueFrom:
+    secretKeyRef:
+      name: {{ $secretName }}
+      key: {{ $key }}
+{{- end }}
+{{- range $key := list "CODE_MANAGEMENT_WEBHOOK_TOKEN" "API_OPEN_AI_API_KEY" "API_MORPHLLM_API_KEY" "API_E2B_KEY" "API_MCP_MANAGER_JWT_SECRET" "API_MCP_MANAGER_ENCRYPTION_SECRET" "API_MCP_MANAGER_COMPOSIO_API_KEY" }}
 - name: {{ $key }}
   valueFrom:
     secretKeyRef:
@@ -554,7 +568,8 @@ Write the complete values.yaml following every section of the spec. Key points:
 - `containerSecurityContext.readOnlyRootFilesystem: true`
 - All secrets default to `""` (inline disabled)
 - PostgreSQL image override to `pgvector/pgvector:0.8.2-pg16`
-- RabbitMQ `communityPlugins` + `extraPlugins` + lifecycle vhost creation
+- RabbitMQ image override to `ghcr.io/kodustech/kodus-rabbitmq:4.2.2-kodus` (plugin + `kodus-ai`/`kodus-ast` vhosts baked in — no runtime plugin download, no lifecycle vhost hook)
+- `services` map: web, api, worker (`WORKER_ROLE=code-review`), worker-analytics (`WORKER_ROLE=analytics`, `enabled: false`), webhooks, mcp-manager (`enabled: false`) — NO `service-ast` (not in self-hosted baseline)
 - `global.labels` with compliance labels
 - `global.config` with ALL env vars from the spec's ConfigMap section
 - `global.secrets` with ALL secret keys from the spec's Secrets section
@@ -764,7 +779,7 @@ spec:
     name: {{ include "kodus.fullname" . }}-secrets
     creationPolicy: Owner
   data:
-    {{- range $key := list "API_JWT_SECRET" "API_JWT_REFRESHSECRET" "WEB_NEXTAUTH_SECRET" "WEB_JWT_SECRET_KEY" "API_CRYPTO_KEY" "CODE_MANAGEMENT_SECRET" "CODE_MANAGEMENT_WEBHOOK_TOKEN" "API_OPEN_AI_API_KEY" "API_OPENAI_FORCE_BASE_URL" "API_LLM_PROVIDER_MODEL" "API_MORPHLLM_API_KEY" "API_E2B_KEY" "API_MCP_MANAGER_JWT_SECRET" "API_MCP_MANAGER_ENCRYPTION_SECRET" "API_MCP_MANAGER_COMPOSIO_API_KEY" }}
+    {{- range $key := list "API_JWT_SECRET" "API_JWT_REFRESH_SECRET" "WEB_NEXTAUTH_SECRET" "NEXTAUTH_SECRET" "API_CRYPTO_KEY" "CODE_MANAGEMENT_SECRET" "CODE_MANAGEMENT_WEBHOOK_TOKEN" "API_OPEN_AI_API_KEY" "API_MORPHLLM_API_KEY" "API_E2B_KEY" "API_MCP_MANAGER_JWT_SECRET" "API_MCP_MANAGER_ENCRYPTION_SECRET" "API_MCP_MANAGER_COMPOSIO_API_KEY" }}
     - secretKey: {{ $key }}
       remoteRef:
         key: {{ printf "kodus/%s" $key }}
@@ -1206,8 +1221,8 @@ spec:
       ports:
         - port: {{ .Values.services.api.port }}
 ---
-{{/* Allow api → service-ast, mcp-manager (inter-service) */}}
-{{- range $target := list "service-ast" "mcp-manager" }}
+{{/* Allow api → mcp-manager (inter-service) */}}
+{{- range $target := list "mcp-manager" }}
 {{- $targetSvc := index $.Values.services $target }}
 {{- if and (ne (toString (default true $targetSvc.enabled)) "false") $targetSvc.port }}
 apiVersion: networking.k8s.io/v1
@@ -1236,7 +1251,7 @@ spec:
 {{- end }}
 ```
 
-Note: This covers the core policies. The implementer should add equivalent policies for worker, webhooks, and service-ast egress to database/rabbitmq pods following the same pattern.
+Note: This covers the core policies. The implementer should add equivalent policies for worker, worker-analytics (when enabled), and webhooks egress to database/rabbitmq pods following the same pattern. The Bitnami sub-chart pods (postgresql, mongodb, rabbitmq) do NOT carry the `app.kubernetes.io/part-of: kodus` label, so the default-deny selector must be widened or dedicated allow-policies added for them, otherwise DB traffic is silently blocked.
 
 - [ ] **Step 2: Commit**
 

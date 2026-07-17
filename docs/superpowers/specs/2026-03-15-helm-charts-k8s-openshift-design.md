@@ -189,7 +189,7 @@ The `_helpers.tpl` in `kodus-common` merges these with standard Helm labels on e
 |---|---|---|---|
 | bitnami/postgresql | 18.5.6 | PostgreSQL 16 | Image override: `pgvector/pgvector:0.8.2-pg16` (matches docker-compose parity) |
 | bitnami/mongodb | 18.6.11 | MongoDB 8.x | |
-| bitnami/rabbitmq | 16.0.14 | RabbitMQ 4.1.3 | `communityPlugins` for delayed_message_exchange |
+| bitnami/rabbitmq | 16.0.14 | RabbitMQ 4.2.2 | Image override: `ghcr.io/kodustech/kodus-rabbitmq:4.2.2-kodus` (plugin + vhosts baked in — matches docker-compose parity) |
 | kodus-common | 0.1.0 | — | Local library chart (`file://`) |
 
 **Note on PostgreSQL version:** The docker-compose uses `pgvector/pgvector:pg16`. The Helm charts match this to ensure data compatibility. Users who want to upgrade to pg17 can override `postgresql.image.tag`.
@@ -237,6 +237,13 @@ services:
       tag: ""     # REQUIRED
     port: null  # no exposed port
     replicas: 2
+    env:
+      # The kodus-worker image refuses to boot without WORKER_ROLE. The main
+      # worker always runs code-review; analytics is the separate
+      # worker-analytics service below. Set per-service (NOT in global.config)
+      # because the two workers share the same ConfigMap but need distinct roles.
+      WORKER_ROLE: code-review
+      RUN_MIGRATIONS: "false"   # migrations run only via the Helm hook Job
     probes:
       # Worker has no HTTP endpoint. Uses a script that verifies
       # the Node.js process is alive and connected to RabbitMQ.
@@ -264,18 +271,27 @@ services:
       requests: { cpu: 100m, memory: 256Mi }
       limits:   { cpu: 500m, memory: 512Mi }
 
-  service-ast:
-    enabled: true
+  # Analytics ingestion worker (Cockpit / self-hosted Enterprise). Same image
+  # as `worker`, only WORKER_ROLE differs. In docker-compose this is the
+  # `worker-analytics` service gated behind the `analytics` compose profile, so
+  # it ships disabled by default here — enable for Enterprise installs that run
+  # the analytics warehouse. See docs → Analytics Worker.
+  worker-analytics:
+    enabled: false
     image:
-      repository: ghcr.io/kodustech/kodus-service-ast
-      tag: ""     # REQUIRED
-    port: 3002
+      repository: ghcr.io/kodustech/kodus-ai-worker
+      tag: ""     # REQUIRED when enabled
+    port: null  # no exposed port
     replicas: 1
+    env:
+      WORKER_ROLE: analytics
+      RUN_MIGRATIONS: "false"   # migrations run only via the Helm hook Job
     probes:
-      path: /health
+      type: exec
+      command: ["node", "-e", "require('amqplib').connect(process.env.API_RABBITMQ_URI).then(() => process.exit(0)).catch(() => process.exit(1))"]
     resources:
-      requests: { cpu: 100m, memory: 256Mi }
-      limits:   { cpu: 500m, memory: 512Mi }
+      requests: { cpu: 250m, memory: 512Mi }
+      limits:   { cpu: "1", memory: 1Gi }
 
   mcp-manager:
     enabled: false
@@ -357,7 +373,7 @@ global:
     WEB_PORT: "3000"
     NEXTAUTH_URL: ""              # REQUIRED — must be HTTPS in production
     WEB_SUPPORT_DOCS_URL: "https://docs.kodus.io"
-    WEB_SUPPORT_DISCORD_INVITE_URL: "https://discord.gg/CceCdAke"
+    WEB_SUPPORT_DISCORD_INVITE_URL: "https://discord.gg/QFzwwmNmdN"
     WEB_SUPPORT_TALK_TO_FOUNDER_URL: "https://cal.com/gabrielmalinosqui/30min"
 
     # -- API General
@@ -383,38 +399,38 @@ global:
     API_RABBITMQ_ENABLED: "true"
 
     # -- Cron
-    API_CRON_SYNC_CODE_REVIEW_REACTIONS: "* 5 * * *"
+    API_CRON_SYNC_CODE_REVIEW_REACTIONS: "0 0 * * *"
     API_CRON_KODY_LEARNING: "0 0 * * 6"
     API_CRON_CHECK_IF_PR_SHOULD_BE_APPROVED: "*/2 * * * *"
 
     # -- General (set on all containers)
     NODE_ENV: "production"
 
-    # -- AST Service
-    API_ENABLE_CODE_REVIEW_AST: "true"
-    API_SERVICE_AST_URL: "http://{{ .Release.Name }}-service-ast:3002"
-    CONTAINER_NAME: "kodus-service-ast"
-    AST_NODE_ENV: "production"
-    AST_LOG_PRETTY: "false"
-    AST_LOG_LEVEL: "info"
-    AST_PORT: "3002"
-    DB_SSL: "true"              # SOC 2: SSL enabled by default
-    # RABBIT_URL is NOT stored in the ConfigMap — it contains credentials.
-    # It is constructed in the deployment template via env: block using
+    # -- Runtime flags (from .env.example)
+    RUN_MIGRATIONS: "false"     # migrations run only via the Helm hook Job
+    RUN_SEEDS: "false"          # seeds run in the migration Job too
+    API_RABBITMQ_WAIT: "true"
+    SANDBOX_PROVIDER: "local"
+    API_AGENT_REVIEW_ENABLED: "true"
+    API_FRONTEND_URL: "http://{{ .Release.Name }}-web:3000"
+    # NOTE: WORKER_ROLE is set per-service (worker=code-review,
+    # worker-analytics=analytics), NOT here — both workers share this ConfigMap.
+    #
+    # REMOVED from the earlier draft: the AST service block
+    # (API_SERVICE_AST_URL, AST_*, ENABLE_*_GRAPH, RABBIT_RETRY_*, DB_SSL,
+    # API_ENABLE_CODE_REVIEW_AST). None of those vars exist in the self-hosted
+    # schema (.env.example) and service-ast is not in docker-compose.yml. Re-add
+    # only if/when kodus-ai wires service-ast into the self-hosted stack — see
+    # "Baseline Reconciliation" below.
+    #
+    # API_RABBITMQ_URI is NOT stored in the ConfigMap — it contains credentials.
+    # It is constructed in the deployment template via the env: block using
     # valueFrom references to the RabbitMQ secret, e.g.:
-    #   RABBIT_URL:
+    #   API_RABBITMQ_URI:
     #     value: "amqp://$(RABBITMQ_USER):$(RABBITMQ_PASS)@{{ .Release.Name }}-rabbitmq:5672/kodus-ai"
     # where RABBITMQ_USER and RABBITMQ_PASS are defined earlier in the same
     # env: block as valueFrom.secretKeyRef. Kubernetes resolves $(VAR) refs
     # only within the pod spec env: block, NOT in ConfigMaps.
-    RABBIT_RETRY_QUEUE: "ast.jobs.retry.q"
-    RABBIT_RETRY_TTL_MS: "60000"
-    RABBIT_PREFETCH: "1"
-    RABBIT_PUBLISH_TIMEOUT_MS: "5000"
-    RABBIT_SAC: "false"
-    ENABLE_INCREMENTAL_GRAPH: "false"
-    ENABLE_GRAPH_BENCHMARK: "false"
-    ENABLE_LIGHTWEIGHT_GRAPH: "false"
 
     # -- MCP
     API_MCP_SERVER_ENABLED: "false"
@@ -458,9 +474,11 @@ global:
   secrets:
     # -- Auth
     API_JWT_SECRET: ""
-    API_JWT_REFRESHSECRET: ""
+    API_JWT_REFRESH_SECRET: ""   # underscore. API_JWT_REFRESHSECRET (no
+                                 # underscore) is a legacy typo, no longer read.
     WEB_NEXTAUTH_SECRET: ""
-    WEB_JWT_SECRET_KEY: ""
+    NEXTAUTH_SECRET: ""          # required, separate from WEB_NEXTAUTH_SECRET;
+                                 # must be mirrored to the SAME value.
     API_CRYPTO_KEY: ""
 
     # -- Webhooks
@@ -584,10 +602,10 @@ networkPolicy:
   enabled: true   # SOC 2: enabled by default
   # Creates policies that:
   # - Allow web → api, webhooks (frontend to backend)
-  # - Allow api → postgresql, mongodb, rabbitmq, service-ast, mcp-manager
+  # - Allow api → postgresql, mongodb, rabbitmq, mcp-manager
   # - Allow worker → postgresql, mongodb, rabbitmq
+  # - Allow worker-analytics → postgresql, mongodb, rabbitmq (when enabled)
   # - Allow webhooks → postgresql, mongodb, rabbitmq
-  # - Allow service-ast → postgresql, rabbitmq
   # - Allow ingress controller → web, api, webhooks (external traffic)
   # - Deny all other inter-pod traffic (default deny)
   ingressControllerLabels: {}
@@ -850,12 +868,7 @@ services:
     resources:
       requests: { cpu: 50m, memory: 128Mi }
       limits:   { cpu: 200m, memory: 256Mi }
-  service-ast:
-    image: { tag: latest }
-    replicas: 1
-    resources:
-      requests: { cpu: 50m, memory: 128Mi }
-      limits:   { cpu: 200m, memory: 256Mi }
+  # worker-analytics stays disabled in dev (no override needed).
 
 image:
   pullPolicy: IfNotPresent
@@ -867,13 +880,14 @@ global:
   config:
     API_LOG_LEVEL: "debug"
     API_LOG_PRETTY: "true"
-    API_DATABASE_DISABLE_SSL: "true"
-    DB_SSL: "false"
-  # Dev mode: allow inline secrets
+    API_DATABASE_DISABLE_SSL: "true"   # real var; there is no DB_SSL in the schema
+  # Dev mode: allow inline secrets. All six REQUIRED secrets must be present —
+  # appSecretsEnv references them non-optional, so pods won't start otherwise.
   secrets:
     API_JWT_SECRET: "dev-secret"
+    API_JWT_REFRESH_SECRET: "dev-secret"
     WEB_NEXTAUTH_SECRET: "dev-secret"
-    WEB_JWT_SECRET_KEY: "dev-secret"
+    NEXTAUTH_SECRET: "dev-secret"          # mirror of WEB_NEXTAUTH_SECRET
     API_CRYPTO_KEY: "dev-crypto-key-0000000000000000"
     CODE_MANAGEMENT_SECRET: "dev-webhook-secret"
 
@@ -915,39 +929,35 @@ postgresql:
 
 ## RabbitMQ with Delayed Message Exchange
 
-The Bitnami `extraPlugins` does not download external plugins. Configuration:
+**Reuse the pre-built Kodus RabbitMQ image** instead of downloading the plugin
+at runtime. The docker-compose already ships
+`ghcr.io/kodustech/kodus-rabbitmq:4.2.2-kodus`, which bakes in the
+`rabbitmq_delayed_message_exchange` plugin (SHA256-verified, Trivy-scanned) and
+provisions both the `kodus-ai` and `kodus-ast` vhosts on boot. Override the
+Bitnami sub-chart image to that same tag so the Helm and Compose stacks stay in
+lockstep on RabbitMQ + plugin version:
 
 ```yaml
 rabbitmq:
-  communityPlugins: >-
-    https://github.com/rabbitmq/rabbitmq-delayed-message-exchange/releases/download/v4.2.0/rabbitmq_delayed_message_exchange-4.2.0.ez
-  extraPlugins: "rabbitmq_delayed_message_exchange rabbitmq_prometheus"
+  image:
+    registry: ghcr.io
+    repository: kodustech/kodus-rabbitmq
+    tag: 4.2.2-kodus
 ```
+
+Rationale — the earlier draft used `communityPlugins` to pull the `.ez` from the
+`rabbitmq-delayed-message-exchange` GitHub release at pod start. That is fragile:
+it adds a network dependency to every RabbitMQ boot, and the plugin repo was
+**archived in January 2026** (see Deprecation Notice above), so the release asset
+could disappear. The pre-built image removes both risks.
 
 ### RabbitMQ Vhost
 
-The Kodus stack uses vhost `/kodus-ai`. The Bitnami chart does not create custom vhosts by default. Configuration via `extraConfiguration`:
-
-```yaml
-rabbitmq:
-  extraConfiguration: |
-    ## Custom vhosts
-    ## These are created via a post-start lifecycle hook
-  lifecycle:
-    postStart:
-      exec:
-        command:
-          - /bin/bash
-          - -c
-          - |
-            until rabbitmqctl await_startup; do sleep 2; done
-            rabbitmqctl add_vhost kodus-ai || true
-            rabbitmqctl add_vhost kodus-ast || true
-            rabbitmqctl set_permissions -p kodus-ai "$RABBITMQ_DEFAULT_USER" ".*" ".*" ".*"
-            rabbitmqctl set_permissions -p kodus-ast "$RABBITMQ_DEFAULT_USER" ".*" ".*" ".*"
-```
-
-This mirrors the `init-definitions.sh` script from the docker-compose setup.
+The pre-built image already creates the `kodus-ai` (and `kodus-ast`) vhosts via
+its bundled `init-definitions.sh`, so **no `lifecycle.postStart` hook is
+needed** — this matches the docker-compose behavior exactly. If a future
+migration moves back to the stock Bitnami image, the vhosts would instead have
+to be provisioned via `extraConfiguration` / a post-start hook.
 
 ## External Services
 
@@ -1015,6 +1025,43 @@ Kodus has been deployed to namespace {{ .Release.Namespace }}.
 
 5. Documentation: https://docs.kodus.io
 ```
+
+## Baseline Reconciliation
+
+This spec was reconciled against the authoritative self-hosted baseline —
+`docker-compose.yml`, `.env.example` (auto-generated from `kodus-ai/.env.schema`),
+and `scripts/schema-vars.sh` — to remove drift from the initial draft. Summary of
+corrections applied:
+
+| Area | Draft (wrong) | Corrected to | Evidence |
+|---|---|---|---|
+| Service list | `service-ast` | `worker-analytics` (opt-in) | `.env.example` has zero AST vars; no `service-ast` in `docker-compose.yml`. `WORKER_ROLE=enum(code-review,analytics)` + compose `analytics` profile confirm the analytics worker. |
+| JWT refresh secret | `API_JWT_REFRESHSECRET` | `API_JWT_REFRESH_SECRET` | `.env.example` explicitly: the no-underscore name "was a typo and is no longer read by code". |
+| NextAuth secret | only `WEB_NEXTAUTH_SECRET` | + `NEXTAUTH_SECRET` (mirrored) | `.env.example`: `NEXTAUTH_SECRET` is `required, secret`, separate from `WEB_NEXTAUTH_SECRET`, must hold the same value. |
+| Web JWT key | `WEB_JWT_SECRET_KEY` | removed | No such var in the schema. |
+| RabbitMQ plugin | runtime `communityPlugins` download | pre-built `ghcr.io/kodustech/kodus-rabbitmq:4.2.2-kodus` | Compose already ships this image (plugin + `kodus-ai`/`kodus-ast` vhosts baked in); plugin repo archived Jan 2026. |
+| WORKER_ROLE | absent | per-service env (code-review / analytics) | Worker image refuses to boot without it; two workers share one ConfigMap so it can't live in `global.config`. |
+| AST config block | `AST_*`, `API_SERVICE_AST_URL`, `ENABLE_*_GRAPH`, `DB_SSL`, `RABBIT_RETRY_*` | removed | None exist in the schema. |
+| Discord invite / a cron | stale values | matched to `.env.example` | Cosmetic drift. |
+
+### Open questions for the kodus-ai team
+
+These are product/roadmap decisions, not blockers — defaults chosen conservatively:
+
+1. **service-ast** — is `kodus-service-ast` intended to land in the self-hosted
+   stack? It exists in the broader Kodus (there's a `scripts/backfill-ast-graph.sh`)
+   but is not wired into compose/`.env.example` today. Kept **out** of the charts;
+   re-add the service + its env block if/when it ships to self-hosted.
+2. **worker-analytics** — shipped **disabled** (`enabled: false`), mirroring the
+   compose `analytics` profile. Confirm this is the desired default for Enterprise.
+3. **Bitnami sub-charts** — `charts.bitnami.com/bitnami` changed its image/registry
+   model in 2025. Before implementation, verify the pinned versions
+   (postgresql 18.5.6, mongodb 18.6.11, rabbitmq 16.0.14) still resolve, or switch
+   to the maintained/secure registry.
+4. **`readOnlyRootFilesystem: true`** — compose mounts a `log_volume` at
+   `/app/logs`. Confirm all services log only to stdout (they set `*_LOG_PRETTY=false`)
+   so the read-only root FS with a writable `/tmp` emptyDir is sufficient, or add a
+   writable `/app/logs` volume.
 
 ## Files Not Changed
 
