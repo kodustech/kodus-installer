@@ -35,8 +35,12 @@ if ! command -v kubectl >/dev/null 2>&1; then
   bad "kubectl not found"; echo "Install kubectl and configure access to your cluster."; exit 1
 fi
 ok "kubectl present ($(kubectl version --client -o json 2>/dev/null | grep -o '"gitVersion":"[^"]*"' | head -1 | cut -d'"' -f4))"
-if ! kubectl cluster-info >/dev/null 2>&1; then
-  bad "cannot reach a cluster (check your kubeconfig/context)"; exit 1
+# Reachability WITHOUT cluster-scope RBAC: namespace-scoped users (OpenShift
+# Developer Sandbox, enterprise multi-tenant clusters) can't run `kubectl
+# cluster-info` — it needs cluster-scope. `kubectl version` only needs to reach
+# the API server, so it works for any authenticated user.
+if ! kubectl version -o json --request-timeout=8s >/dev/null 2>&1; then
+  bad "cannot reach the Kubernetes API (check your kubeconfig/context, or log in)"; exit 1
 fi
 ok "cluster reachable ($(kubectl config current-context 2>/dev/null))"
 
@@ -44,8 +48,10 @@ if [ -z "$NAMESPACE" ]; then
   NAMESPACE=$(kubectl config view --minify -o jsonpath='{..namespace}' 2>/dev/null)
   [ -z "$NAMESPACE" ] && NAMESPACE="default"
 fi
-if ! kubectl get ns "$NAMESPACE" >/dev/null 2>&1; then
-  bad "namespace '$NAMESPACE' not found"; exit 1
+# `get ns` needs cluster-scope on some clusters; fall back to a namespace-scoped
+# op so a namespace-only user still passes.
+if ! kubectl get ns "$NAMESPACE" >/dev/null 2>&1 && ! kubectl get pods -n "$NAMESPACE" >/dev/null 2>&1; then
+  bad "namespace '$NAMESPACE' not found or not accessible with your permissions"; exit 1
 fi
 ok "namespace: $NAMESPACE   release: $RELEASE"
 
