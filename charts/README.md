@@ -79,9 +79,23 @@ helm install kodus . -f values.yaml -f values-openshift.yaml \
 ```
 
 `values-openshift.yaml` sets `platform: openshift` — Routes replace Ingress, a
-SCC path is wired, and pod UIDs are left to the namespace SCC. On OpenShift's
-`restricted` SCC, bundled DB images can be finicky; prefer `operator` or
-`external` for the data stores in production.
+SCC path is wired, and pod UIDs are left to the namespace SCC (no hardcoded UIDs,
+so `restricted-v2` assigns them). Leave `route.hosts.*.host` empty to let
+OpenShift auto-assign the `<name>-<namespace>.apps…` hostname.
+
+Verified on a Red Hat Developer Sandbox (`restricted-v2` SCC): every pod is
+admitted under an arbitrary UID, the Routes come up with TLS edge, and the bundled
+Postgres (pgvector) and RabbitMQ run fine as that UID.
+
+The one thing to watch on OpenShift is the **registry**, not the SCC: many
+enterprise clusters mirror or block official Docker Hub `library/*` images, so the
+bundled `mongo:8` can fail to pull (`ErrImagePull` against the cluster's mirror).
+Options:
+- override just that image with a public drop-in mirror of the same image —
+  `--set mongodb.bundled.image=mirror.gcr.io/library/mongo:8` — or mirror it into
+  your own registry and set `global.imageRegistry`;
+- or, for production, use `mode: operator` / `external` for the data stores, so the
+  images come from a registry you control.
 
 ## Data stores
 
