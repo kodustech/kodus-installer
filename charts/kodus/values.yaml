@@ -126,7 +126,15 @@ global:
     API_MCP_MANAGER_CORS_ORIGINS: "*"
     API_MCP_MANAGER_MCP_PROVIDERS: "kodusmcp,custom"
     API_MCP_MANAGER_PG_DB_SCHEMA: "mcp-manager"
-    # Git provider webhooks (fill only the one in use)
+    # Git provider webhooks — REQUIRED to connect repos. When you connect a repo,
+    # Kodus registers this exact URL as a webhook on the provider, so it MUST be a
+    # PUBLIC https URL that the provider can reach, pointing at the `webhooks`
+    # service (port 3332) with the provider's path. Empty/localhost → the provider
+    # rejects it and "save repositories" fails. Format:
+    #   https://<public-webhooks-host>/github/webhook     (GitHub)
+    #   https://<public-webhooks-host>/gitlab/webhook     (GitLab)
+    # Expose the webhooks service publicly via Ingress/Route (or a tunnel locally).
+    # Fill only the provider(s) you use.
     API_GITHUB_CODE_MANAGEMENT_WEBHOOK: ""
     API_GITLAB_CODE_MANAGEMENT_WEBHOOK: ""
     GLOBAL_BITBUCKET_CODE_MANAGEMENT_WEBHOOK: ""

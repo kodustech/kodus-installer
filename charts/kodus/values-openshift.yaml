@@ -23,8 +23,10 @@ route:
       host: api.kodus.apps.cluster.example.com
       serviceName: api
     webhooks:
-      host: api.kodus.apps.cluster.example.com
-      path: /webhooks
+      # Own host, NO path prefix — the webhooks service serves /github/webhook,
+      # /gitlab/webhook, … directly, so a `path:` here would break the endpoint.
+      # Set API_GITHUB_CODE_MANAGEMENT_WEBHOOK to https://<this-host>/github/webhook.
+      host: webhooks.kodus.apps.cluster.example.com
       serviceName: webhooks
 
 # NOTE: bundled datastores on OpenShift's restricted SCC can be finicky (the
