@@ -155,7 +155,7 @@ the SDK by model-id prefix).
       name: {{ $secretName }}
       key: {{ $key }}
 {{- end }}
-{{- range $key := list "CODE_MANAGEMENT_WEBHOOK_TOKEN" "API_OPEN_AI_API_KEY" "API_MORPHLLM_API_KEY" "API_E2B_KEY" "API_MCP_MANAGER_JWT_SECRET" "API_MCP_MANAGER_ENCRYPTION_SECRET" "API_MCP_MANAGER_COMPOSIO_API_KEY" }}
+{{- range $key := list "CODE_MANAGEMENT_WEBHOOK_TOKEN" "API_OPEN_AI_API_KEY" "API_MORPHLLM_API_KEY" "API_E2B_KEY" "API_MCP_MANAGER_JWT_SECRET" "API_MCP_MANAGER_ENCRYPTION_SECRET" }}
 - name: {{ $key }}
   valueFrom:
     secretKeyRef:

@@ -54,7 +54,6 @@ global:
     API_E2B_KEY: ""
     API_MCP_MANAGER_JWT_SECRET: ""
     API_MCP_MANAGER_ENCRYPTION_SECRET: ""
-    API_MCP_MANAGER_COMPOSIO_API_KEY: ""
 
   # --- Non-sensitive config (rendered into the ConfigMap) ---
   # {{ .Release.Name }} refs are resolved via `tpl` in configmap.yaml.
