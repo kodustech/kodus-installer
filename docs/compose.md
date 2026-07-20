@@ -185,6 +185,16 @@ missing/invalid config, unhealthy containers, and common webhook mistakes.
 - For encryption in transit/at rest, air-gapped setups, and SOC 2-oriented
   hardening, the [Helm deployment](../charts/README.md) has dedicated guidance.
 
+## Related docs
+
+Official docs at [docs.kodus.io](https://docs.kodus.io) go deeper on:
+
+- [Architecture](https://docs.kodus.io/how_to_deploy/en/kodus_architecture) — services, networks, data flow
+- [Production install (VM)](https://docs.kodus.io/how_to_deploy/en/deploy_kodus/generic_vm) · [Updating](https://docs.kodus.io/how_to_deploy/en/deploy_kodus/updating) · [Reverse proxy](https://docs.kodus.io/how_to_deploy/en/deploy_kodus/reverse_proxy) · [Troubleshooting](https://docs.kodus.io/how_to_deploy/en/deploy_kodus/troubleshooting)
+- [MCP manager](https://docs.kodus.io/how_to_deploy/en/deploy_kodus/mcp_manager) · [Analytics worker](https://docs.kodus.io/how_to_deploy/en/deploy_kodus/analytics_worker)
+- Git provider webhooks: [GitHub](https://docs.kodus.io/how_to_deploy/en/platforms/github/github_webhook) · [GitLab](https://docs.kodus.io/how_to_deploy/en/platforms/gitlab/gitlab_webhook) · [Bitbucket](https://docs.kodus.io/how_to_deploy/en/platforms/bitbucket/bitbucket_webhook) · [Azure DevOps](https://docs.kodus.io/how_to_deploy/en/platforms/azure_devops/azdevops_webhook) · [Forgejo](https://docs.kodus.io/how_to_deploy/en/platforms/forgejo/forgejo_webhook)
+- [BYOK / LLM keys](https://docs.kodus.io/how_to_use/en/byok)
+
 ---
 
 Deploying to Kubernetes or OpenShift instead? See [charts/README.md](../charts/README.md).

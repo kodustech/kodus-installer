@@ -6,6 +6,10 @@ charts deploy the full stack on Kubernetes or OpenShift, alongside the Docker
 Compose option in the [repo root](../readme.md). New here? Start with the root
 README, then come back for the cluster deployment.
 
+**See also:** [Architecture](https://docs.kodus.io/how_to_deploy/en/kodus_architecture)
+· [BYOK / LLM keys](https://docs.kodus.io/how_to_use/en/byok)
+· [full docs](https://docs.kodus.io) ([llms.txt](https://docs.kodus.io/llms.txt)).
+
 - `kodus/` — the deployable chart (Kubernetes **and** OpenShift, via `platform`).
 - `kodus-common/` — a Helm *library* chart (shared helpers/templates). Not
   installed directly.
