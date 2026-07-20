@@ -66,6 +66,16 @@ helm install kodus . -f values.yaml -f values-dev.yaml -n kodus-dev --create-nam
 `values-dev.yaml` relaxes the hardening, uses `latest`, single replicas, small
 bundled stores.
 
+### Optional services
+
+Both are off by default — enable per install (the Docker Compose equivalents are
+`API_MCP_SERVER_ENABLED=true` and the `analytics` profile, respectively):
+
+```bash
+--set services.mcp-manager.enabled=true       # MCP servers per organization
+--set services.worker-analytics.enabled=true  # WORKER_ROLE=analytics ingestion
+```
+
 > **Git webhooks (required to trigger reviews).** Connecting a repo makes Kodus
 > register a webhook on the provider using `API_<provider>_CODE_MANAGEMENT_WEBHOOK`.
 > If that value is empty the app **silently skips registration** — repos connect

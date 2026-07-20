@@ -171,6 +171,7 @@ Common fixes:
 - **kodus-web** — application frontend
 - **api** — application API
 - **worker** — background jobs (runs the reviews)
+- **worker-analytics** — optional analytics ingestion (Compose: `analytics` profile; Helm: `services.worker-analytics.enabled=true`)
 - **webhooks** — receives Git provider events and enqueues review jobs
 - **kodus-mcp-manager** — provisions Model Context Protocol (MCP) servers per organization (optional; Compose: `API_MCP_SERVER_ENABLED=true`, Helm: `services.mcp-manager.enabled=true`)
 - **rabbitmq** — message broker
