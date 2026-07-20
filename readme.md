@@ -34,6 +34,24 @@ Then inside Claude Code, run:
 /kodus-install
 ```
 
+## Kubernetes / OpenShift (Helm)
+
+Prefer Kubernetes or OpenShift over Docker Compose? Helm charts live in
+[`charts/`](charts/README.md).
+
+```bash
+cd charts/kodus
+helm dependency build
+# Kubernetes (bundled data stores — one command, no operators):
+helm install kodus . -n kodus --create-namespace \
+  --set imageTag=2.1.24   # one tag for the whole stack; + hosts — see charts/README.md
+```
+
+Each data store can run `bundled` (this chart brings it up), `external` (your
+managed DB), or `operator` (CloudNativePG / RabbitMQ / Mongo operators for HA).
+OpenShift uses `-f values-openshift.yaml` (Routes + SCC). Verify with
+`./scripts/doctor-k8s.sh -n kodus`. Full guide: [charts/README.md](charts/README.md).
+
 ## External Databases or RabbitMQ
 
 If you already have PostgreSQL/MongoDB or RabbitMQ, you can disable the local containers and point Kodus to the external services.

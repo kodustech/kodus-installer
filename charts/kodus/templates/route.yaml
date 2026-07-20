@@ -1,0 +1,26 @@
+{{- if and (eq .Values.platform "openshift") .Values.route.enabled }}
+{{- range $name, $h := .Values.route.hosts }}
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: {{ printf "%s-%s" $.Release.Name $name | trunc 63 | trimSuffix "-" }}
+  labels:
+    {{- include "kodus-common.serviceLabels" (dict "root" $ "serviceName" $h.serviceName) | nindent 4 }}
+spec:
+  host: {{ $h.host }}
+  {{- if $h.path }}
+  path: {{ $h.path }}
+  {{- end }}
+  to:
+    kind: Service
+    name: {{ include "kodus-common.serviceFullname" (dict "root" $ "serviceName" $h.serviceName) }}
+    weight: 100
+  port:
+    targetPort: http
+  tls:
+    termination: {{ $.Values.route.tls.termination | default "edge" }}
+    insecureEdgeTerminationPolicy: {{ $.Values.route.tls.insecureEdgePolicy | default "Redirect" }}
+  wildcardPolicy: None
+{{- end }}
+{{- end }}

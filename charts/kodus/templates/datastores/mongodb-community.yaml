@@ -1,0 +1,69 @@
+{{- if eq .Values.mongodb.mode "operator" }}
+{{/*
+MongoDB Community Operator. Requires mongodb-community-operator pre-installed.
+The user password is generated here (stable across upgrades via lookup) and
+referenced by both the CR (passwordSecretRef) and the app (kodus-common.dbEnv).
+Service {{ .Release.Name }}-mongodb-svc (port 27017).
+*/}}
+{{- $pwSecret := printf "%s-mongodb-password" .Release.Name }}
+{{- $existing := (lookup "v1" "Secret" .Release.Namespace $pwSecret) }}
+{{- $pw := "" }}
+{{- if and $existing $existing.data (hasKey $existing.data "password") }}
+{{- $pw = (index $existing.data "password" | b64dec) }}
+{{- else }}
+{{- $pw = (randAlphaNum 24) }}
+{{- end }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $pwSecret }}
+  labels:
+    {{- include "kodus.labels" . | nindent 4 }}
+type: Opaque
+stringData:
+  password: {{ $pw | quote }}
+---
+apiVersion: mongodbcommunity.mongodb.com/v1
+kind: MongoDBCommunity
+metadata:
+  name: {{ .Release.Name }}-mongodb
+  labels:
+    {{- include "kodus.labels" . | nindent 4 }}
+spec:
+  members: {{ .Values.mongodb.operator.members | default 3 }}
+  type: ReplicaSet
+  version: {{ .Values.mongodb.operator.version | quote }}
+  security:
+    authentication:
+      modes: ["SCRAM"]
+  users:
+    - name: {{ .Values.mongodb.operator.username }}
+      db: admin
+      passwordSecretRef:
+        name: {{ $pwSecret }}
+      roles:
+        - name: readWrite
+          db: {{ .Values.mongodb.operator.database }}
+        - name: clusterMonitor
+          db: admin
+      scramCredentialsSecretName: {{ .Release.Name }}-mongodb-scram
+  statefulSet:
+    spec:
+      # Label the operator-created pods so the allow-intra-app NetworkPolicy covers them.
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/part-of: kodus
+            app.kubernetes.io/instance: {{ .Release.Name }}
+      volumeClaimTemplates:
+        - metadata:
+            name: data-volume
+          spec:
+            accessModes: ["ReadWriteOnce"]
+            resources:
+              requests:
+                storage: {{ .Values.mongodb.operator.storage.size | default "10Gi" }}
+            {{- with .Values.mongodb.operator.storage.storageClass }}
+            storageClassName: {{ . }}
+            {{- end }}
+{{- end }}

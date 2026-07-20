@@ -1,0 +1,18 @@
+{{- if .Values.pdb.enabled }}
+{{- range $name, $svc := .Values.services }}
+{{- if or (kindIs "invalid" $svc.enabled) $svc.enabled }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "kodus-common.serviceFullname" (dict "root" $ "serviceName" $name) }}
+  labels:
+    {{- include "kodus-common.serviceLabels" (dict "root" $ "serviceName" $name) | nindent 4 }}
+spec:
+  minAvailable: {{ $.Values.pdb.minAvailable | default 1 }}
+  selector:
+    matchLabels:
+      {{- include "kodus-common.serviceSelectorLabels" (dict "root" $ "serviceName" $name) | nindent 6 }}
+{{- end }}
+{{- end }}
+{{- end }}

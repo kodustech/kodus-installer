@@ -1,0 +1,33 @@
+apiVersion: v2
+name: kodus
+description: Deploy Kodus AI (self-hosted) on Kubernetes
+type: application
+version: 0.1.0
+# appVersion tracks the Kodus self-hosted release (docker image tag).
+appVersion: "2.1.24"
+keywords:
+  - kodus
+  - ai
+  - code-review
+home: https://kodus.io
+icon: https://kodus.io/wp-content/uploads/2025/04/kodusinstaller.png
+sources:
+  - https://github.com/kodustech/kodus-installer
+maintainers:
+  - name: Kodus Team
+    email: support@kodus.io
+# Data stores are NOT third-party sub-charts. Each store has a `mode`: `bundled`
+# (a StatefulSet this chart runs — the default, for dev/trial), `external` (a
+# managed/existing service), or `operator` (CloudNativePG / RabbitMQ Cluster
+# Operator / MongoDB Community Operator, pre-installed). Prefer external or
+# operator for production. See values.yaml `postgres/mongodb/rabbitmq.mode`.
+dependencies:
+  - name: kodus-common
+    version: "0.1.0"
+    repository: "file://../kodus-common"
+annotations:
+  # Operators expected in-cluster when mode=operator (documented prerequisites):
+  #   - cloudnative-pg           (CRD: postgresql.cnpg.io/v1 Cluster)
+  #   - rabbitmq-cluster-operator (CRD: rabbitmq.com/v1beta1 RabbitmqCluster)
+  #   - mongodb-community-operator (CRD: mongodbcommunity.mongodb.com/v1 MongoDBCommunity)
+  kodus.io/required-operators: "cloudnative-pg,rabbitmq-cluster-operator,mongodb-community-operator"

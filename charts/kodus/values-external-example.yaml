@@ -1,0 +1,77 @@
+# =========================================================================
+# Example: REUSE existing Postgres / MongoDB / RabbitMQ
+# =========================================================================
+# For teams that already run these datastores on their cluster (or managed:
+# RDS/Aurora, Atlas, CloudAMQP). Kodus creates NO StatefulSet here — it points
+# at what you already have. Layer this on top of values.yaml:
+#
+#   helm install kodus . -f values.yaml -f values-external-example.yaml \
+#     -n kodus --create-namespace --set imageTag=2.1.24
+#
+# ------------------------------------------------------------------------
+# PREREQUISITES (do these on your existing infra FIRST — they are baked into
+# the bundled images but a vanilla install does not have them):
+#
+#   Postgres : the `vector` (pgvector) extension must be available.
+#              Create a dedicated database + user for Kodus.
+#   RabbitMQ : enable the delayed-message plugin and create the vhost:
+#                rabbitmq-plugins enable rabbitmq_delayed_message_exchange
+#                rabbitmqctl add_vhost kodus-ai
+#                rabbitmqctl set_permissions -p kodus-ai <user> ".*" ".*" ".*"
+#              (The bundled image also creates a `kodus-ast` vhost for a separate
+#               AST service; this app only uses `kodus-ai`, so it's optional here.)
+#   MongoDB  : a database + user Kodus can read/write. No extensions needed.
+#              IMPORTANT: the app authenticates against the `admin` authSource
+#              (the connection db-path is not used for auth). Create the user in
+#              `admin` (or a role with access to your DB), NOT only inside
+#              kodus_db — otherwise auth fails at runtime with AuthenticationFailed.
+#
+# CREATE THE CREDENTIAL SECRETS (referenced below) — values never inline:
+#   kubectl -n kodus create secret generic kodus-pg    --from-literal=password='...'
+#   kubectl -n kodus create secret generic kodus-mongo --from-literal=password='...'
+#   kubectl -n kodus create secret generic kodus-rabbit \
+#     --from-literal=uri='amqps://user:pass@rabbit.internal:5671/kodus-ai'
+# =========================================================================
+
+# Managed Postgres (RDS/Atlas/etc.) usually enforces TLS — re-enable SSL that the
+# bundled default turns off. Drop this if your external PG has TLS disabled.
+global:
+  config:
+    API_DATABASE_DISABLE_SSL: "false"
+
+postgres:
+  mode: external
+  external:
+    host: postgres.internal          # your PG host (or RDS endpoint)
+    port: 5432
+    username: kodus
+    database: kodus_db               # dedicated DB, pgvector-enabled
+    existingSecret: kodus-pg
+    passwordKey: password
+
+mongodb:
+  mode: external
+  external:
+    host: mongo.internal
+    port: 27017
+    username: kodus
+    database: kodus_db
+    existingSecret: kodus-mongo
+    passwordKey: password
+
+rabbitmq:
+  mode: external
+  external:
+    # vhost in the URI MUST be kodus-ai (kodus-ast is used internally too)
+    existingSecret: kodus-rabbit
+    uriKey: uri
+
+# The app services keep their normal defaults from values.yaml (2 replicas for
+# web/api/worker/webhooks, resource requests/limits per service). Tune per your
+# cluster capacity, e.g.:
+# services:
+#   worker:
+#     replicas: 3
+#     resources:
+#       requests: { cpu: 500m, memory: 1Gi }
+#       limits:   { cpu: "2",  memory: 2Gi }

@@ -1,0 +1,39 @@
+{{- if (index .Values.services "api" "enabled" | default true) }}
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ include "kodus.fullname" . }}-test-api-health
+  labels:
+    {{- include "kodus.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": test
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  restartPolicy: Never
+  {{- include "kodus-common.imagePullSecrets" . | nindent 2 }}
+  securityContext:
+    runAsNonRoot: true
+    {{- if ne .Values.platform "openshift" }}
+    runAsUser: 65534          # busybox has no non-root USER; pin nobody
+    {{- end }}                {{/* openshift: SCC assigns the UID; 65534 would be rejected by restricted-v2 */}}
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: check
+      image: {{ include "kodus-common.regPrefix" . }}{{ .Values.waitForDeps.image | default "busybox:1.37.0" }}
+      command: ["sh", "-c"]
+      args:
+        - |
+          set -e
+          url="http://{{ include "kodus-common.serviceFullname" (dict "root" . "serviceName" "api") }}:{{ .Values.services.api.port }}/health/simple"
+          echo "GET $url"
+          wget -q -T 10 -O- "$url"
+      resources:
+        requests: { cpu: 10m, memory: 16Mi }
+        limits:   { cpu: 50m, memory: 32Mi }
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: ["ALL"]
+{{- end }}

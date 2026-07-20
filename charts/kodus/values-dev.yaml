@@ -1,0 +1,89 @@
+# Dev overlay — relaxes the production/SOC 2 hardening for local clusters.
+# Usage: helm install kodus . -f values.yaml -f values-dev.yaml
+
+# One tag for the whole stack (dev uses latest). Prod: set a pinned release.
+imageTag: latest
+
+image:
+  pullPolicy: IfNotPresent
+
+services:
+  web:
+    replicas: 1
+    resources:
+      requests: { cpu: 50m, memory: 128Mi }
+      limits:   { cpu: 200m, memory: 256Mi }
+  api:
+    replicas: 1
+    resources:
+      requests: { cpu: 100m, memory: 256Mi }
+      limits:   { cpu: 500m, memory: 512Mi }
+  worker:
+    replicas: 1
+    resources:
+      requests: { cpu: 100m, memory: 256Mi }
+      limits:   { cpu: 500m, memory: 512Mi }
+  webhooks:
+    replicas: 1
+    resources:
+      requests: { cpu: 50m, memory: 128Mi }
+      limits:   { cpu: 200m, memory: 256Mi }
+
+global:
+  config:
+    WEB_HOSTNAME_API: "localhost"
+    NEXTAUTH_URL: "http://localhost:3000"
+    API_LOG_LEVEL: "debug"
+    API_LOG_PRETTY: "true"
+    API_DATABASE_ENV: "development"
+    API_DATABASE_DISABLE_SSL: "true"
+    API_GITHUB_CODE_MANAGEMENT_WEBHOOK: "http://localhost:3332/github/webhook"
+  labels:
+    kodus.io/environment: "development"
+    kodus.io/team: "dev"
+  # Dev: chart auto-generates all secrets (stable across upgrade).
+  autoGenerateSecrets: true
+
+containerSecurityContext:
+  readOnlyRootFilesystem: false
+
+ingress:
+  enabled: false
+  tls:
+    enabled: false
+
+autoscaling:
+  enabled: false
+pdb:
+  enabled: false
+networkPolicy:
+  enabled: false
+resourceQuota:
+  enabled: false
+
+# Dev uses bundled mode (StatefulSets this chart runs) with a small footprint —
+# a single `helm install` brings everything up, no operators/external needed.
+postgres:
+  mode: bundled
+  bundled:
+    storage:
+      size: 2Gi
+    resources:
+      requests: { cpu: 100m, memory: 256Mi }
+      limits:   { cpu: 500m, memory: 512Mi }
+mongodb:
+  mode: bundled
+  bundled:
+    storage:
+      size: 2Gi
+    resources:
+      requests: { cpu: 100m, memory: 256Mi }
+      limits:   { cpu: 300m, memory: 512Mi }
+rabbitmq:
+  mode: bundled
+  bundled:
+    storage:
+      size: 2Gi
+    resources:
+      requests: { cpu: 100m, memory: 256Mi }
+      limits:   { cpu: 300m, memory: 512Mi }

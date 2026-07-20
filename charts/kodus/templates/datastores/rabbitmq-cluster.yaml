@@ -1,0 +1,34 @@
+{{- if eq .Values.rabbitmq.mode "operator" }}
+{{/*
+RabbitmqCluster. Requires the rabbitmq-cluster-operator pre-installed. The
+pre-built Kodus image bakes in the delayed_message_exchange plugin and the
+kodus-ai / kodus-ast vhosts. The operator auto-creates:
+  - Service {{ .Release.Name }}-rabbitmq              (port 5672)
+  - Secret  {{ .Release.Name }}-rabbitmq-default-user (keys: username, password)
+consumed by the app via kodus-common.rabbitmqEnv.
+*/}}
+apiVersion: rabbitmq.com/v1beta1
+kind: RabbitmqCluster
+metadata:
+  name: {{ .Release.Name }}-rabbitmq
+  labels:
+    {{- include "kodus.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.rabbitmq.operator.replicas | default 1 }}
+  image: {{ include "kodus-common.regPrefix" . }}{{ .Values.rabbitmq.operator.image }}
+  # Label the operator-created pods so the allow-intra-app NetworkPolicy covers them
+  # (RabbitmqCluster pods otherwise carry app.kubernetes.io/part-of: rabbitmq).
+  override:
+    statefulSet:
+      spec:
+        template:
+          metadata:
+            labels:
+              app.kubernetes.io/part-of: kodus
+              app.kubernetes.io/instance: {{ .Release.Name }}
+  persistence:
+    storage: {{ .Values.rabbitmq.operator.storage.size | default "8Gi" }}
+    {{- with .Values.rabbitmq.operator.storage.storageClass }}
+    storageClassName: {{ . }}
+    {{- end }}
+{{- end }}

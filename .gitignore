@@ -1,3 +1,13 @@
 .env
 .env.backup
 .env.e2e-backup.*
+
+# Helm — vendored chart dependencies produced by `helm dependency build`
+# (the local kodus-common is packaged into a .tgz here). Chart.lock IS committed
+# (it pins the dependency, like a lockfile); the vendored archives are not.
+charts/*/charts/
+
+# Test/debug artifacts — never commit these
+.playwright-mcp/
+kodus-*.png
+*.tar.gz

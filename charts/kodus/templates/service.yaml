@@ -1,0 +1,20 @@
+{{- range $name, $svc := .Values.services }}
+{{- if and (or (kindIs "invalid" $svc.enabled) $svc.enabled) $svc.port }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "kodus-common.serviceFullname" (dict "root" $ "serviceName" $name) }}
+  labels:
+    {{- include "kodus-common.serviceLabels" (dict "root" $ "serviceName" $name) | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - port: {{ $svc.port }}
+      targetPort: http
+      protocol: TCP
+      name: http
+  selector:
+    {{- include "kodus-common.serviceSelectorLabels" (dict "root" $ "serviceName" $name) | nindent 4 }}
+{{- end }}
+{{- end }}

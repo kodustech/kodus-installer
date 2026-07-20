@@ -1,0 +1,5 @@
+apiVersion: v2
+name: kodus-common
+description: Shared library chart for the Kodus Helm charts (helpers, labels, security contexts, env blocks, probes)
+type: library
+version: 0.1.0
