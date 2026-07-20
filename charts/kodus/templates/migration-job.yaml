@@ -1,0 +1,61 @@
+{{- if .Values.migrations.enabled }}
+# Migrations run as a normal Job (NOT a pre-install hook) so they can reach a
+# bundled datastore, which is created alongside — a pre-install hook would
+# deadlock waiting for a DB that Helm only creates after hooks complete. The
+# name carries the release revision so each `helm upgrade` creates a fresh Job
+# (Jobs are immutable); old ones self-clean via ttlSecondsAfterFinished. App
+# pods wait-for-deps and self-heal if they start before migrations finish.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "kodus.fullname" . }}-migrations-{{ .Release.Revision }}
+  labels:
+    {{- include "kodus.labels" . | nindent 4 }}
+    app.kubernetes.io/component: migrations
+spec:
+  backoffLimit: 3
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels:
+        {{- include "kodus-common.serviceSelectorLabels" (dict "root" . "serviceName" "migrations") | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "kodus-common.serviceAccountName" . }}
+      {{- include "kodus-common.imagePullSecrets" . | nindent 6 }}
+      restartPolicy: OnFailure
+      securityContext:
+        {{- include "kodus-common.podSecurityContext" . | nindent 8 }}
+      initContainers:
+        {{- include "kodus-common.waitForDeps" . | nindent 8 }}
+      containers:
+        - name: migrations
+          image: {{ include "kodus-common.appImage" (dict "image" .Values.migrations.image "root" . "name" "migrations") }}
+          imagePullPolicy: {{ .Values.image.pullPolicy | default "Always" }}
+          # The image ENTRYPOINT (prod-entrypoint) runs the migrations when
+          # RUN_MIGRATIONS=true, then `exec "$@"`. We override only the CMD ($@)
+          # so that after migrations the container exits 0 instead of booting the
+          # app (pm2/node) and running forever — that is what makes this a Job
+          # that COMPLETES. No migration logic is duplicated here; the entrypoint
+          # remains the single source of truth for which migrations run.
+          args: ["sh", "-c", "echo '✔ migrations + seeds complete — exiting (Job)'"]
+          securityContext:
+            {{- include "kodus-common.containerSecurityContext" . | nindent 12 }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "kodus.fullname" . }}-config
+          env:
+            - name: RUN_MIGRATIONS
+              value: {{ .Values.migrations.env.RUN_MIGRATIONS | quote }}
+            - name: RUN_SEEDS
+              value: {{ .Values.migrations.env.RUN_SEEDS | quote }}
+            {{- include "kodus-common.dbEnv" . | nindent 12 }}
+            {{- include "kodus-common.rabbitmqEnv" . | nindent 12 }}
+            {{- include "kodus-common.appSecretsEnv" . | nindent 12 }}
+          resources:
+            requests: { cpu: 250m, memory: 512Mi }
+            limits:   { cpu: "1", memory: 1Gi }
+          volumeMounts:
+            {{- include "kodus-common.tmpVolumeMount" . | nindent 12 }}
+      volumes:
+        {{- include "kodus-common.tmpVolume" . | nindent 8 }}
+{{- end }}

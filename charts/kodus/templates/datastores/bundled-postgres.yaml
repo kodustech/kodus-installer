@@ -1,0 +1,123 @@
+{{- if eq .Values.postgres.mode "bundled" }}
+{{- $b := .Values.postgres.bundled }}
+{{- $name := printf "%s-postgres" .Release.Name }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $name }}-init
+  labels:
+    {{- include "kodus.labels" . | nindent 4 }}
+data:
+  01-vector.sql: |
+    CREATE EXTENSION IF NOT EXISTS vector;
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "kodus.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - port: 5432
+      targetPort: postgres
+      name: postgres
+  selector:
+    app.kubernetes.io/name: postgres
+    app.kubernetes.io/instance: {{ .Release.Name }}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "kodus.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ $name }}
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: postgres
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: postgres
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/part-of: kodus
+    spec:
+      automountServiceAccountToken: false   # DB doesn't call the k8s API
+      securityContext:
+        {{- include "kodus-common.datastorePodSecurityContext" . | nindent 8 }}
+      containers:
+        - name: postgres
+          image: {{ include "kodus-common.regPrefix" . }}{{ $b.image }}
+          imagePullPolicy: {{ .Values.image.pullPolicy | default "Always" }}
+          ports:
+            - name: postgres
+              containerPort: 5432
+          env:
+            - name: POSTGRES_USER
+              value: {{ $b.username | quote }}
+            - name: POSTGRES_DB
+              value: {{ $b.database | quote }}
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $name }}-secret
+                  key: password
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          # pg_isready is a tiny C binary (sub-100ms, deterministic) — the right
+          # native check for Postgres. A startupProbe absorbs first-boot cost
+          # (initdb + CREATE EXTENSION vector) with retries, so liveness carries
+          # no inflated initialDelaySeconds and only restarts a genuinely dead DB.
+          startupProbe:
+            exec:
+              command: ["pg_isready", "-U", {{ $b.username | quote }}, "-d", {{ $b.database | quote }}]
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 30        # up to ~2.5min for initdb + extension
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", {{ $b.username | quote }}, "-d", {{ $b.database | quote }}]
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-U", {{ $b.username | quote }}, "-d", {{ $b.database | quote }}]
+            periodSeconds: 15
+            timeoutSeconds: 3
+            failureThreshold: 6
+          resources:
+            {{- toYaml $b.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+            - name: initdb
+              mountPath: /docker-entrypoint-initdb.d
+      volumes:
+        - name: initdb
+          configMap:
+            name: {{ $name }}-init
+  volumeClaimTemplates:
+    # NOTE: volumeClaimTemplates is IMMUTABLE — adding fields here breaks
+    # `helm upgrade` on an existing release. doctor-k8s.sh finds these PVCs by the
+    # instance label the StatefulSet controller sets automatically.
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: {{ $b.storage.size | default "10Gi" }}
+        {{- with $b.storage.storageClass }}
+        storageClassName: {{ . }}
+        {{- end }}
+{{- end }}

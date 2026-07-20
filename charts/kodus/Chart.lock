@@ -1,0 +1,6 @@
+dependencies:
+- name: kodus-common
+  repository: file://../kodus-common
+  version: 0.1.0
+digest: sha256:41b0d903bb8f1dd6cff2726766724af12ad4eafda4451536449641c93002e14e
+generated: "2026-07-17T16:58:49.107619-03:00"

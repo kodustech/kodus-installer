@@ -1,0 +1,30 @@
+Kodus has been deployed to namespace {{ .Release.Namespace }} (release: {{ .Release.Name }}).
+
+1. Access the web UI:
+{{- if .Values.ingress.enabled }}
+   {{- range $name, $h := .Values.ingress.hosts }}{{- if eq $h.serviceName "web" }}
+   https://{{ $h.host }}
+   {{- end }}{{- end }}
+{{- else }}
+   kubectl port-forward -n {{ .Release.Namespace }} svc/{{ include "kodus-common.serviceFullname" (dict "root" . "serviceName" "web") }} {{ .Values.services.web.port }}:{{ .Values.services.web.port }}
+   Then open http://localhost:{{ .Values.services.web.port }}
+{{- end }}
+
+2. Check status:
+   kubectl get pods -n {{ .Release.Namespace }}
+
+3. Migrations run as a Job on each install/upgrade. Check it with:
+   kubectl logs -n {{ .Release.Namespace }} -l app.kubernetes.io/component=migrations --tail=-1
+
+4. Self-hosted using Claude/Anthropic? Put the Anthropic key in API_OPEN_AI_API_KEY
+   (kodus-ai reads the single LLM key from that slot and selects the SDK by model id).
+
+5. SOC 2 checklist:
+   [ ] TLS enabled on ingress
+   [ ] Secrets via existingSecret or externalSecrets (no inline in prod)
+   [ ] NetworkPolicy enabled
+   [ ] Image tags pinned (no :latest)
+   [ ] Pod Security Standards (restricted) enforced on the namespace
+   [ ] Centralized logging configured (all services log JSON to stdout)
+
+Docs: https://docs.kodus.io

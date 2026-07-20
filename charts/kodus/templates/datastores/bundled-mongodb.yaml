@@ -1,0 +1,109 @@
+{{- if eq .Values.mongodb.mode "bundled" }}
+{{- $b := .Values.mongodb.bundled }}
+{{- $name := printf "%s-mongodb" .Release.Name }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "kodus.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - port: 27017
+      targetPort: mongo
+      name: mongo
+  selector:
+    app.kubernetes.io/name: mongodb
+    app.kubernetes.io/instance: {{ .Release.Name }}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "kodus.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ $name }}
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: mongodb
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: mongodb
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/part-of: kodus
+    spec:
+      automountServiceAccountToken: false   # DB doesn't call the k8s API
+      securityContext:
+        {{- include "kodus-common.datastorePodSecurityContext" . | nindent 8 }}
+      containers:
+        - name: mongodb
+          image: {{ include "kodus-common.regPrefix" . }}{{ $b.image }}
+          imagePullPolicy: {{ .Values.image.pullPolicy | default "Always" }}
+          ports:
+            - name: mongo
+              containerPort: 27017
+          env:
+            - name: MONGO_INITDB_ROOT_USERNAME
+              value: {{ $b.username | quote }}
+            - name: MONGO_INITDB_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $name }}-secret
+                  key: password
+            - name: MONGO_INITDB_DATABASE
+              value: {{ $b.database | quote }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          # Probes use tcpSocket, NOT `mongosh --eval`: mongosh is a Node.js shell
+          # with a multi-second cold start that, under CPU pressure, blows past
+          # any sane exec timeout. That made the liveness probe SIGKILL (137) a
+          # perfectly healthy mongod that was already listening → crash loop that
+          # took the app pods down with it. A listening 27017 is the right signal
+          # for a standalone bundled DB. startupProbe covers WiredTiger recovery
+          # so liveness never fires during a slow cold start.
+          startupProbe:
+            tcpSocket:
+              port: mongo
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 30        # up to ~2.5min for WiredTiger recovery
+          readinessProbe:
+            tcpSocket:
+              port: mongo
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            tcpSocket:
+              port: mongo
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 6
+          resources:
+            {{- toYaml $b.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /data/db
+  volumeClaimTemplates:
+    # NOTE: volumeClaimTemplates is IMMUTABLE — never add labels/fields here on an
+    # existing release or `helm upgrade` fails ("updates to statefulset spec ...
+    # are forbidden"). doctor-k8s.sh matches these PVCs by the instance label the
+    # StatefulSet controller sets automatically.
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: {{ $b.storage.size | default "10Gi" }}
+        {{- with $b.storage.storageClass }}
+        storageClassName: {{ . }}
+        {{- end }}
+{{- end }}

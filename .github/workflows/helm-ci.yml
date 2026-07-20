@@ -1,0 +1,72 @@
+name: Helm charts CI
+
+on:
+  pull_request:
+    paths:
+      - 'charts/**'
+      - '.github/workflows/helm-ci.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'charts/**'
+
+jobs:
+  lint-and-validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.16.4
+
+      - name: Build chart dependencies
+        run: helm dependency build charts/kodus
+
+      - name: Lint (Kubernetes)
+        run: helm lint charts/kodus -f charts/kodus/values-dev.yaml
+
+      - name: Lint (OpenShift)
+        run: helm lint charts/kodus -f charts/kodus/values-dev.yaml -f charts/kodus/values-openshift.yaml
+
+      - name: Anti-drift — chart matches the generated schema manifest
+        run: ./scripts/validate-chart-schema.sh
+
+      - name: Reject invalid values (schema smoke test)
+        run: |
+          if helm template kodus charts/kodus -f charts/kodus/values-dev.yaml \
+              --set postgres.mode=nope >/dev/null 2>&1; then
+            echo "values.schema.json failed to reject an invalid postgres.mode"; exit 1
+          fi
+          echo "schema correctly rejects invalid values"
+
+      - name: Install kubeconform
+        run: |
+          curl -sSLo /tmp/kubeconform.tar.gz \
+            https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz
+          tar -xzf /tmp/kubeconform.tar.gz -C /tmp kubeconform
+          sudo mv /tmp/kubeconform /usr/local/bin/
+
+      # -ignore-missing-schemas skips CRDs the operators own (Cluster,
+      # RabbitmqCluster, MongoDBCommunity) and OpenShift kinds (Route, SCC).
+      - name: Validate rendered manifests (Kubernetes)
+        run: |
+          helm template kodus charts/kodus -f charts/kodus/values-dev.yaml \
+            | kubeconform -strict -ignore-missing-schemas -summary -schema-location default
+
+      - name: Validate rendered manifests (OpenShift)
+        run: |
+          helm template kodus charts/kodus \
+              -f charts/kodus/values-dev.yaml -f charts/kodus/values-openshift.yaml \
+            | kubeconform -strict -ignore-missing-schemas -summary -schema-location default
+
+      - name: Validate rendered manifests (external data stores)
+        run: |
+          helm template kodus charts/kodus -f charts/kodus/values-dev.yaml \
+              --set postgres.mode=external --set postgres.external.existingSecret=pg \
+              --set postgres.external.host=pg.example \
+              --set mongodb.mode=external --set mongodb.external.existingSecret=mg \
+              --set mongodb.external.host=mg.example \
+              --set rabbitmq.mode=external --set rabbitmq.external.existingSecret=rmq \
+            | kubeconform -strict -ignore-missing-schemas -summary -schema-location default

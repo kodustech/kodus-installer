@@ -1,0 +1,92 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "title": "Kodus Helm values",
+  "type": "object",
+  "definitions": {
+    "store": {
+      "type": "object",
+      "properties": {
+        "mode": {
+          "enum": ["bundled", "external", "operator"],
+          "description": "bundled (StatefulSet run by this chart) | external (managed/your own) | operator (CNPG/RabbitMQ/Mongo operator)"
+        }
+      },
+      "required": ["mode"]
+    }
+  },
+  "properties": {
+    "platform": {
+      "enum": ["kubernetes", "openshift"]
+    },
+    "imageTag": {
+      "type": "string",
+      "description": "Kodus release tag applied to all app images + migrations when their own image.tag is empty."
+    },
+    "image": {
+      "type": "object",
+      "properties": {
+        "pullPolicy": { "enum": ["Always", "IfNotPresent", "Never"] }
+      }
+    },
+    "global": {
+      "type": "object",
+      "properties": {
+        "autoGenerateSecrets": { "type": "boolean" },
+        "existingSecret": { "type": "string" },
+        "externalSecrets": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "store": { "type": "string" },
+            "storeKind": { "enum": ["SecretStore", "ClusterSecretStore"] }
+          }
+        },
+        "labels": { "type": "object" },
+        "config": { "type": "object" },
+        "secrets": { "type": "object" }
+      }
+    },
+    "postgres": { "$ref": "#/definitions/store" },
+    "mongodb": { "$ref": "#/definitions/store" },
+    "rabbitmq": { "$ref": "#/definitions/store" },
+    "services": { "type": "object" },
+    "migrations": {
+      "type": "object",
+      "properties": { "enabled": { "type": "boolean" } }
+    },
+    "ingress": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "tls": {
+          "type": "object",
+          "properties": { "enabled": { "type": "boolean" } }
+        }
+      }
+    },
+    "route": {
+      "type": "object",
+      "properties": { "enabled": { "type": "boolean" } }
+    },
+    "scc": {
+      "type": "object",
+      "properties": { "create": { "type": "boolean" } }
+    },
+    "networkPolicy": {
+      "type": "object",
+      "properties": { "enabled": { "type": "boolean" } }
+    },
+    "autoscaling": {
+      "type": "object",
+      "properties": { "enabled": { "type": "boolean" } }
+    },
+    "pdb": {
+      "type": "object",
+      "properties": { "enabled": { "type": "boolean" } }
+    },
+    "resourceQuota": {
+      "type": "object",
+      "properties": { "enabled": { "type": "boolean" } }
+    }
+  }
+}

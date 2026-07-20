@@ -1,0 +1,67 @@
+{{- range $name, $svc := .Values.services }}
+{{- if or (kindIs "invalid" $svc.enabled) $svc.enabled }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "kodus-common.serviceFullname" (dict "root" $ "serviceName" $name) }}
+  labels:
+    {{- include "kodus-common.serviceLabels" (dict "root" $ "serviceName" $name) | nindent 4 }}
+spec:
+  {{- if not $.Values.autoscaling.enabled }}
+  replicas: {{ $svc.replicas | default 1 }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "kodus-common.serviceSelectorLabels" (dict "root" $ "serviceName" $name) | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "kodus-common.serviceSelectorLabels" (dict "root" $ "serviceName" $name) | nindent 8 }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") $ | sha256sum }}
+        # Roll pods when secrets change too (rotation / edited inline secret).
+        # secrets.yaml uses `lookup` for stability, so auto-generated values don't
+        # churn this hash — only a real change rolls the pods.
+        checksum/secrets: {{ include (print $.Template.BasePath "/secrets.yaml") $ | sha256sum }}
+    spec:
+      serviceAccountName: {{ include "kodus-common.serviceAccountName" $ }}
+      {{- include "kodus-common.imagePullSecrets" $ | nindent 6 }}
+      securityContext:
+        {{- include "kodus-common.podSecurityContext" $ | nindent 8 }}
+      initContainers:
+        {{- include "kodus-common.waitForDeps" $ | nindent 8 }}
+      containers:
+        - name: {{ $name }}
+          image: {{ include "kodus-common.appImage" (dict "image" $svc.image "root" $ "name" $name) }}
+          imagePullPolicy: {{ $.Values.image.pullPolicy | default "Always" }}
+          {{- if $svc.port }}
+          ports:
+            - name: http
+              containerPort: {{ $svc.port }}
+              protocol: TCP
+          {{- end }}
+          securityContext:
+            {{- include "kodus-common.containerSecurityContext" $ | nindent 12 }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "kodus.fullname" $ }}-config
+          env:
+            {{- include "kodus-common.dbEnv" $ | nindent 12 }}
+            {{- include "kodus-common.rabbitmqEnv" $ | nindent 12 }}
+            {{- include "kodus-common.appSecretsEnv" $ | nindent 12 }}
+            {{- with $svc.env }}
+            {{- range $k, $v := . }}
+            - name: {{ $k }}
+              value: {{ $v | quote }}
+            {{- end }}
+            {{- end }}
+          {{- include "kodus-common.probes" (dict "svc" $svc) | nindent 10 }}
+          resources:
+            {{- toYaml $svc.resources | nindent 12 }}
+          volumeMounts:
+            {{- include "kodus-common.tmpVolumeMount" $ | nindent 12 }}
+      volumes:
+        {{- include "kodus-common.tmpVolume" $ | nindent 8 }}
+{{- end }}
+{{- end }}

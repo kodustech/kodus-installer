@@ -1,0 +1,37 @@
+{{- if .Values.autoscaling.enabled }}
+{{- range $name, $svc := .Values.services }}
+{{- if or (kindIs "invalid" $svc.enabled) $svc.enabled }}
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "kodus-common.serviceFullname" (dict "root" $ "serviceName" $name) }}
+  labels:
+    {{- include "kodus-common.serviceLabels" (dict "root" $ "serviceName" $name) | nindent 4 }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "kodus-common.serviceFullname" (dict "root" $ "serviceName" $name) }}
+  minReplicas: {{ $.Values.autoscaling.minReplicas | default 2 }}
+  maxReplicas: {{ $.Values.autoscaling.maxReplicas | default 10 }}
+  metrics:
+    {{- if $.Values.autoscaling.targetCPU }}
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ $.Values.autoscaling.targetCPU }}
+    {{- end }}
+    {{- if $.Values.autoscaling.targetMemory }}
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: {{ $.Values.autoscaling.targetMemory }}
+    {{- end }}
+{{- end }}
+{{- end }}
+{{- end }}

@@ -1,0 +1,107 @@
+{{- if .Values.networkPolicy.enabled }}
+{{/*
+Namespace micro-segmentation for Kodus. Model: DENY ingress from other
+namespaces/workloads, ALLOW traffic within the app.
+
+This deliberately does NOT enumerate every internal edge (web→api, api→mcp,
+mcp→api, app→postgres/mongodb/rabbitmq, worker→rabbit). That granular approach is
+fragile and previously left the bundled datastores unreachable — the default-deny
+selects them (they carry part-of: kodus) but nothing allowed 5432/27017/5672.
+The real threat this protects against is lateral movement from OTHER
+namespaces/tenants, which the intra-app allow below preserves. Layer stricter
+per-edge policies on top if your compliance profile requires east-west isolation
+inside the app itself.
+
+  - default-deny        baseline deny-all ingress for every kodus pod
+  - allow-intra-app     any kodus pod → any kodus pod (app services AND the
+                        bundled/operator datastores, which also carry part-of)
+  - <svc>-ingress       external entry (web/api/webhooks) from the ingress controller
+
+Egress stays open (DNS, datastores, external LLM APIs).
+*/}}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "kodus.fullname" . }}-default-deny
+  labels:
+    {{- include "kodus.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/part-of: kodus
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress: []
+  egress:
+    - {}
+---
+{{/*
+Allow all intra-app traffic. Every Kodus pod carries part-of: kodus + instance:
+the app services set it in their pod template; the bundled datastore StatefulSets
+set it too; and the operator CRs propagate it to operator-created pods (CNPG
+inheritedMetadata, MongoDB statefulSet.template labels, RabbitMQ override). So this
+single policy covers every internal edge (incl. app→DB) without enumerating them.
+*/}}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "kodus.fullname" . }}-allow-intra-app
+  labels:
+    {{- include "kodus.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/part-of: kodus
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/part-of: kodus
+              app.kubernetes.io/instance: {{ .Release.Name }}
+{{/*
+External ingress → web/api/webhooks (the only pods that take traffic from outside
+the app). Set networkPolicy.ingressControllerLabels to your ingress controller's
+pod labels — WITHOUT it we fall back to namespaceSelector:{} (any namespace),
+which is permissive; production SHOULD set it. See charts/README.md.
+*/}}
+{{- range $name := (list "web" "api" "webhooks") }}
+{{- $svc := index $.Values.services $name }}
+{{- if and $svc (or (kindIs "invalid" $svc.enabled) $svc.enabled) $svc.port }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ printf "%s-%s-ingress" (include "kodus.fullname" $) $name }}
+  labels:
+    {{- include "kodus.labels" $ | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "kodus-common.serviceSelectorLabels" (dict "root" $ "serviceName" $name) | nindent 6 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        {{- if $.Values.networkPolicy.ingressControllerLabels }}
+        {{/* namespaceSelector + podSelector in ONE peer = AND: match the controller
+             pod IN its namespace. A podSelector alone would only match this
+             release's own namespace, so setting the labels would break ingress. */}}
+        - namespaceSelector:
+            {{- toYaml ($.Values.networkPolicy.ingressControllerNamespaceSelector | default dict) | nindent 12 }}
+          podSelector:
+            matchLabels:
+              {{- toYaml $.Values.networkPolicy.ingressControllerLabels | nindent 14 }}
+        {{- else }}
+        - namespaceSelector: {}   # PERMISSIVE fallback — set ingressControllerLabels in production
+        {{- end }}
+      ports:
+        - port: {{ $svc.port }}
+          protocol: TCP
+{{- end }}
+{{- end }}
+{{- end }}

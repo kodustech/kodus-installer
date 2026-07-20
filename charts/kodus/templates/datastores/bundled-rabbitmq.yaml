@@ -1,0 +1,137 @@
+{{- if eq .Values.rabbitmq.mode "bundled" }}
+{{- $b := .Values.rabbitmq.bundled }}
+{{- $name := printf "%s-rabbitmq" .Release.Name }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "kodus.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - port: 5672
+      targetPort: amqp
+      name: amqp
+  selector:
+    app.kubernetes.io/name: rabbitmq
+    app.kubernetes.io/instance: {{ .Release.Name }}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "kodus.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ $name }}
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: rabbitmq
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: rabbitmq
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/part-of: kodus
+    spec:
+      automountServiceAccountToken: false   # DB doesn't call the k8s API
+      securityContext:
+        {{- include "kodus-common.datastorePodSecurityContext" . | nindent 8 }}
+      initContainers:
+        # fsGroup makes the kubelet add group rw to every file on the PVC at each
+        # mount, turning the persisted .erlang.cookie into 0660. Erlang refuses to
+        # start unless that cookie is 0600 ("accessible by owner only"), so the
+        # broker crash-loops on any pod recreation. This runs AFTER the fsGroup
+        # relabel and restores 0600 (no-op on first boot when the cookie doesn't
+        # exist yet — RabbitMQ then creates it correctly). fsGroup is still needed
+        # for initial PVC ownership by uid 999, so we keep it and fix the mode.
+        - name: fix-cookie-perms
+          image: {{ include "kodus-common.regPrefix" . }}busybox:1.37.0
+          command: ["sh", "-c", "c=/var/lib/rabbitmq/.erlang.cookie; if [ -f \"$c\" ]; then chmod 600 \"$c\"; fi"]
+          securityContext:
+            runAsNonRoot: true
+            {{- /* on openshift the SCC assigns the UID (same as the main container); pin 999 elsewhere */}}
+            {{- if ne .Values.platform "openshift" }}
+            runAsUser: 999            # same uid as rabbitmq, so it can chmod its own cookie
+            {{- end }}
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests: { cpu: 10m, memory: 16Mi }
+            limits:   { cpu: 50m, memory: 64Mi }
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/rabbitmq
+      containers:
+        - name: rabbitmq
+          image: {{ include "kodus-common.regPrefix" . }}{{ $b.image }}
+          imagePullPolicy: {{ .Values.image.pullPolicy | default "Always" }}
+          # Pre-built Kodus image provisions the kodus-ai/kodus-ast vhosts on boot.
+          command: ["/usr/local/bin/init-definitions.sh"]
+          ports:
+            - name: amqp
+              containerPort: 5672
+          env:
+            - name: RABBITMQ_DEFAULT_USER
+              value: {{ $b.username | quote }}
+            - name: RABBITMQ_DEFAULT_PASS
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $name }}-secret
+                  key: password
+            - name: RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS
+              value: "-rabbit heartbeat 60"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          # `rabbitmq-diagnostics` spawns an Erlang VM — too heavy/slow to sit in
+          # the liveness hot path (the same cold-start trap that made mongosh
+          # SIGKILL a healthy node). So: liveness = cheap tcpSocket on the AMQP
+          # port (only restarts if the listener is truly gone); readiness = the
+          # real `check_running` diagnostic (failing it just removes the pod from
+          # the Service, never restarts); startupProbe absorbs Erlang + plugin +
+          # vhost provisioning with retries instead of an inflated delay.
+          startupProbe:
+            tcpSocket:
+              port: amqp
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 40        # up to ~3.5min for Erlang + plugins + vhosts
+          readinessProbe:
+            exec:
+              command: ["rabbitmq-diagnostics", "-q", "check_running"]
+            periodSeconds: 15
+            timeoutSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            tcpSocket:
+              port: amqp
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 6
+          resources:
+            {{- toYaml $b.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/rabbitmq
+  volumeClaimTemplates:
+    # NOTE: volumeClaimTemplates is IMMUTABLE — adding fields here breaks
+    # `helm upgrade` on an existing release. doctor-k8s.sh finds these PVCs by the
+    # instance label the StatefulSet controller sets automatically.
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: {{ $b.storage.size | default "8Gi" }}
+        {{- with $b.storage.storageClass }}
+        storageClassName: {{ . }}
+        {{- end }}
+{{- end }}

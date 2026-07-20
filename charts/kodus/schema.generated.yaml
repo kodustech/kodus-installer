@@ -1,0 +1,158 @@
+# AUTO-GENERATED from kodus-ai/.env.schema. Do NOT edit by hand.
+# Anti-drift source of truth for the Kodus Helm chart. The installer CI
+# (scripts/validate-chart-schema.sh) validates the chart against this file so
+# the chart can never fall out of sync with the schema.
+# Regenerate: `pnpm run env:generate --apply --installer` in kodus-ai.
+
+# Non-sensitive self-hosted vars (ConfigMap keys) with installer defaults.
+config:
+  API_NODE_ENV: production
+  API_DATABASE_ENV: development
+  API_DATABASE_DISABLE_SSL: "true"
+  API_LOG_LEVEL: error
+  API_LOG_PRETTY: "true"
+  BETA_FEATURES: "false"
+  RUN_MIGRATIONS: "true"
+  RUN_SEEDS: "true"
+  USE_LOCAL_DB: "true"
+  USE_LOCAL_RABBITMQ: "true"
+  GLOBAL_API_CONTAINER_NAME: kodus_api
+  API_HOST: "0.0.0.0"
+  API_PORT: "3001"
+  API_WEBHOOKS_PORT: "3332"
+  API_RATE_MAX_REQUEST: "100"
+  API_RATE_INTERVAL: "1000"
+  API_FRONTEND_URL: "http://localhost:3000"
+  API_DOCS_ENABLED: "false"
+  API_DOCS_PATH: /docs
+  API_DOCS_SPEC_PATH: /openapi.json
+  API_DOCS_BASIC_USER: ""
+  API_PG_DB_HOST: db_kodus_postgres
+  API_PG_DB_PORT: "5432"
+  API_PG_DB_USERNAME: kodusdev
+  API_PG_DB_DATABASE: kodus_db
+  API_MG_DB_HOST: db_kodus_mongodb
+  API_MG_DB_PORT: "27017"
+  API_MG_DB_USERNAME: kodusdev
+  API_MG_DB_DATABASE: kodus_db
+  API_MG_DB_AUTH_SOURCE: ""
+  API_MG_DB_PRODUCTION_CONFIG: ""
+  API_RABBITMQ_ENABLED: "true"
+  RABBITMQ_DEFAULT_USER: kodus
+  RABBITMQ_HOSTNAME: rabbitmq
+  WORKER_ROLE: code-review
+  WORKFLOW_QUEUE_WORKER_PREFETCH: "20"
+  WORKFLOW_QUEUE_PUBLISHER_PREFETCH: "5"
+  WORKFLOW_QUEUE_WEBHOOK_PREFETCH: "20"
+  WORKFLOW_QUEUE_CODE_REVIEW_PREFETCH: "20"
+  WORKFLOW_QUEUE_WEBHOOK_PROCESS_TIMEOUT_MS: "600000"
+  WORKFLOW_QUEUE_CODE_REVIEW_PROCESS_TIMEOUT_MS: "7200000"
+  WORKFLOW_OUTBOX_MAX_ATTEMPTS: "10"
+  API_JWT_EXPIRES_IN: "365d"
+  API_JWT_REFRESH_EXPIRES_IN: "7d"
+  API_OPENAI_FORCE_BASE_URL: ""
+  API_TRUST_JSON_SCHEMA_BASE_URLS: ""
+  API_LLM_PROVIDER_MODEL: auto
+  API_LLM_TEMPERATURE_OVERRIDE: ""
+  API_GITHUB_CODE_MANAGEMENT_WEBHOOK: ""
+  API_GITLAB_CODE_MANAGEMENT_WEBHOOK: ""
+  GLOBAL_BITBUCKET_CODE_MANAGEMENT_WEBHOOK: ""
+  GLOBAL_AZURE_REPOS_CODE_MANAGEMENT_WEBHOOK: ""
+  API_FORGEJO_CODE_MANAGEMENT_WEBHOOK: ""
+  SANDBOX_PROVIDER: local
+  API_CRON_SYNC_CODE_REVIEW_REACTIONS: "0 0 * * *"
+  API_CRON_KODY_LEARNING: "0 0 * * 6"
+  API_CRON_CHECK_IF_PR_SHOULD_BE_APPROVED: "*/2 * * * *"
+  API_CRON_ORG_REPORT: "0 9 1 * *"
+  API_CRON_REPO_REPORT: "0 9 1,16 * *"
+  API_CRON_SPEND_LIMIT_ALERT: "0 * * * *"
+  API_NOTIFICATION_EMAIL_PROVIDER: resend
+  API_USER_INVITE_BASE_URL: "http://localhost:3000"
+  API_SMTP_HOST: ""
+  API_SMTP_PORT: "587"
+  API_SMTP_SECURE: ""
+  API_SMTP_USER: ""
+  API_SMTP_FROM: "noreply@notifications.kodus.io"
+  WEB_NODE_ENV: self-hosted
+  WEB_HOSTNAME_API: localhost
+  WEB_PORT_API: "3001"
+  WEB_PORT: "3000"
+  NEXTAUTH_URL: "http://localhost:3000"
+  WEB_SUPPORT_DOCS_URL: "https://docs.kodus.io"
+  WEB_SUPPORT_DISCORD_INVITE_URL: "https://discord.gg/QFzwwmNmdN"
+  WEB_HOSTNAME_MCP_MANAGER: kodus-mcp-manager
+  WEB_PORT_MCP_MANAGER: "3101"
+  GLOBAL_MCP_MANAGER_CONTAINER_NAME: kodus-mcp-manager
+  WEB_TOKEN_DOCS_GITHUB: "https://docs.kodus.io/how_to_use/en/code_review/general_config/github_pat"
+  WEB_TOKEN_DOCS_GITLAB: "https://docs.kodus.io/how_to_use/en/code_review/general_config/gitlab_pat"
+  WEB_TOKEN_DOCS_BITBUCKET: "https://docs.kodus.io/how_to_use/en/code_review/general_config/bitbucket_pat"
+  WEB_TOKEN_DOCS_AZUREREPOS: "https://docs.kodus.io/how_to_use/en/code_review/general_config/azure_devops_pat"
+  WEB_TOKEN_DOCS_FORGEJO: ""
+  API_MCP_SERVER_ENABLED: "false"
+  API_KODUS_SERVICE_MCP_MANAGER: "http://kodus-mcp-manager:3101"
+  API_KODUS_MCP_SERVER_URL: "http://localhost:3001/mcp"
+  API_MCP_MANAGER_LOG_LEVEL: info
+  API_MCP_MANAGER_PORT: "3101"
+  API_MCP_MANAGER_NODE_ENV: development
+  API_MCP_MANAGER_DATABASE_ENV: development
+  API_MCP_MANAGER_CORS_ORIGINS: "*"
+  API_MCP_MANAGER_MCP_PROVIDERS: "kodusmcp,custom"
+  API_MCP_MANAGER_REDIRECT_URI: "http://localhost:3000/setup/mcp/oauth"
+  API_MCP_MANAGER_PG_DB_SCHEMA: mcp-manager
+  API_PG_DB_SSL: ""
+  API_DOCS_BASE_URL: ""
+  API_DOCS_SERVER_URLS: ""
+  API_CRON_CLASSIFY_ORPHANED_SESSIONS: "0 */15 * * * *"
+  API_CRON_STALE_REVIEW_WATCHDOG: "*/30 * * * *"
+  API_AGENT_REVIEW_ENABLED: "true"
+  API_RABBITMQ_WAIT: "true"
+  API_WORKER_DRAIN_TIMEOUT_MS: "600000"
+  KODUS_TELEMETRY_DISABLED: "false"
+  KODUS_TELEMETRY_ENDPOINT: ""
+  WEB_HOSTNAME_HELPDESK: localhost
+  WEB_PORT_HELPDESK: "3004"
+  WEB_RULE_FILES_DOCS: "https://docs.kodus.io/how_to_use/en/code_review/configs/rules_file_detection"
+
+# Secret keys the app consumes.
+secrets:
+  required:
+    - API_PG_DB_PASSWORD
+    - API_MG_DB_PASSWORD
+    - API_JWT_SECRET
+    - API_JWT_REFRESH_SECRET
+    - API_CRYPTO_KEY
+    - CODE_MANAGEMENT_SECRET
+    - WEB_NEXTAUTH_SECRET
+    - NEXTAUTH_SECRET
+  optional:
+    - API_DOCS_BASIC_PASS
+    - DATABASE_URL
+    - API_PG_DB_URL
+    - MONGODB_URI
+    - API_MG_DB_URI
+    - RABBITMQ_DEFAULT_PASS
+    - API_RABBITMQ_URI
+    - API_OPEN_AI_API_KEY
+    - API_MORPHLLM_API_KEY
+    - API_EXA_KEY
+    - CODE_MANAGEMENT_WEBHOOK_TOKEN
+    - LANGFUSE_SECRET_KEY
+    - API_E2B_KEY
+    - RESEND_API_KEY
+    - API_SMTP_PASS
+    - API_MCP_MANAGER_JWT_SECRET
+    - API_MCP_MANAGER_ENCRYPTION_SECRET
+  # Method to mint each secret unattended. hex32 MUST stay hex — the app
+  # parses API_CRYPTO_KEY/CODE_MANAGEMENT_SECRET with Buffer.from(x,"hex").
+  autogen:
+    API_PG_DB_PASSWORD: hex32
+    API_MG_DB_PASSWORD: hex32
+    API_JWT_SECRET: base64-32
+    API_JWT_REFRESH_SECRET: base64-32
+    API_CRYPTO_KEY: hex32
+    CODE_MANAGEMENT_SECRET: hex32
+    CODE_MANAGEMENT_WEBHOOK_TOKEN: base64url-32
+    WEB_NEXTAUTH_SECRET: mirror:NEXTAUTH_SECRET
+    API_MCP_MANAGER_JWT_SECRET: base64-32
+    API_MCP_MANAGER_ENCRYPTION_SECRET: hex32
+    NEXTAUTH_SECRET: base64-32

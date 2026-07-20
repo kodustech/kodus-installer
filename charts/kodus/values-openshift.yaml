@@ -1,0 +1,35 @@
+# OpenShift overlay. Usage:
+#   helm install kodus . -f values.yaml -f values-openshift.yaml -n kodus
+# Switches Ingress → Route, enables SCC handling, and lets OpenShift assign UIDs.
+
+platform: openshift
+
+# OpenShift assigns the UID/fsGroup from the namespace range via the SCC.
+podSecurityContext:
+  fsGroup: null
+
+# Rely on the built-in restricted-v2 SCC by default. Set scc.create: true to ship
+# a dedicated SCC bound to the release ServiceAccount.
+scc:
+  create: false
+
+route:
+  enabled: true
+  hosts:
+    web:
+      host: kodus.apps.cluster.example.com
+      serviceName: web
+    api:
+      host: api.kodus.apps.cluster.example.com
+      serviceName: api
+    webhooks:
+      host: api.kodus.apps.cluster.example.com
+      path: /webhooks
+      serviceName: webhooks
+
+# NOTE: bundled datastores on OpenShift's restricted SCC can be finicky (the
+# stock postgres/mongo images expect fixed UIDs). For production OpenShift prefer
+# postgres/mongodb/rabbitmq mode: operator or external. Example (external):
+# postgres:
+#   mode: external
+#   external: { host: pg.example.com, existingSecret: kodus-pg }

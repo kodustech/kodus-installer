@@ -1,0 +1,465 @@
+# Kodus — production-hardened defaults (SOC 2 Type II oriented).
+# Overlays (layer with -f on top of this file):
+#   values-dev.yaml               local/dev — relaxes security, single replicas, tags
+#   values-openshift.yaml         OpenShift — Routes + SCC-friendly security
+#   values-external-example.yaml  reuse existing Postgres/MongoDB/RabbitMQ
+# See charts/README.md → "Data stores" for the full walkthrough.
+
+nameOverride: ""
+fullnameOverride: ""
+
+# Target platform. kubernetes → Ingress; openshift → Route + SecurityContext
+# Constraints, and pod fsGroup is left unset (OpenShift assigns UIDs via the SCC).
+# For OpenShift use the values-openshift.yaml overlay.
+platform: kubernetes                # kubernetes | openshift
+
+global:
+  # Air-gapped: set to a private mirror (e.g. "registry.internal:5000") to
+  # repoint EVERY image (app + busybox + mongo + pgvector + rabbitmq) at it.
+  # Empty = pull from the original registries.
+  imageRegistry: ""
+  # Compliance/audit labels merged onto every resource.
+  labels:
+    kodus.io/environment: ""          # REQUIRED: production | staging | development
+    kodus.io/team: ""                 # REQUIRED: owning team
+    kodus.io/compliance: "soc2"
+    kodus.io/data-classification: "confidential"
+
+  # --- Secret sourcing (choose ONE for production) ---
+  # Option 1: reference a pre-created Kubernetes Secret holding all app secret keys.
+  existingSecret: ""
+  # Option 2: external-secrets operator — generates ExternalSecret resources.
+  externalSecrets:
+    enabled: false
+    store: ""                         # SecretStore / ClusterSecretStore name
+    storeKind: SecretStore
+    refreshInterval: "1h"
+  # Option 3 (dev only): inline secrets. Ignored when existingSecret or
+  # externalSecrets is set. Empty required keys are auto-generated (stable across
+  # upgrade) with the correct format: API_CRYPTO_KEY / CODE_MANAGEMENT_SECRET are
+  # 32-byte HEX (kodus-ai parses them with Buffer.from(x,'hex')); JWT/NextAuth are
+  # base64. NEXTAUTH_SECRET is mirrored to WEB_NEXTAUTH_SECRET.
+  autoGenerateSecrets: true
+  secrets:
+    API_JWT_SECRET: ""
+    API_JWT_REFRESH_SECRET: ""
+    WEB_NEXTAUTH_SECRET: ""
+    NEXTAUTH_SECRET: ""
+    API_CRYPTO_KEY: ""
+    CODE_MANAGEMENT_SECRET: ""
+    CODE_MANAGEMENT_WEBHOOK_TOKEN: ""
+    # Optional
+    API_OPEN_AI_API_KEY: ""           # NOTE: Anthropic/Claude key ALSO goes here
+    API_MORPHLLM_API_KEY: ""
+    API_E2B_KEY: ""
+    API_MCP_MANAGER_JWT_SECRET: ""
+    API_MCP_MANAGER_ENCRYPTION_SECRET: ""
+    API_MCP_MANAGER_COMPOSIO_API_KEY: ""
+
+  # --- Non-sensitive config (rendered into the ConfigMap) ---
+  # {{ .Release.Name }} refs are resolved via `tpl` in configmap.yaml.
+  config:
+    # Web
+    WEB_NODE_ENV: "self-hosted"
+    WEB_HOSTNAME_API: ""              # REQUIRED — hostname only (no scheme/path)
+    WEB_PORT_API: "3001"
+    WEB_PORT: "3000"
+    NEXTAUTH_URL: ""                  # REQUIRED — full HTTPS URL in production
+    WEB_SUPPORT_DOCS_URL: "https://docs.kodus.io"
+    WEB_SUPPORT_DISCORD_INVITE_URL: "https://discord.gg/QFzwwmNmdN"
+    # API
+    API_NODE_ENV: "production"
+    API_LOG_LEVEL: "error"
+    API_LOG_PRETTY: "false"
+    API_HOST: "0.0.0.0"
+    API_PORT: "3001"
+    API_RATE_MAX_REQUEST: "100"
+    API_RATE_INTERVAL: "1000"
+    API_CLOUD_MODE: "false"
+    API_JWT_EXPIRES_IN: "365d"
+    API_JWT_REFRESH_EXPIRES_IN: "7d"
+    API_WEBHOOKS_PORT: "3332"
+    API_FRONTEND_URL: "http://{{ .Release.Name }}-web:3000"
+    GLOBAL_API_CONTAINER_NAME: "kodus-api"
+    # Database
+    API_DATABASE_ENV: "production"
+    # SSL to Postgres. The bundled/operator Postgres runs IN-cluster without TLS,
+    # so SSL must be DISABLED by default — otherwise node-postgres sends an
+    # SSLRequest the server rejects ("server does not support SSL connections")
+    # and the migration Job + api/worker fail to connect. For mode=external with a
+    # managed PG that enforces TLS (RDS/Atlas), set this to "false"
+    # (values-external-example.yaml does).
+    API_DATABASE_DISABLE_SSL: "true"
+    # RabbitMQ
+    API_RABBITMQ_ENABLED: "true"
+    API_RABBITMQ_WAIT: "true"
+    # Runtime flags
+    RUN_MIGRATIONS: "false"           # migrations run only via the migration Job (migration-job.yaml)
+    RUN_SEEDS: "false"                # seeds run in the migration Job too
+    SANDBOX_PROVIDER: "local"
+    API_AGENT_REVIEW_ENABLED: "true"
+    NODE_ENV: "production"
+    # Cron (UTC)
+    API_CRON_SYNC_CODE_REVIEW_REACTIONS: "0 0 * * *"
+    API_CRON_KODY_LEARNING: "0 0 * * 6"
+    API_CRON_CHECK_IF_PR_SHOULD_BE_APPROVED: "*/2 * * * *"
+    # MCP (all only relevant when services.mcp-manager.enabled=true)
+    API_MCP_SERVER_ENABLED: "false"
+    API_KODUS_SERVICE_MCP_MANAGER: "http://{{ .Release.Name }}-mcp-manager:3101"
+    API_KODUS_MCP_SERVER_URL: "http://{{ .Release.Name }}-api:3001/mcp"
+    # web → mcp-manager (frontend reaches it in-cluster by default)
+    WEB_HOSTNAME_MCP_MANAGER: "{{ .Release.Name }}-mcp-manager"
+    WEB_PORT_MCP_MANAGER: "3101"
+    API_MCP_MANAGER_LOG_LEVEL: "info"
+    API_MCP_MANAGER_PORT: "3101"
+    API_MCP_MANAGER_NODE_ENV: "production"
+    API_MCP_MANAGER_DATABASE_ENV: "production"
+    # Browser OAuth setup flow lands here — MUST be your PUBLIC web URL when MCP is
+    # enabled, e.g. https://kodus.example.com/setup/mcp/oauth (matches NEXTAUTH_URL host).
+    API_MCP_MANAGER_REDIRECT_URI: ""
+    # CORS for the mcp-manager. "*" is convenient but permissive; scope it to your
+    # web origin (the NEXTAUTH_URL host) for a hardened install.
+    API_MCP_MANAGER_CORS_ORIGINS: "*"
+    API_MCP_MANAGER_MCP_PROVIDERS: "kodusmcp,custom"
+    API_MCP_MANAGER_PG_DB_SCHEMA: "mcp-manager"
+    # Git provider webhooks (fill only the one in use)
+    API_GITHUB_CODE_MANAGEMENT_WEBHOOK: ""
+    API_GITLAB_CODE_MANAGEMENT_WEBHOOK: ""
+    GLOBAL_BITBUCKET_CODE_MANAGEMENT_WEBHOOK: ""
+    GLOBAL_AZURE_REPOS_CODE_MANAGEMENT_WEBHOOK: ""
+    API_FORGEJO_CODE_MANAGEMENT_WEBHOOK: ""
+
+# Kodus release version applied to ALL app service images + migrations when their
+# own image.tag is empty — one value for the whole stack, like docker-compose
+# IMAGE_TAG. Override a single service via services.<name>.image.tag. A pinned tag
+# is required in production (no 'latest'); set it here or per-service.
+imageTag: ""
+
+image:
+  pullPolicy: Always
+imagePullSecrets: []
+# - name: ghcr-credentials
+
+# Init container image used to wait for data deps (TCP probe).
+waitForDeps:
+  image: busybox:1.37.0
+
+services:
+  web:
+    enabled: true
+    image:
+      repository: ghcr.io/kodustech/kodus-ai-web
+      tag: ""                          # REQUIRED
+    port: 3000
+    replicas: 2
+    probes:
+      path: /
+    resources:
+      requests: { cpu: 100m, memory: 256Mi }
+      limits:   { cpu: 500m, memory: 512Mi }
+
+  api:
+    enabled: true
+    image:
+      repository: ghcr.io/kodustech/kodus-ai-api
+      tag: ""                          # REQUIRED
+    port: 3001
+    replicas: 2
+    probes:
+      path: /health/simple             # shallow (liveness/startup)
+      readinessPath: /health           # deep (app + RabbitMQ + Postgres)
+    resources:
+      requests: { cpu: 250m, memory: 512Mi }
+      limits:   { cpu: "1", memory: 1Gi }
+
+  worker:
+    enabled: true
+    image:
+      repository: ghcr.io/kodustech/kodus-ai-worker
+      tag: ""                          # REQUIRED
+    port: null
+    replicas: 2
+    env:
+      WORKER_ROLE: code-review
+      RUN_MIGRATIONS: "false"
+    probes:
+      type: exec
+      command: ["node", "-e", "require('amqplib').connect(process.env.API_RABBITMQ_URI).then(()=>process.exit(0)).catch(()=>process.exit(1))"]
+    resources:
+      requests: { cpu: 250m, memory: 512Mi }
+      limits:   { cpu: "1", memory: 1Gi }
+
+  # Analytics ingestion worker (Cockpit / self-hosted Enterprise). Opt-in.
+  worker-analytics:
+    enabled: false
+    image:
+      repository: ghcr.io/kodustech/kodus-ai-worker
+      tag: ""                          # REQUIRED when enabled
+    port: null
+    replicas: 1
+    env:
+      WORKER_ROLE: analytics
+      RUN_MIGRATIONS: "false"
+    probes:
+      type: exec
+      command: ["node", "-e", "require('amqplib').connect(process.env.API_RABBITMQ_URI).then(()=>process.exit(0)).catch(()=>process.exit(1))"]
+    resources:
+      requests: { cpu: 250m, memory: 512Mi }
+      limits:   { cpu: "1", memory: 1Gi }
+
+  webhooks:
+    enabled: true
+    image:
+      repository: ghcr.io/kodustech/kodus-ai-webhook
+      tag: ""                          # REQUIRED
+    port: 3332
+    replicas: 2
+    probes:
+      path: /health/live               # liveness/startup
+      readinessPath: /health/ready     # readiness (503 when degraded)
+    resources:
+      requests: { cpu: 100m, memory: 256Mi }
+      limits:   { cpu: 500m, memory: 512Mi }
+
+  mcp-manager:
+    enabled: false
+    image:
+      repository: ghcr.io/kodustech/kodus-mcp-manager
+      tag: ""                          # REQUIRED when enabled
+    port: 3101
+    replicas: 1
+    probes:
+      path: /health
+    resources:
+      requests: { cpu: 100m, memory: 256Mi }
+      limits:   { cpu: 500m, memory: 512Mi }
+
+# Database migrations run as a normal Job on each install/upgrade (named with
+# the release revision, TTL-cleaned). Not a Helm hook — a pre-install hook would
+# deadlock waiting for a bundled DB that Helm only creates after hooks finish.
+migrations:
+  enabled: true
+  image:
+    repository: ghcr.io/kodustech/kodus-ai-api
+    tag: ""                            # REQUIRED — should match services.api.tag
+  env:
+    RUN_MIGRATIONS: "true"
+    # Seeds run on every install AND upgrade (the Job is recreated per revision).
+    # Kodus seeds are upsert-style/idempotent, so re-running is a no-op; set to
+    # "false" if you maintain seed data out-of-band and want upgrades to skip it.
+    RUN_SEEDS: "true"
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}                      # e.g. eks.amazonaws.com/role-arn for IRSA
+
+rbac:
+  # Kodus services read their config from env (ConfigMap/Secret → envFrom); they do
+  # NOT call the Kubernetes API, and the SA token is not mounted
+  # (automountServiceAccountToken: false). So NO Role is needed by default —
+  # granting namespace-wide `secrets` read would be a latent exposure for nothing.
+  # If you add a component that talks to the API, set create: true and scope rules
+  # tightly (prefer resourceNames; never an unscoped secrets read).
+  create: false
+  rules: []
+
+podSecurityContext:
+  fsGroup: 1001
+  seccompProfile:
+    type: RuntimeDefault
+
+containerSecurityContext:
+  readOnlyRootFilesystem: true
+
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    # cert-manager.io/cluster-issuer: ""
+  tls:
+    enabled: true
+    secretName: ""
+  hosts:
+    web:
+      host: kodus.example.com
+      path: /
+      serviceName: web
+    api:
+      host: api.kodus.example.com
+      path: /
+      serviceName: api
+    webhooks:
+      host: api.kodus.example.com
+      path: /webhooks
+      serviceName: webhooks
+
+# OpenShift only (platform: openshift). Routes replace Ingress.
+route:
+  enabled: true
+  tls:
+    termination: edge
+    insecureEdgePolicy: Redirect      # force HTTPS
+  hosts:
+    web:
+      host: kodus.apps.cluster.example.com
+      serviceName: web
+    api:
+      host: api.kodus.apps.cluster.example.com
+      serviceName: api
+    webhooks:
+      host: api.kodus.apps.cluster.example.com
+      path: /webhooks
+      serviceName: webhooks
+
+# OpenShift only. Optional custom SecurityContextConstraints bound to the SA.
+# By default we rely on the built-in restricted-v2 SCC (create: false).
+scc:
+  create: false
+  name: ""
+
+networkPolicy:
+  enabled: true
+  # Pod labels of your ingress controller (e.g. {app.kubernetes.io/name: ingress-nginx}).
+  # When set, the web/api/webhooks ingress policies allow ONLY that controller.
+  # Left empty → permissive fallback (any namespace). Ingress controllers run in a
+  # DIFFERENT namespace, so these labels are combined with the namespaceSelector
+  # below (AND) — a podSelector alone would only match the release's own namespace.
+  ingressControllerLabels: {}
+  # Namespace selector for the ingress controller. Default {} = any namespace
+  # (the pod labels above already identify the controller). Narrow it to your
+  # controller's namespace for stricter isolation, e.g.
+  #   {matchLabels: {kubernetes.io/metadata.name: ingress-nginx}}
+  ingressControllerNamespaceSelector: {}
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPU: 80
+  targetMemory: 80
+
+pdb:
+  enabled: true
+  minAvailable: 1
+
+resourceQuota:
+  enabled: false
+  hard:
+    requests.cpu: "8"
+    requests.memory: "16Gi"
+    limits.cpu: "16"
+    limits.memory: "32Gi"
+    pods: "50"
+    persistentvolumeclaims: "10"
+
+# =========================================================================
+# Data stores — mode: bundled | external | operator
+#   bundled  : a StatefulSet run by THIS chart using Kodus/official images
+#              (pgvector, kodus-rabbitmq, mongo) — the "bring it up together"
+#              path, equivalent to docker-compose USE_LOCAL_DB=true. Default.
+#   external : managed/self-managed service (RDS/Atlas/CloudAMQP, or your own),
+#              equivalent to USE_LOCAL_DB=false.
+#   operator : provisioned by a cluster operator (advanced HA). The operator
+#              MUST be pre-installed (see Chart.yaml annotations).
+# Passwords for bundled mode are auto-generated (stable across upgrades) when left
+# empty. Single-replica bundled stores are for simple/trial installs; use external
+# or operator for production HA.
+# =========================================================================
+
+postgres:
+  mode: bundled                     # bundled | external | operator
+  bundled:
+    image: pgvector/pgvector:pg16
+    database: kodus_db
+    username: kodusdev
+    password: ""                    # auto-generated when empty
+    storage:
+      size: 10Gi
+      storageClass: ""
+    resources:
+      requests: { cpu: 250m, memory: 512Mi }
+      limits:   { cpu: "1", memory: 1Gi }
+  external:
+    # PREREQUISITE: the target Postgres MUST have the `vector` (pgvector) extension
+    # available — Kodus runs `CREATE EXTENSION vector`. On RDS/Aurora it's built in
+    # (just needs enabling); on a self-managed PG install the pgvector package.
+    # A dedicated database (below) on your existing instance is fine.
+    host: ""
+    port: 5432
+    username: kodusdev
+    database: kodus_db
+    existingSecret: ""              # holds the password under passwordKey
+    passwordKey: password
+  operator:
+    # CloudNativePG Cluster. Image MUST ship pgvector (a stock CNPG image does
+    # NOT) — set a CNPG-compatible pgvector image here.
+    image: ""                       # REQUIRED for mode=operator
+    instances: 2
+    database: kodus_db
+    owner: kodusdev
+    storage:
+      size: 10Gi
+      storageClass: ""
+
+mongodb:
+  mode: bundled
+  bundled:
+    image: mongo:8
+    database: kodus_db
+    username: kodusdev              # root user
+    password: ""                    # auto-generated when empty
+    storage:
+      size: 10Gi
+      storageClass: ""
+    resources:
+      requests: { cpu: 100m, memory: 256Mi }
+      limits:   { cpu: 500m, memory: 1Gi }
+  external:
+    host: ""
+    port: 27017
+    username: kodusdev
+    database: kodus_db
+    existingSecret: ""
+    passwordKey: password
+  operator:
+    version: "8.0.4"
+    members: 3
+    database: kodus_db
+    username: kodusdev
+    storage:
+      size: 10Gi
+      storageClass: ""
+
+rabbitmq:
+  mode: bundled
+  bundled:
+    # Pre-built Kodus image: delayed_message_exchange plugin + kodus-ai/kodus-ast
+    # vhosts baked in. Runs init-definitions.sh on boot (same as docker-compose).
+    image: ghcr.io/kodustech/kodus-rabbitmq:4.2.2-kodus
+    username: kodus
+    password: ""                    # auto-generated when empty
+    storage:
+      size: 8Gi
+      storageClass: ""
+    resources:
+      requests: { cpu: 100m, memory: 256Mi }
+      limits:   { cpu: 500m, memory: 1Gi }
+  external:
+    # PREREQUISITES on your existing RabbitMQ (the bundled image bakes these in;
+    # a vanilla broker does NOT have them and Kodus will fail confusingly without):
+    #   1. Enable the plugin:  rabbitmq-plugins enable rabbitmq_delayed_message_exchange
+    #   2. Create the vhosts:  rabbitmqctl add_vhost kodus-ai && rabbitmqctl add_vhost kodus-ast
+    #      then grant your user permissions on both (".*" ".*" ".*").
+    # The URI's vhost must be kodus-ai (see below).
+    uri: ""                         # amqps://user:pass@host:5671/kodus-ai
+    existingSecret: ""
+    uriKey: uri
+  operator:
+    image: ghcr.io/kodustech/kodus-rabbitmq:4.2.2-kodus
+    replicas: 1
+    storage:
+      size: 8Gi
+      storageClass: ""
