@@ -40,7 +40,7 @@ startupProbe:
     path: {{ .svc.probes.path }}
     port: http
   periodSeconds: 5
-  timeoutSeconds: 3
+  timeoutSeconds: 8          {{/* generous for cold start — a Next.js SSR "/" can take >3s on first hit; only affects startup */}}
   failureThreshold: 30
 livenessProbe:
   httpGet:

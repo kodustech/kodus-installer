@@ -7,6 +7,17 @@ metadata:
   name: {{ printf "%s-%s" $.Release.Name $name | trunc 63 | trimSuffix "-" }}
   labels:
     {{- include "kodus-common.serviceLabels" (dict "root" $ "serviceName" $h.serviceName) | nindent 4 }}
+  {{- if or $.Values.route.hsts $.Values.route.annotations }}
+  annotations:
+    {{- if $.Values.route.hsts }}
+    # OpenShift Routes do NOT set HSTS by default (ingress-nginx does) — force it.
+    # Only honored on edge/reencrypt termination.
+    haproxy.router.openshift.io/hsts_header: {{ $.Values.route.hsts | quote }}
+    {{- end }}
+    {{- with $.Values.route.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- end }}
 spec:
   host: {{ $h.host }}
   {{- if $h.path }}

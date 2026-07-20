@@ -278,6 +278,11 @@ ingress:
   annotations:
     nginx.ingress.kubernetes.io/ssl-redirect: "true"
     nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    # HSTS — ingress-nginx enables it by default on TLS, but set explicitly so it
+    # doesn't depend on controller defaults (belt-and-suspenders).
+    nginx.ingress.kubernetes.io/hsts: "true"
+    nginx.ingress.kubernetes.io/hsts-max-age: "31536000"
+    nginx.ingress.kubernetes.io/hsts-include-subdomains: "true"
     # cert-manager.io/cluster-issuer: ""
   tls:
     enabled: true
@@ -299,7 +304,15 @@ ingress:
 # OpenShift only (platform: openshift). Routes replace Ingress.
 route:
   enabled: true
+  # HSTS header — OpenShift Routes do NOT set it by default (ingress-nginx does),
+  # so we force it here. Tells browsers to only ever use HTTPS. Set "" to disable.
+  hsts: "max-age=31536000; includeSubDomains"
+  annotations: {}                     # extra Route annotations (timeouts, rate-limits, …)
   tls:
+    # edge = TLS terminates at the router (router→pod is plaintext in-cluster).
+    # For high-security/closed environments that require encryption all the way to
+    # the pod, use `reencrypt` (needs the app to serve TLS with a cert) or
+    # `passthrough`. HSTS above requires edge or reencrypt.
     termination: edge
     insecureEdgePolicy: Redirect      # force HTTPS
   hosts:

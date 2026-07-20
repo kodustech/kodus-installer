@@ -158,6 +158,34 @@ kubectl -n kodus create secret generic kodus-pg    --from-literal=password='...'
 kubectl -n kodus create secret generic kodus-rabbit --from-literal=uri='amqps://user:pass@host:5671/kodus-ai'
 ```
 
+### Datastore security in closed / high-security environments
+
+The **bundled** stores are hardened for the common threat model — verified live on
+OpenShift: authentication is enforced (`mongod --auth`; Postgres/RabbitMQ require
+credentials — an unauthenticated command is rejected), passwords are auto-generated
+into Secrets, Services are `ClusterIP` (never exposed), NetworkPolicy limits access
+to Kodus pods, and every container runs non-root with dropped capabilities, seccomp,
+and no ServiceAccount token.
+
+What bundled does **not** provide — which is why it's dev/trial, not for locked-down
+production:
+
+- **TLS in transit** — bundled Mongo/Postgres/RabbitMQ speak plaintext in-cluster
+  (isolated by NetworkPolicy, but not encrypted wire-to-wire).
+- **Encryption at rest** — the community images don't encrypt data files.
+
+For air-gapped / regulated / "encrypt everything" environments:
+
+- **`mode: operator` or `external`** — the MongoDB Community Operator, CloudNativePG,
+  and RabbitMQ Cluster Operator all support TLS; managed services add encryption at
+  rest and backups.
+- **An encrypted StorageClass** — encryption at rest for the PVCs, in any mode.
+- **Digest-pinned images** — set the store image to a digest instead of a tag
+  (`--set mongodb.bundled.image=mongo@sha256:…`) for a reproducible, tamper-evident
+  supply chain; mirror them into your registry with `global.imageRegistry`.
+- **Secrets via `existingSecret` / `externalSecrets`** + etcd encryption on the
+  cluster, so credentials are never inline and are encrypted at rest.
+
 ## Secrets
 
 Production should not use inline secrets. Pick one:
