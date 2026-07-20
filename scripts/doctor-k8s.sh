@@ -150,13 +150,20 @@ if [ -z "$HOSTAPI" ]; then
 else
   ok "WEB_HOSTNAME_API=$HOSTAPI (web→api, in-cluster)"
 fi
+# Guide the user: connecting a repo registers this URL as the provider webhook,
+# so it must be a PUBLIC https URL reaching the webhooks service at /<provider>/webhook.
+if [ -z "$($K get configmap "$CM" -o jsonpath='{.data.API_GITHUB_CODE_MANAGEMENT_WEBHOOK}{.data.API_GITLAB_CODE_MANAGEMENT_WEBHOOK}' 2>/dev/null)" ]; then
+  warn "no Git webhook configured — connecting a repo won't register a webhook. Set API_<GITHUB|GITLAB>_CODE_MANAGEMENT_WEBHOOK to a PUBLIC https URL reaching the webhooks service, e.g. https://<public-webhooks-host>/github/webhook"
+fi
 for prov in GITHUB GITLAB; do
   key="API_${prov}_CODE_MANAGEMENT_WEBHOOK"
   url=$($K get configmap "$CM" -o jsonpath="{.data.$key}" 2>/dev/null)
   [ -z "$url" ] && continue
+  provlc=$(echo "$prov" | tr '[:upper:]' '[:lower:]')
   case "$url" in
-    https://*localhost*|http://*) warn "$prov webhook not publicly usable (http or localhost): $url" ;;
-    https://*) ok "$prov webhook uses https ($url)" ;;
+    https://*localhost*|http://*) bad "$key is http/localhost ($url) — the provider will reject it, so 'save repositories' fails. Use a public https URL like https://<public-webhooks-host>/${provlc}/webhook." ;;
+    https://*/${provlc}/webhook) ok "$prov webhook: $url" ;;
+    https://*) warn "$prov webhook is https but the path looks off ($url) — expected .../${provlc}/webhook" ;;
   esac
 done
 NEXTA=$($K get configmap "$CM" -o jsonpath='{.data.NEXTAUTH_URL}' 2>/dev/null)
