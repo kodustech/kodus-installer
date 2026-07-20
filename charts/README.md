@@ -6,6 +6,10 @@ charts deploy the full stack on Kubernetes or OpenShift, alongside the Docker
 Compose option in the [repo root](../readme.md). New here? Start with the root
 README, then come back for the cluster deployment.
 
+**See also:** [Architecture](https://docs.kodus.io/how_to_deploy/en/kodus_architecture)
+· [BYOK / LLM keys](https://docs.kodus.io/how_to_use/en/byok)
+· [full docs](https://docs.kodus.io) ([llms.txt](https://docs.kodus.io/llms.txt)).
+
 - `kodus/` — the deployable chart (Kubernetes **and** OpenShift, via `platform`).
 - `kodus-common/` — a Helm *library* chart (shared helpers/templates). Not
   installed directly.
@@ -61,6 +65,16 @@ helm install kodus . -f values.yaml -f values-dev.yaml -n kodus-dev --create-nam
 
 `values-dev.yaml` relaxes the hardening, uses `latest`, single replicas, small
 bundled stores.
+
+### Optional services
+
+Both are off by default — enable per install (the Docker Compose equivalents are
+`API_MCP_SERVER_ENABLED=true` and the `analytics` profile, respectively):
+
+```bash
+--set services.mcp-manager.enabled=true       # MCP servers per organization
+--set services.worker-analytics.enabled=true  # WORKER_ROLE=analytics ingestion
+```
 
 > **Git webhooks (required to trigger reviews).** Connecting a repo makes Kodus
 > register a webhook on the provider using `API_<provider>_CODE_MANAGEMENT_WEBHOOK`.
