@@ -152,6 +152,12 @@ global:
 # is required in production (no 'latest'); set it here or per-service.
 imageTag: ""
 
+# How many old ReplicaSets each Deployment keeps for rollback. Lower than the k8s
+# default (10) so upgrades don't pile up ReplicaSets and exhaust a namespace's
+# replicaset quota (multi-tenant / OpenShift sandbox). Raise if you need deeper
+# `kubectl rollout undo` history.
+revisionHistoryLimit: 3
+
 image:
   pullPolicy: Always
 imagePullSecrets: []
