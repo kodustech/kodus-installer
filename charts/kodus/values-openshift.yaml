@@ -23,8 +23,14 @@ route:
       host: api.kodus.apps.cluster.example.com
       serviceName: api
     webhooks:
-      host: api.kodus.apps.cluster.example.com
-      path: /webhooks
+      # Own host, NO path prefix — the webhooks service serves /github/webhook,
+      # /gitlab/webhook, … directly, so a `path:` here would break the endpoint.
+      # Set this to a REAL host and the chart auto-derives
+      # API_<provider>_CODE_MANAGEMENT_WEBHOOK = https://<this-host>/<provider>/webhook.
+      # If you leave it empty and let the OpenShift router auto-assign the host,
+      # the chart can't know it at template time — read it back after install
+      # (`oc get route <release>-webhooks`) and set the env(s) explicitly.
+      host: webhooks.kodus.apps.cluster.example.com
       serviceName: webhooks
 
 # NOTE: bundled datastores on OpenShift's restricted SCC can be finicky (the

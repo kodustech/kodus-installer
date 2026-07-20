@@ -54,14 +54,17 @@ global:
     API_E2B_KEY: ""
     API_MCP_MANAGER_JWT_SECRET: ""
     API_MCP_MANAGER_ENCRYPTION_SECRET: ""
-    API_MCP_MANAGER_COMPOSIO_API_KEY: ""
 
   # --- Non-sensitive config (rendered into the ConfigMap) ---
   # {{ .Release.Name }} refs are resolved via `tpl` in configmap.yaml.
   config:
     # Web
     WEB_NODE_ENV: "self-hosted"
-    WEB_HOSTNAME_API: ""              # REQUIRED — hostname only (no scheme/path)
+    # The web reaches the API via a SERVER-SIDE proxy (/api/proxy/…), so this must
+    # be the IN-CLUSTER API address, not a public hostname. Pointing it at the
+    # public Ingress/Route makes the web pod hairpin out to the router and fail
+    # ("fetch failed / other side closed"). Defaults to the in-cluster Service.
+    WEB_HOSTNAME_API: "{{ .Release.Name }}-api"
     WEB_PORT_API: "3001"
     WEB_PORT: "3000"
     NEXTAUTH_URL: ""                  # REQUIRED — full HTTPS URL in production
@@ -122,7 +125,20 @@ global:
     API_MCP_MANAGER_CORS_ORIGINS: "*"
     API_MCP_MANAGER_MCP_PROVIDERS: "kodusmcp,custom"
     API_MCP_MANAGER_PG_DB_SCHEMA: "mcp-manager"
-    # Git provider webhooks (fill only the one in use)
+    # Git provider webhooks — REQUIRED to connect repos. When you connect a repo,
+    # Kodus registers this exact URL as a webhook on the provider, so it MUST be a
+    # PUBLIC https URL that the provider can reach, pointing at the `webhooks`
+    # service (port 3332). Empty/localhost → the app silently skips webhook
+    # registration and reviews never trigger.
+    #
+    # AUTO-DERIVED: leave these empty and the chart fills them from the webhooks
+    # host you set in `ingress.hosts.webhooks` / `route.hosts.webhooks` as
+    #   https://<that-host>/<provider>/webhook
+    # (see kodus.webhooksBaseUrl in templates/_helpers.tpl). Derivation is skipped
+    # when the host is empty (e.g. OpenShift auto-assigns the Route host) or still
+    # the example.com placeholder — then set the value(s) below explicitly. Format:
+    #   https://<public-webhooks-host>/github/webhook     (GitHub)
+    #   https://<public-webhooks-host>/gitlab/webhook     (GitLab)
     API_GITHUB_CODE_MANAGEMENT_WEBHOOK: ""
     API_GITLAB_CODE_MANAGEMENT_WEBHOOK: ""
     GLOBAL_BITBUCKET_CODE_MANAGEMENT_WEBHOOK: ""
@@ -134,6 +150,12 @@ global:
 # IMAGE_TAG. Override a single service via services.<name>.image.tag. A pinned tag
 # is required in production (no 'latest'); set it here or per-service.
 imageTag: ""
+
+# How many old ReplicaSets each Deployment keeps for rollback. Lower than the k8s
+# default (10) so upgrades don't pile up ReplicaSets and exhaust a namespace's
+# replicaset quota (multi-tenant / OpenShift sandbox). Raise if you need deeper
+# `kubectl rollout undo` history.
+revisionHistoryLimit: 3
 
 image:
   pullPolicy: Always
@@ -278,6 +300,11 @@ ingress:
   annotations:
     nginx.ingress.kubernetes.io/ssl-redirect: "true"
     nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    # HSTS — ingress-nginx enables it by default on TLS, but set explicitly so it
+    # doesn't depend on controller defaults (belt-and-suspenders).
+    nginx.ingress.kubernetes.io/hsts: "true"
+    nginx.ingress.kubernetes.io/hsts-max-age: "31536000"
+    nginx.ingress.kubernetes.io/hsts-include-subdomains: "true"
     # cert-manager.io/cluster-issuer: ""
   tls:
     enabled: true
@@ -292,14 +319,26 @@ ingress:
       path: /
       serviceName: api
     webhooks:
-      host: api.kodus.example.com
-      path: /webhooks
+      # Dedicated host, path "/" — the webhooks server serves /github/webhook,
+      # /gitlab/webhook, … at the root (no prefix), so it must NOT share the api
+      # host under a /webhooks path (ingress-nginx forwards the path unchanged →
+      # 404). Point a DNS record + TLS SAN at this host.
+      host: webhooks.kodus.example.com
+      path: /
       serviceName: webhooks
 
 # OpenShift only (platform: openshift). Routes replace Ingress.
 route:
   enabled: true
+  # HSTS header — OpenShift Routes do NOT set it by default (ingress-nginx does),
+  # so we force it here. Tells browsers to only ever use HTTPS. Set "" to disable.
+  hsts: "max-age=31536000; includeSubDomains"
+  annotations: {}                     # extra Route annotations (timeouts, rate-limits, …)
   tls:
+    # edge = TLS terminates at the router (router→pod is plaintext in-cluster).
+    # For high-security/closed environments that require encryption all the way to
+    # the pod, use `reencrypt` (needs the app to serve TLS with a cert) or
+    # `passthrough`. HSTS above requires edge or reencrypt.
     termination: edge
     insecureEdgePolicy: Redirect      # force HTTPS
   hosts:
@@ -310,8 +349,10 @@ route:
       host: api.kodus.apps.cluster.example.com
       serviceName: api
     webhooks:
-      host: api.kodus.apps.cluster.example.com
-      path: /webhooks
+      # Dedicated host, NO path — the webhooks server serves /github/webhook,
+      # /gitlab/webhook, … at the root (no prefix). A `path:` here would break the
+      # endpoint (OpenShift Routes don't strip the prefix). See values-openshift.yaml.
+      host: webhooks.kodus.apps.cluster.example.com
       serviceName: webhooks
 
 # OpenShift only. Optional custom SecurityContextConstraints bound to the SA.

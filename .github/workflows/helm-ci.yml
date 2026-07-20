@@ -10,6 +10,11 @@ on:
     paths:
       - 'charts/**'
 
+# Least-privilege GITHUB_TOKEN: this workflow only reads the repo to lint/render
+# the charts. Set at the top level so every job inherits it.
+permissions:
+  contents: read
+
 jobs:
   lint-and-validate:
     runs-on: ubuntu-latest

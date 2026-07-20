@@ -11,6 +11,10 @@ spec:
   {{- if not $.Values.autoscaling.enabled }}
   replicas: {{ $svc.replicas | default 1 }}
   {{- end }}
+  # Cap retained old ReplicaSets. The k8s default (10 per Deployment) accumulates
+  # across upgrades and can exhaust a namespace's replicaset quota (common in
+  # multi-tenant / OpenShift sandbox namespaces), which then blocks new rollouts.
+  revisionHistoryLimit: {{ $.Values.revisionHistoryLimit | default 3 }}
   selector:
     matchLabels:
       {{- include "kodus-common.serviceSelectorLabels" (dict "root" $ "serviceName" $name) | nindent 6 }}

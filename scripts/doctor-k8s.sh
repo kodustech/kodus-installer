@@ -35,8 +35,12 @@ if ! command -v kubectl >/dev/null 2>&1; then
   bad "kubectl not found"; echo "Install kubectl and configure access to your cluster."; exit 1
 fi
 ok "kubectl present ($(kubectl version --client -o json 2>/dev/null | grep -o '"gitVersion":"[^"]*"' | head -1 | cut -d'"' -f4))"
-if ! kubectl cluster-info >/dev/null 2>&1; then
-  bad "cannot reach a cluster (check your kubeconfig/context)"; exit 1
+# Reachability WITHOUT cluster-scope RBAC: namespace-scoped users (OpenShift
+# Developer Sandbox, enterprise multi-tenant clusters) can't run `kubectl
+# cluster-info` — it needs cluster-scope. `kubectl version` only needs to reach
+# the API server, so it works for any authenticated user.
+if ! kubectl version -o json --request-timeout=8s >/dev/null 2>&1; then
+  bad "cannot reach the Kubernetes API (check your kubeconfig/context, or log in)"; exit 1
 fi
 ok "cluster reachable ($(kubectl config current-context 2>/dev/null))"
 
@@ -44,8 +48,10 @@ if [ -z "$NAMESPACE" ]; then
   NAMESPACE=$(kubectl config view --minify -o jsonpath='{..namespace}' 2>/dev/null)
   [ -z "$NAMESPACE" ] && NAMESPACE="default"
 fi
-if ! kubectl get ns "$NAMESPACE" >/dev/null 2>&1; then
-  bad "namespace '$NAMESPACE' not found"; exit 1
+# `get ns` needs cluster-scope on some clusters; fall back to a namespace-scoped
+# op so a namespace-only user still passes.
+if ! kubectl get ns "$NAMESPACE" >/dev/null 2>&1 && ! kubectl get pods -n "$NAMESPACE" >/dev/null 2>&1; then
+  bad "namespace '$NAMESPACE' not found or not accessible with your permissions"; exit 1
 fi
 ok "namespace: $NAMESPACE   release: $RELEASE"
 
@@ -135,19 +141,29 @@ fi
 # --- Config sanity (the class of error the UI hits on "save repositories") ---
 section "Config sanity (Git webhooks reachability)"
 CM="${RELEASE}-config"
+# WEB_HOSTNAME_API is the IN-CLUSTER API address the web proxies to (NOT the public
+# webhook URL — that's API_*_CODE_MANAGEMENT_WEBHOOK, checked below). Empty breaks
+# the web→api proxy (/api/proxy calls fail with "fetch failed").
 HOSTAPI=$($K get configmap "$CM" -o jsonpath='{.data.WEB_HOSTNAME_API}' 2>/dev/null)
-case "$HOSTAPI" in
-  localhost|127.0.0.1|0.0.0.0|"")
-    warn "WEB_HOSTNAME_API='${HOSTAPI:-<empty>}' — Git providers cannot reach it, so enabling repos (webhook registration) WILL fail with 'Error saving repositories'. Set a PUBLIC hostname in production." ;;
-  *) ok "WEB_HOSTNAME_API=$HOSTAPI (public-looking)" ;;
-esac
+if [ -z "$HOSTAPI" ]; then
+  bad "WEB_HOSTNAME_API is empty — the web can't reach the API (login/signup fail). Set it to the in-cluster API service (default: ${RELEASE}-api)."
+else
+  ok "WEB_HOSTNAME_API=$HOSTAPI (web→api, in-cluster)"
+fi
+# Guide the user: connecting a repo registers this URL as the provider webhook,
+# so it must be a PUBLIC https URL reaching the webhooks service at /<provider>/webhook.
+if [ -z "$($K get configmap "$CM" -o jsonpath='{.data.API_GITHUB_CODE_MANAGEMENT_WEBHOOK}{.data.API_GITLAB_CODE_MANAGEMENT_WEBHOOK}' 2>/dev/null)" ]; then
+  warn "no Git webhook configured — connecting a repo won't register a webhook. Set API_<GITHUB|GITLAB>_CODE_MANAGEMENT_WEBHOOK to a PUBLIC https URL reaching the webhooks service, e.g. https://<public-webhooks-host>/github/webhook"
+fi
 for prov in GITHUB GITLAB; do
   key="API_${prov}_CODE_MANAGEMENT_WEBHOOK"
   url=$($K get configmap "$CM" -o jsonpath="{.data.$key}" 2>/dev/null)
   [ -z "$url" ] && continue
+  provlc=$(echo "$prov" | tr '[:upper:]' '[:lower:]')
   case "$url" in
-    https://*localhost*|http://*) warn "$prov webhook not publicly usable (http or localhost): $url" ;;
-    https://*) ok "$prov webhook uses https ($url)" ;;
+    https://*localhost*|http://*) bad "$key is http/localhost ($url) — the provider will reject it, so 'save repositories' fails. Use a public https URL like https://<public-webhooks-host>/${provlc}/webhook." ;;
+    https://*/${provlc}/webhook) ok "$prov webhook: $url" ;;
+    https://*) warn "$prov webhook is https but the path looks off ($url) — expected .../${provlc}/webhook" ;;
   esac
 done
 NEXTA=$($K get configmap "$CM" -o jsonpath='{.data.NEXTAUTH_URL}' 2>/dev/null)
@@ -193,6 +209,36 @@ else
   probe "${RELEASE}-webhooks"    3332 /health/ready  "webhooks"
   probe "${RELEASE}-mcp-manager" 3101 /health        "mcp-manager"
   probe "${RELEASE}-web"         3000 /              "web"
+fi
+
+# --- RabbitMQ resource alarms ---
+# A disk/memory alarm silently BLOCKS every publisher: webhook deliveries and
+# review jobs stop being enqueued while every pod still reports "Running", so the
+# product looks up but nothing happens. The usual trigger is the stock image's
+# disk_free_limit being relative to the RAM RabbitMQ detects — in a container that
+# is the NODE's RAM, not the pod limit, so on a small PVC the limit is unreachable
+# and the alarm never clears. Read-only check via a bundled RabbitMQ pod.
+section "RabbitMQ resource alarms"
+RMQ_POD="${RELEASE}-rabbitmq-0"
+if ! $K get pod "$RMQ_POD" >/dev/null 2>&1; then
+  echo -e "  ${BLUE}‣${NC} no bundled RabbitMQ pod ($RMQ_POD) — external/operator mode, skipping"
+else
+  alarm_out=$($K exec "$RMQ_POD" -c rabbitmq -- rabbitmqctl eval 'rabbit_alarm:get_alarms().' 2>&1)
+  alarm_rc=$?
+  alarm_clean=$(echo "$alarm_out" | tr -d '[:space:]')
+  if [ $alarm_rc -ne 0 ] && echo "$alarm_out" | grep -qiE "forbidden|cannot exec|not allowed|denied"; then
+    warn "couldn't check RabbitMQ alarms (exec not permitted for this user)"
+  elif [ "$alarm_clean" = "[]" ]; then
+    ok "RabbitMQ: no resource alarms (publishers not blocked)"
+  elif [ $alarm_rc -ne 0 ] || [ -z "$alarm_clean" ]; then
+    warn "couldn't read RabbitMQ alarms: ${alarm_out}"
+  else
+    bad "RabbitMQ resource ALARM active — publishers blocked; webhook & review jobs won't enqueue"
+    echo "     alarms: $alarm_clean"
+    echo "     Likely disk_free_limit relative to host RAM on a small PVC (bundled mode sets"
+    echo "     total_memory_available_override_value to fix this — check you're on a current chart)."
+    echo "     Inspect: $K exec $RMQ_POD -c rabbitmq -- rabbitmqctl status | grep -A3 Alarms"
+  fi
 fi
 
 # --- Summary ---

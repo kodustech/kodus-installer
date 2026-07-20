@@ -1,7 +1,10 @@
 # Kodus on Kubernetes & OpenShift (Helm)
 
-Helm charts to deploy Kodus self-hosted on Kubernetes or OpenShift, alongside the
-Docker Compose option in the repo root.
+[Kodus](https://github.com/kodustech/kodus-ai) is a **self-hosted AI code reviewer**
+— its agent Kody reviews your pull requests in your own infrastructure. These Helm
+charts deploy the full stack on Kubernetes or OpenShift, alongside the Docker
+Compose option in the [repo root](../readme.md). New here? Start with the root
+README, then come back for the cluster deployment.
 
 - `kodus/` — the deployable chart (Kubernetes **and** OpenShift, via `platform`).
 - `kodus-common/` — a Helm *library* chart (shared helpers/templates). Not
@@ -59,12 +62,24 @@ helm install kodus . -f values.yaml -f values-dev.yaml -n kodus-dev --create-nam
 `values-dev.yaml` relaxes the hardening, uses `latest`, single replicas, small
 bundled stores.
 
-> **Testing Git integration locally?** Connecting a repo registers a webhook, and
-> the Git provider (GitHub/GitLab) must reach it over the public internet — a
-> `localhost` URL is rejected ("Error saving repositories"). Expose the
-> `kodus-webhooks` service with a tunnel (ngrok, cloudflared) and set
-> `global.config.WEB_HOSTNAME_API` + `API_<provider>_CODE_MANAGEMENT_WEBHOOK` to
-> the public `https://` URL. Only the webhook needs to be public.
+> **Git webhooks (required to trigger reviews).** Connecting a repo makes Kodus
+> register a webhook on the provider using `API_<provider>_CODE_MANAGEMENT_WEBHOOK`.
+> If that value is empty the app **silently skips registration** — repos connect
+> but reviews never fire. The `kodus-webhooks` server serves `/github/webhook`,
+> `/gitlab/webhook`, … at the root (no prefix), so it needs its **own public host**
+> (not the api host under a `/webhooks` path).
+>
+> - **Production:** point `ingress.hosts.webhooks.host` (or `route.hosts.webhooks.host`
+>   on OpenShift) at a dedicated public host. The chart then **auto-derives**
+>   `API_<provider>_CODE_MANAGEMENT_WEBHOOK = https://<that-host>/<provider>/webhook`
+>   — no need to set the env by hand. (Skipped when the host is empty, e.g. an
+>   OpenShift router-assigned host unknown at template time, or still the
+>   `example.com` placeholder; set the env(s) explicitly then.)
+> - **Local testing:** front `kodus-webhooks` with a tunnel (ngrok, cloudflared)
+>   and set `API_<provider>_CODE_MANAGEMENT_WEBHOOK` to the tunnel `https://` URL.
+>
+> `doctor-k8s.sh` flags an empty/`http`/wrong-path webhook value and tells you what
+> to set.
 
 ## OpenShift
 
@@ -79,9 +94,23 @@ helm install kodus . -f values.yaml -f values-openshift.yaml \
 ```
 
 `values-openshift.yaml` sets `platform: openshift` — Routes replace Ingress, a
-SCC path is wired, and pod UIDs are left to the namespace SCC. On OpenShift's
-`restricted` SCC, bundled DB images can be finicky; prefer `operator` or
-`external` for the data stores in production.
+SCC path is wired, and pod UIDs are left to the namespace SCC (no hardcoded UIDs,
+so `restricted-v2` assigns them). Leave `route.hosts.*.host` empty to let
+OpenShift auto-assign the `<name>-<namespace>.apps…` hostname.
+
+Verified on a Red Hat Developer Sandbox (`restricted-v2` SCC): every pod is
+admitted under an arbitrary UID, the Routes come up with TLS edge, and the bundled
+Postgres (pgvector) and RabbitMQ run fine as that UID.
+
+The one thing to watch on OpenShift is the **registry**, not the SCC: many
+enterprise clusters mirror or block official Docker Hub `library/*` images, so the
+bundled `mongo:8` can fail to pull (`ErrImagePull` against the cluster's mirror).
+Options:
+- override just that image with a public drop-in mirror of the same image —
+  `--set mongodb.bundled.image=mirror.gcr.io/library/mongo:8` — or mirror it into
+  your own registry and set `global.imageRegistry`;
+- or, for production, use `mode: operator` / `external` for the data stores, so the
+  images come from a registry you control.
 
 ## Data stores
 
@@ -143,6 +172,34 @@ is independent. Credentials come from Secrets you pre-create, never inline:
 kubectl -n kodus create secret generic kodus-pg    --from-literal=password='...'
 kubectl -n kodus create secret generic kodus-rabbit --from-literal=uri='amqps://user:pass@host:5671/kodus-ai'
 ```
+
+### Datastore security in closed / high-security environments
+
+The **bundled** stores are hardened for the common threat model — verified live on
+OpenShift: authentication is enforced (`mongod --auth`; Postgres/RabbitMQ require
+credentials — an unauthenticated command is rejected), passwords are auto-generated
+into Secrets, Services are `ClusterIP` (never exposed), NetworkPolicy limits access
+to Kodus pods, and every container runs non-root with dropped capabilities, seccomp,
+and no ServiceAccount token.
+
+What bundled does **not** provide — which is why it's dev/trial, not for locked-down
+production:
+
+- **TLS in transit** — bundled Mongo/Postgres/RabbitMQ speak plaintext in-cluster
+  (isolated by NetworkPolicy, but not encrypted wire-to-wire).
+- **Encryption at rest** — the community images don't encrypt data files.
+
+For air-gapped / regulated / "encrypt everything" environments:
+
+- **`mode: operator` or `external`** — the MongoDB Community Operator, CloudNativePG,
+  and RabbitMQ Cluster Operator all support TLS; managed services add encryption at
+  rest and backups.
+- **An encrypted StorageClass** — encryption at rest for the PVCs, in any mode.
+- **Digest-pinned images** — set the store image to a digest instead of a tag
+  (`--set mongodb.bundled.image=mongo@sha256:…`) for a reproducible, tamper-evident
+  supply chain; mirror them into your registry with `global.imageRegistry`.
+- **Secrets via `existingSecret` / `externalSecrets`** + etcd encryption on the
+  cluster, so credentials are never inline and are encrypted at rest.
 
 ## Secrets
 

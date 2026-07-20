@@ -1,30 +1,72 @@
 Kodus has been deployed to namespace {{ .Release.Namespace }} (release: {{ .Release.Name }}).
 
 1. Access the web UI:
-{{- if .Values.ingress.enabled }}
-   {{- range $name, $h := .Values.ingress.hosts }}{{- if eq $h.serviceName "web" }}
+{{- if and (eq .Values.platform "openshift") .Values.route.enabled }}
+  {{- range $name, $h := .Values.route.hosts }}{{- if eq $h.serviceName "web" }}
+    {{- if $h.host }}
    https://{{ $h.host }}
-   {{- end }}{{- end }}
+    {{- else }}
+   OpenShift auto-assigns the host — print it with:
+   oc get route {{ include "kodus-common.serviceFullname" (dict "root" $ "serviceName" "web") }} -n {{ $.Release.Namespace }} -o jsonpath='{.spec.host}{"\n"}'
+    {{- end }}
+  {{- end }}{{- end }}
+{{- else if .Values.ingress.enabled }}
+  {{- range $name, $h := .Values.ingress.hosts }}{{- if eq $h.serviceName "web" }}
+   https://{{ $h.host }}
+  {{- end }}{{- end }}
 {{- else }}
    kubectl port-forward -n {{ .Release.Namespace }} svc/{{ include "kodus-common.serviceFullname" (dict "root" . "serviceName" "web") }} {{ .Values.services.web.port }}:{{ .Values.services.web.port }}
-   Then open http://localhost:{{ .Values.services.web.port }}
+   Then open http://127.0.0.1:{{ .Values.services.web.port }}   (use 127.0.0.1, not localhost)
 {{- end }}
 
 2. Check status:
    kubectl get pods -n {{ .Release.Namespace }}
+   ./scripts/doctor-k8s.sh -n {{ .Release.Namespace }}          # full health check
 
-3. Migrations run as a Job on each install/upgrade. Check it with:
-   kubectl logs -n {{ .Release.Namespace }} -l app.kubernetes.io/component=migrations --tail=-1
+3. Migrations run as a Job on each install/upgrade. Follow it with:
+   kubectl logs -n {{ .Release.Namespace }} -l app.kubernetes.io/name=migrations --tail=-1
+
+{{/* ---- Attention items: not fatal, but features depend on them ---- */}}
+{{- $cfg := .Values.global.config }}
+{{- $inlineSecrets := and (not .Values.global.existingSecret) (not .Values.global.externalSecrets.enabled) }}
+{{- $warnHost := or (not $cfg.WEB_HOSTNAME_API) (has $cfg.WEB_HOSTNAME_API (list "localhost" "127.0.0.1" "0.0.0.0")) }}
+{{- $warnAuth := or (not $cfg.NEXTAUTH_URL) (hasPrefix "http://" ($cfg.NEXTAUTH_URL | toString)) }}
+{{- $warnLLM  := and $inlineSecrets (not .Values.global.secrets.API_OPEN_AI_API_KEY) }}
+{{- $warnMongoOcp := and (eq .Values.platform "openshift") (eq .Values.mongodb.mode "bundled") }}
+{{- if or $warnHost $warnAuth $warnLLM $warnMongoOcp }}
+
+⚠️  ATTENTION — review these (they won't block startup, but features depend on them):
+{{- if $warnHost }}
+   • WEB_HOSTNAME_API is not a public hostname — connecting a Git repo (webhook
+     registration) will fail with "Error saving repositories". Set it and
+     API_<provider>_CODE_MANAGEMENT_WEBHOOK to a public https URL. For local
+     testing, front the webhooks service with a tunnel (see charts/README.md).
+{{- end }}
+{{- if $warnAuth }}
+   • NEXTAUTH_URL is empty or http — sign-in and OAuth callbacks need a public
+     https URL in production.
+{{- end }}
+{{- if $warnLLM }}
+   • No LLM key set (API_OPEN_AI_API_KEY) — PR reviews won't run until you add one.
+     Anthropic/Claude keys go in the same slot. BYOK is required for self-hosted.
+{{- end }}
+{{- if $warnMongoOcp }}
+   • OpenShift + bundled MongoDB: if kodus-mongodb hits ErrImagePull, your cluster
+     likely blocks official Docker Hub images. Override the image
+     (--set mongodb.bundled.image=mirror.gcr.io/library/mongo:8) or, for
+     production, use mongodb.mode: operator / external.
+{{- end }}
+{{- end }}
 
 4. Self-hosted using Claude/Anthropic? Put the Anthropic key in API_OPEN_AI_API_KEY
    (kodus-ai reads the single LLM key from that slot and selects the SDK by model id).
 
 5. SOC 2 checklist:
-   [ ] TLS enabled on ingress
+   [ ] TLS on the {{ if eq .Values.platform "openshift" }}Route (edge/redirect){{ else }}Ingress{{ end }}
    [ ] Secrets via existingSecret or externalSecrets (no inline in prod)
-   [ ] NetworkPolicy enabled
+   [ ] NetworkPolicy enabled ({{ if .Values.networkPolicy.enabled }}on{{ else }}OFF — turn on for prod{{ end }})
    [ ] Image tags pinned (no :latest)
-   [ ] Pod Security Standards (restricted) enforced on the namespace
+   [ ] {{ if eq .Values.platform "openshift" }}restricted-v2 SCC (default){{ else }}Pod Security Standards (restricted) enforced on the namespace{{ end }}
    [ ] Centralized logging configured (all services log JSON to stdout)
 
 Docs: https://docs.kodus.io

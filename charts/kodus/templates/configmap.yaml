@@ -5,6 +5,18 @@ metadata:
   labels:
     {{- include "kodus.labels" . | nindent 4 }}
 data:
-  {{- range $key, $value := .Values.global.config }}
+  {{- /* Start from user-supplied config, then fill empty webhook URLs from the
+         configured Ingress/Route host so connecting a repo registers a webhook
+         without the user hand-writing the URL. */}}
+  {{- $cfg := deepCopy .Values.global.config }}
+  {{- $base := include "kodus.webhooksBaseUrl" . }}
+  {{- if $base }}
+  {{- range $key, $seg := (include "kodus.webhookProviders" . | fromYaml) }}
+  {{- if not (index $cfg $key) }}
+  {{- $_ := set $cfg $key (printf "%s/%s/webhook" $base $seg) }}
+  {{- end }}
+  {{- end }}
+  {{- end }}
+  {{- range $key, $value := $cfg }}
   {{ $key }}: {{ tpl (toString $value) $ | quote }}
   {{- end }}
