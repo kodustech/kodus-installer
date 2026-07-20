@@ -55,10 +55,13 @@ Pick one path. **Docker Compose** is the fastest way to try Kodus on a single VM
 ### Option A — Docker Compose
 
 ```bash
+cp .env.example .env
+./scripts/generate-secrets.sh   # mint secrets into .env
+# edit .env (hosts, webhook URL, LLM key) — see docs/compose.md
 ./scripts/install.sh
 ```
 
-Full walkthrough:
+Full guide: [docs/compose.md](docs/compose.md) (in-repo) · hosted walkthrough at
 [docs.kodus.io](https://docs.kodus.io/how_to_deploy/en/deploy_kodus/generic_vm).
 
 **Guided install with Claude Code** — an interactive install that walks you through
@@ -158,7 +161,7 @@ Common fixes:
 - **api** — application API
 - **worker** — background jobs (runs the reviews)
 - **webhooks** — receives Git provider events and enqueues review jobs
-- **kodus-mcp-manager** — provisions Model Context Protocol (MCP) servers per organization
+- **kodus-mcp-manager** — provisions Model Context Protocol (MCP) servers per organization (optional; Compose: `API_MCP_SERVER_ENABLED=true`, Helm: `services.mcp-manager.enabled=true`)
 - **rabbitmq** — message broker
 - **postgres** — primary database (pgvector)
 - **mongodb** — document store
