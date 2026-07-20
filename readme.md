@@ -110,6 +110,17 @@ Once the stack is up:
 4. **Open a pull request.** Kody reviews it automatically, or comment
    `@kody start-review` to trigger a review by hand.
 
+## Documentation
+
+Full product docs live at **[docs.kodus.io](https://docs.kodus.io)** (LLM-friendly
+index: [llms.txt](https://docs.kodus.io/llms.txt)). Most useful for self-hosting:
+
+- **Architecture** — [services, networks & data flow](https://docs.kodus.io/how_to_deploy/en/kodus_architecture)
+- **Deploy** — [Production / VM](https://docs.kodus.io/how_to_deploy/en/deploy_kodus/generic_vm) · [Local quickstart](https://docs.kodus.io/how_to_deploy/en/local_quickstart/orchestrator) · in this repo: [Docker Compose](docs/compose.md) · [Kubernetes / OpenShift](charts/README.md)
+- **Operations** — [Updating](https://docs.kodus.io/how_to_deploy/en/deploy_kodus/updating) · [Reverse proxy](https://docs.kodus.io/how_to_deploy/en/deploy_kodus/reverse_proxy) · [Troubleshooting](https://docs.kodus.io/how_to_deploy/en/deploy_kodus/troubleshooting) · [MCP manager](https://docs.kodus.io/how_to_deploy/en/deploy_kodus/mcp_manager) · [Analytics worker](https://docs.kodus.io/how_to_deploy/en/deploy_kodus/analytics_worker)
+- **Git providers** — [GitHub App](https://docs.kodus.io/how_to_deploy/en/platforms/github/github_app) · [GitHub webhook](https://docs.kodus.io/how_to_deploy/en/platforms/github/github_webhook) · [GitLab](https://docs.kodus.io/how_to_deploy/en/platforms/gitlab/gitlab_webhook) · [Bitbucket](https://docs.kodus.io/how_to_deploy/en/platforms/bitbucket/bitbucket_webhook) · [Azure DevOps](https://docs.kodus.io/how_to_deploy/en/platforms/azure_devops/azdevops_webhook) · [Forgejo](https://docs.kodus.io/how_to_deploy/en/platforms/forgejo/forgejo_webhook)
+- **LLM keys** — [BYOK (Bring Your Own Key)](https://docs.kodus.io/how_to_use/en/byok)
+
 ## External databases or RabbitMQ
 
 Already have PostgreSQL / MongoDB or RabbitMQ? Disable the local containers and
