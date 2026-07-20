@@ -61,7 +61,11 @@ global:
   config:
     # Web
     WEB_NODE_ENV: "self-hosted"
-    WEB_HOSTNAME_API: ""              # REQUIRED — hostname only (no scheme/path)
+    # The web reaches the API via a SERVER-SIDE proxy (/api/proxy/…), so this must
+    # be the IN-CLUSTER API address, not a public hostname. Pointing it at the
+    # public Ingress/Route makes the web pod hairpin out to the router and fail
+    # ("fetch failed / other side closed"). Defaults to the in-cluster Service.
+    WEB_HOSTNAME_API: "{{ .Release.Name }}-api"
     WEB_PORT_API: "3001"
     WEB_PORT: "3000"
     NEXTAUTH_URL: ""                  # REQUIRED — full HTTPS URL in production

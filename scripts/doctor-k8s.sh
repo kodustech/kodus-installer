@@ -141,12 +141,15 @@ fi
 # --- Config sanity (the class of error the UI hits on "save repositories") ---
 section "Config sanity (Git webhooks reachability)"
 CM="${RELEASE}-config"
+# WEB_HOSTNAME_API is the IN-CLUSTER API address the web proxies to (NOT the public
+# webhook URL — that's API_*_CODE_MANAGEMENT_WEBHOOK, checked below). Empty breaks
+# the web→api proxy (/api/proxy calls fail with "fetch failed").
 HOSTAPI=$($K get configmap "$CM" -o jsonpath='{.data.WEB_HOSTNAME_API}' 2>/dev/null)
-case "$HOSTAPI" in
-  localhost|127.0.0.1|0.0.0.0|"")
-    warn "WEB_HOSTNAME_API='${HOSTAPI:-<empty>}' — Git providers cannot reach it, so enabling repos (webhook registration) WILL fail with 'Error saving repositories'. Set a PUBLIC hostname in production." ;;
-  *) ok "WEB_HOSTNAME_API=$HOSTAPI (public-looking)" ;;
-esac
+if [ -z "$HOSTAPI" ]; then
+  bad "WEB_HOSTNAME_API is empty — the web can't reach the API (login/signup fail). Set it to the in-cluster API service (default: ${RELEASE}-api)."
+else
+  ok "WEB_HOSTNAME_API=$HOSTAPI (web→api, in-cluster)"
+fi
 for prov in GITHUB GITLAB; do
   key="API_${prov}_CODE_MANAGEMENT_WEBHOOK"
   url=$($K get configmap "$CM" -o jsonpath="{.data.$key}" 2>/dev/null)
