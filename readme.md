@@ -4,40 +4,75 @@
 
 </div>
 
-## Kodus Installer 
+# Kodus Installer — self-hosted AI code review
 
-This repository contains the configuration needed to deploy Kodus in your own infrastructure.
+**Kodus is a self-hosted AI code reviewer.** Its agent, **Kody**, reviews every pull
+request — flagging bugs, security issues, and quality problems and posting inline
+suggestions — so feedback is instant and consistent. Everything runs in **your own
+infrastructure**, so your code never leaves your network: a fit for private,
+regulated, and air-gapped environments.
 
-## 🛠️ Prerequisites
+This repository is the **installer** — everything needed to deploy the full Kodus
+stack (web, API, workers, webhooks, MCP manager, and data stores) via **Docker
+Compose** or **Helm** (Kubernetes / OpenShift). The product itself lives at
+[kodustech/kodus-ai](https://github.com/kodustech/kodus-ai). Full docs:
+[docs.kodus.io](https://docs.kodus.io).
 
-- Docker
-- Docker Compose
-- Git
+## How it works
 
-## 🔧 Installation
+1. **Connect a Git repo** (GitHub, GitLab, Bitbucket, Azure Repos) in the Kodus UI.
+   Kodus registers a webhook on the provider.
+2. **Open or update a pull request.** The provider calls the `webhooks` service,
+   which enqueues the job.
+3. **A worker runs the review** with your LLM, and Kody posts its feedback back on
+   the PR — automatically, or on demand with `@kody start-review`.
 
-`./scripts/install.sh`
+```mermaid
+flowchart LR
+  user((User)) --> web[kodus-web]
+  web --> api[api]
+  web --> webhooks[webhooks]
+  api --> mcp[kodus-mcp-manager]
+  api --> rabbitmq[(rabbitmq)]
+  worker[worker] --> rabbitmq
+  api --> pg[(postgres)]
+  api --> mongo[(mongodb)]
+  mcp --> pg
+  webhooks --> pg
+  webhooks --> mongo
+```
 
-For a full walkthrough on deploying, check out our docs: https://docs.kodus.io/how_to_deploy/en/deploy_kodus/generic_vm
+## Quick start
 
-### Guided install with Claude Code
+Pick one path. **Docker Compose** is the fastest way to try Kodus on a single VM;
+**Helm** is for Kubernetes / OpenShift.
 
-If you use [Claude Code](https://claude.ai/claude-code), you can run an interactive installation that walks you through every configuration option, generates secrets automatically, and verifies the deployment at the end.
+### Prerequisites
+
+- **Docker Compose path:** Docker, Docker Compose, Git
+- **Helm path:** a Kubernetes or OpenShift cluster + Helm 3
+
+### Option A — Docker Compose
+
+```bash
+./scripts/install.sh
+```
+
+Full walkthrough:
+[docs.kodus.io](https://docs.kodus.io/how_to_deploy/en/deploy_kodus/generic_vm).
+
+**Guided install with Claude Code** — an interactive install that walks you through
+every option, generates secrets, and verifies the deployment at the end:
 
 ```bash
 npx skills add kodustech/kodus-installer@kodus-install
 ```
 
-Then inside Claude Code, run:
+Then, inside [Claude Code](https://claude.ai/claude-code), run `/kodus-install`.
 
-```
-/kodus-install
-```
+### Option B — Kubernetes / OpenShift (Helm)
 
-## Kubernetes / OpenShift (Helm)
-
-Prefer Kubernetes or OpenShift over Docker Compose? Helm charts live in
-[`charts/`](charts/README.md).
+Charts live in [`charts/`](charts/README.md).
 
 ```bash
 cd charts/kodus
@@ -49,14 +84,34 @@ helm install kodus . -n kodus --create-namespace \
 
 Each data store can run `bundled` (this chart brings it up), `external` (your
 managed DB), or `operator` (CloudNativePG / RabbitMQ / Mongo operators for HA).
-OpenShift uses `-f values-openshift.yaml` (Routes + SCC). Verify with
-`./scripts/doctor-k8s.sh -n kodus`. Full guide: [charts/README.md](charts/README.md).
+OpenShift uses `-f values-openshift.yaml` (Routes + SCC). Verify any deployment
+with `./scripts/doctor-k8s.sh -n kodus`. Full guide:
+[charts/README.md](charts/README.md).
 
-## External Databases or RabbitMQ
+## Your first review
 
-If you already have PostgreSQL/MongoDB or RabbitMQ, you can disable the local containers and point Kodus to the external services.
+Once the stack is up:
 
-Example `.env`:
+1. **Open the web UI** and create an account.
+   - Docker Compose: `http://localhost:3000`
+   - Kubernetes / OpenShift: your Ingress / Route host.
+2. **Add an LLM key.** Kodus is bring-your-own-key: no reviews run without one.
+   Either set it in the UI (**Settings → BYOK**) or set `API_OPEN_AI_API_KEY` in
+   your config (**Anthropic / Claude keys go in the same slot** — Kodus picks the
+   SDK from the model id).
+3. **Connect a repository** under **Git Settings**. Kodus registers the webhook for
+   you — this needs a **public** webhook URL the provider can reach
+   (`API_<provider>_CODE_MANAGEMENT_WEBHOOK`, e.g.
+   `https://<your-host>/github/webhook`). On Helm this is auto-derived from your
+   webhooks Ingress/Route host; see [charts/README.md](charts/README.md).
+4. **Open a pull request.** Kody reviews it automatically, or comment
+   `@kody start-review` to trigger a review by hand.
+
+## External databases or RabbitMQ
+
+Already have PostgreSQL / MongoDB or RabbitMQ? Disable the local containers and
+point Kodus at your services. Example `.env`:
+
 ```bash
 USE_LOCAL_DB=false
 USE_LOCAL_RABBITMQ=false
@@ -69,76 +124,69 @@ API_MG_DB_PORT=27017
 API_RABBITMQ_URI=amqp://user:pass@your-rabbitmq-host:5672/kodus-ai
 ```
 
-When set to `false`, the installer skips starting local services and related health checks.
+When set to `false`, the installer skips starting local services and their health
+checks. (On Helm, use `postgres.mode: external` / `mongodb.mode: external` /
+`rabbitmq.mode: external` instead — see [charts/README.md](charts/README.md).)
 
 ## Troubleshooting
 
-Start with the doctor script to pinpoint common setup issues: `./scripts/doctor.sh`
+Start with the doctor script to pinpoint common setup issues:
 
-For `.env` problems specifically, run the schema validator (also invoked by doctor): `./scripts/validate-env.sh`
+- Docker Compose: `./scripts/doctor.sh`
+- Kubernetes / OpenShift: `./scripts/doctor-k8s.sh -n <namespace>`
 
-It checks each variable against the upstream schema (`.env.example` types + `scripts/schema-vars.sh` required list), flags type mismatches and missing required values, and — when containers are running — diffs your `.env` against what each container actually loaded so you can spot stale config that wasn't picked up by a recreate.
+For `.env` problems specifically, run the schema validator (also invoked by
+doctor): `./scripts/validate-env.sh`. It checks each variable against the upstream
+schema (`.env.example` types + `scripts/schema-vars.sh` required list), flags type
+mismatches and missing required values, and — when containers are running — diffs
+your `.env` against what each container actually loaded, so you can spot stale
+config that a recreate didn't pick up.
 
 Common fixes:
-- Docker daemon not running: `docker info`
-- Ports already in use: `3000`, `3001`, `3101`, `3332`, `5432`, `27017`, `5672`, `15672`, `15692`
-- `.env` missing or invalid: copy `.env.example` and fill required vars
-- RabbitMQ connection errors: ensure `API_RABBITMQ_URI` matches `RABBITMQ_DEFAULT_USER`, `RABBITMQ_DEFAULT_PASS`, and vhost `kodus-ai`
-- Database errors: confirm Postgres/Mongo credentials, then rerun `./scripts/setup-db.sh`
-- Service crash or boot loop: check logs with `docker compose logs -f api` (or `worker`, `webhooks`, `rabbitmq`)
 
-## Service Architecture
+- **Docker daemon not running:** `docker info`
+- **Ports already in use:** `3000`, `3001`, `3101`, `3332`, `5432`, `27017`, `5672`, `15672`, `15692`
+- **`.env` missing or invalid:** copy `.env.example` and fill the required vars
+- **RabbitMQ connection errors:** ensure `API_RABBITMQ_URI` matches `RABBITMQ_DEFAULT_USER`, `RABBITMQ_DEFAULT_PASS`, and vhost `kodus-ai`
+- **Database errors:** confirm Postgres / Mongo credentials, then rerun `./scripts/setup-db.sh`
+- **Service crash or boot loop:** check logs with `docker compose logs -f api` (or `worker`, `webhooks`, `rabbitmq`)
+- **Reviews never trigger:** no LLM key set, or the repo webhook can't reach the `webhooks` service — see [Your first review](#your-first-review)
 
-```mermaid
-flowchart LR
-  user((User)) --> web[kodus-web]
-  web --> api[api]
-  web --> webhooks[webhooks]
-  api --> mcp[kodus-mcp-manager]
-  api --> rabbitmq[(rabbitmq)]
-  worker[worker] --> rabbitmq
-  api --> pg[(db_kodus_postgres)]
-  api --> mongo[(db_kodus_mongodb)]
-  mcp --> pg
-  webhooks --> pg
-  webhooks --> mongo
-```
+## Services
 
-## 📦 Available Services
+- **kodus-web** — application frontend
+- **api** — application API
+- **worker** — background jobs (runs the reviews)
+- **webhooks** — receives Git provider events and enqueues review jobs
+- **kodus-mcp-manager** — provisions Model Context Protocol (MCP) servers per organization
+- **rabbitmq** — message broker
+- **postgres** — primary database (pgvector)
+- **mongodb** — document store
 
-- **kodus-web**: Application frontend
-- **api**: Application API
-- **worker**: Background jobs
-- **webhooks**: Webhooks service
-- **kodus-mcp-manager**: MCP manager service (optional, set `API_MCP_SERVER_ENABLED=true`)
-- **rabbitmq**: Message broker
-- **db_kodus_postgres**: PostgreSQL database
-- **db_kodus_mongodb**: MongoDB database
+## Security
 
-## 🔐 Security
+- Credentials are managed through environment variables / Secrets (never inline in production)
+- Inter-service traffic stays on dedicated internal networks; databases are not exposed
+- Containers run isolated; on Kubernetes, non-root with dropped capabilities and NetworkPolicy
+- For hardened / air-gapped setups, see the security notes in [charts/README.md](charts/README.md)
 
-- All credentials are managed through environment variables
-- Secure inter-service communication
-- Container isolation
-- Dedicated Docker networks
+## Contributing
 
-## 🤝 Contributing
-
-Contributions are always welcome! Please read the contribution guidelines before submitting a pull request.
+Contributions are always welcome!
 
 1. Fork the project
-2. Create your Feature Branch (`git checkout -b feat/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add some AmazingFeature'`)
-4. Push to the Branch (`git push origin feat/amazing-feature`)
-5. Open a Pull Request
+2. Create your feature branch (`git checkout -b feat/amazing-feature`)
+3. Commit your changes (`git commit -m 'Add some amazing feature'`)
+4. Push to the branch (`git push origin feat/amazing-feature`)
+5. Open a pull request
 
-## 📝 License
+## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+Licensed under the MIT License — see [LICENSE](LICENSE).
 
-## 📞 Support
+## Support
 
-For support, email support@kodus.io or open an issue in the repository.
+Email support@kodus.io or open an issue in this repository.
 
 ---
 

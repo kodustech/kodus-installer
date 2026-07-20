@@ -1,7 +1,10 @@
 # Kodus on Kubernetes & OpenShift (Helm)
 
-Helm charts to deploy Kodus self-hosted on Kubernetes or OpenShift, alongside the
-Docker Compose option in the repo root.
+[Kodus](https://github.com/kodustech/kodus-ai) is a **self-hosted AI code reviewer**
+— its agent Kody reviews your pull requests in your own infrastructure. These Helm
+charts deploy the full stack on Kubernetes or OpenShift, alongside the Docker
+Compose option in the [repo root](../readme.md). New here? Start with the root
+README, then come back for the cluster deployment.
 
 - `kodus/` — the deployable chart (Kubernetes **and** OpenShift, via `platform`).
 - `kodus-common/` — a Helm *library* chart (shared helpers/templates). Not
