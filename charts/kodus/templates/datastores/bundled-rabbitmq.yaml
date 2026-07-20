@@ -1,6 +1,28 @@
 {{- if eq .Values.rabbitmq.mode "bundled" }}
 {{- $b := .Values.rabbitmq.bundled }}
 {{- $name := printf "%s-rabbitmq" .Release.Name }}
+{{- /* Tell RabbitMQ how much memory it actually has (the pod limit), converted to
+       RabbitMQ information units (Gi→GiB, …). The stock image sets
+       vm_memory_high_watermark.relative and disk_free_limit.relative against the
+       memory RabbitMQ *detects*, but in a container it detects the NODE's RAM, not
+       the pod limit — so disk_free_limit balloons to ~1.2x host RAM and raises a
+       permanent disk alarm that blocks every publisher (the whole review pipeline
+       stalls), while the memory watermark rises far above the pod limit, risking an
+       OOMKill before RabbitMQ ever throttles. Pinning the assumed memory fixes both. */}}
+{{- $memLimit := "1Gi" }}
+{{- if and $b.resources $b.resources.limits $b.resources.limits.memory }}{{- $memLimit = $b.resources.limits.memory | toString }}{{- end }}
+{{- $rmqMem := $memLimit | replace "Gi" "GiB" | replace "Mi" "MiB" | replace "Ki" "KiB" }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $name }}-conf
+  labels:
+    {{- include "kodus.labels" . | nindent 4 }}
+data:
+  20-kodus.conf: |
+    # See the StatefulSet template header for why this override is required.
+    total_memory_available_override_value = {{ $rmqMem }}
+---
 apiVersion: v1
 kind: Service
 metadata:
@@ -120,6 +142,17 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /var/lib/rabbitmq
+            - name: kodus-conf
+              # subPath mounts just this file INTO the image's conf.d, next to the
+              # image's own 10-defaults.conf (a dir mount would hide it). conf.d
+              # files load after rabbitmq.conf, so this override wins.
+              mountPath: /etc/rabbitmq/conf.d/20-kodus.conf
+              subPath: 20-kodus.conf
+              readOnly: true
+      volumes:
+        - name: kodus-conf
+          configMap:
+            name: {{ $name }}-conf
   volumeClaimTemplates:
     # NOTE: volumeClaimTemplates is IMMUTABLE — adding fields here breaks
     # `helm upgrade` on an existing release. doctor-k8s.sh finds these PVCs by the
