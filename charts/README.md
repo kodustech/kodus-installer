@@ -59,12 +59,24 @@ helm install kodus . -f values.yaml -f values-dev.yaml -n kodus-dev --create-nam
 `values-dev.yaml` relaxes the hardening, uses `latest`, single replicas, small
 bundled stores.
 
-> **Testing Git integration locally?** Connecting a repo registers a webhook, and
-> the Git provider (GitHub/GitLab) must reach it over the public internet — a
-> `localhost` URL is rejected ("Error saving repositories"). Expose the
-> `kodus-webhooks` service with a tunnel (ngrok, cloudflared) and set
-> `global.config.WEB_HOSTNAME_API` + `API_<provider>_CODE_MANAGEMENT_WEBHOOK` to
-> the public `https://` URL. Only the webhook needs to be public.
+> **Git webhooks (required to trigger reviews).** Connecting a repo makes Kodus
+> register a webhook on the provider using `API_<provider>_CODE_MANAGEMENT_WEBHOOK`.
+> If that value is empty the app **silently skips registration** — repos connect
+> but reviews never fire. The `kodus-webhooks` server serves `/github/webhook`,
+> `/gitlab/webhook`, … at the root (no prefix), so it needs its **own public host**
+> (not the api host under a `/webhooks` path).
+>
+> - **Production:** point `ingress.hosts.webhooks.host` (or `route.hosts.webhooks.host`
+>   on OpenShift) at a dedicated public host. The chart then **auto-derives**
+>   `API_<provider>_CODE_MANAGEMENT_WEBHOOK = https://<that-host>/<provider>/webhook`
+>   — no need to set the env by hand. (Skipped when the host is empty, e.g. an
+>   OpenShift router-assigned host unknown at template time, or still the
+>   `example.com` placeholder; set the env(s) explicitly then.)
+> - **Local testing:** front `kodus-webhooks` with a tunnel (ngrok, cloudflared)
+>   and set `API_<provider>_CODE_MANAGEMENT_WEBHOOK` to the tunnel `https://` URL.
+>
+> `doctor-k8s.sh` flags an empty/`http`/wrong-path webhook value and tells you what
+> to set.
 
 ## OpenShift
 

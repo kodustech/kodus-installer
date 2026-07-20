@@ -25,7 +25,11 @@ route:
     webhooks:
       # Own host, NO path prefix — the webhooks service serves /github/webhook,
       # /gitlab/webhook, … directly, so a `path:` here would break the endpoint.
-      # Set API_GITHUB_CODE_MANAGEMENT_WEBHOOK to https://<this-host>/github/webhook.
+      # Set this to a REAL host and the chart auto-derives
+      # API_<provider>_CODE_MANAGEMENT_WEBHOOK = https://<this-host>/<provider>/webhook.
+      # If you leave it empty and let the OpenShift router auto-assign the host,
+      # the chart can't know it at template time — read it back after install
+      # (`oc get route <release>-webhooks`) and set the env(s) explicitly.
       host: webhooks.kodus.apps.cluster.example.com
       serviceName: webhooks
 

@@ -129,12 +129,17 @@ global:
     # Git provider webhooks — REQUIRED to connect repos. When you connect a repo,
     # Kodus registers this exact URL as a webhook on the provider, so it MUST be a
     # PUBLIC https URL that the provider can reach, pointing at the `webhooks`
-    # service (port 3332) with the provider's path. Empty/localhost → the provider
-    # rejects it and "save repositories" fails. Format:
+    # service (port 3332). Empty/localhost → the app silently skips webhook
+    # registration and reviews never trigger.
+    #
+    # AUTO-DERIVED: leave these empty and the chart fills them from the webhooks
+    # host you set in `ingress.hosts.webhooks` / `route.hosts.webhooks` as
+    #   https://<that-host>/<provider>/webhook
+    # (see kodus.webhooksBaseUrl in templates/_helpers.tpl). Derivation is skipped
+    # when the host is empty (e.g. OpenShift auto-assigns the Route host) or still
+    # the example.com placeholder — then set the value(s) below explicitly. Format:
     #   https://<public-webhooks-host>/github/webhook     (GitHub)
     #   https://<public-webhooks-host>/gitlab/webhook     (GitLab)
-    # Expose the webhooks service publicly via Ingress/Route (or a tunnel locally).
-    # Fill only the provider(s) you use.
     API_GITHUB_CODE_MANAGEMENT_WEBHOOK: ""
     API_GITLAB_CODE_MANAGEMENT_WEBHOOK: ""
     GLOBAL_BITBUCKET_CODE_MANAGEMENT_WEBHOOK: ""
@@ -309,8 +314,12 @@ ingress:
       path: /
       serviceName: api
     webhooks:
-      host: api.kodus.example.com
-      path: /webhooks
+      # Dedicated host, path "/" — the webhooks server serves /github/webhook,
+      # /gitlab/webhook, … at the root (no prefix), so it must NOT share the api
+      # host under a /webhooks path (ingress-nginx forwards the path unchanged →
+      # 404). Point a DNS record + TLS SAN at this host.
+      host: webhooks.kodus.example.com
+      path: /
       serviceName: webhooks
 
 # OpenShift only (platform: openshift). Routes replace Ingress.
@@ -335,8 +344,10 @@ route:
       host: api.kodus.apps.cluster.example.com
       serviceName: api
     webhooks:
-      host: api.kodus.apps.cluster.example.com
-      path: /webhooks
+      # Dedicated host, NO path — the webhooks server serves /github/webhook,
+      # /gitlab/webhook, … at the root (no prefix). A `path:` here would break the
+      # endpoint (OpenShift Routes don't strip the prefix). See values-openshift.yaml.
+      host: webhooks.kodus.apps.cluster.example.com
       serviceName: webhooks
 
 # OpenShift only. Optional custom SecurityContextConstraints bound to the SA.
