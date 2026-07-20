@@ -211,6 +211,36 @@ else
   probe "${RELEASE}-web"         3000 /              "web"
 fi
 
+# --- RabbitMQ resource alarms ---
+# A disk/memory alarm silently BLOCKS every publisher: webhook deliveries and
+# review jobs stop being enqueued while every pod still reports "Running", so the
+# product looks up but nothing happens. The usual trigger is the stock image's
+# disk_free_limit being relative to the RAM RabbitMQ detects — in a container that
+# is the NODE's RAM, not the pod limit, so on a small PVC the limit is unreachable
+# and the alarm never clears. Read-only check via a bundled RabbitMQ pod.
+section "RabbitMQ resource alarms"
+RMQ_POD="${RELEASE}-rabbitmq-0"
+if ! $K get pod "$RMQ_POD" >/dev/null 2>&1; then
+  echo -e "  ${BLUE}‣${NC} no bundled RabbitMQ pod ($RMQ_POD) — external/operator mode, skipping"
+else
+  alarm_out=$($K exec "$RMQ_POD" -c rabbitmq -- rabbitmqctl eval 'rabbit_alarm:get_alarms().' 2>&1)
+  alarm_rc=$?
+  alarm_clean=$(echo "$alarm_out" | tr -d '[:space:]')
+  if [ $alarm_rc -ne 0 ] && echo "$alarm_out" | grep -qiE "forbidden|cannot exec|not allowed|denied"; then
+    warn "couldn't check RabbitMQ alarms (exec not permitted for this user)"
+  elif [ "$alarm_clean" = "[]" ]; then
+    ok "RabbitMQ: no resource alarms (publishers not blocked)"
+  elif [ $alarm_rc -ne 0 ] || [ -z "$alarm_clean" ]; then
+    warn "couldn't read RabbitMQ alarms: ${alarm_out}"
+  else
+    bad "RabbitMQ resource ALARM active — publishers blocked; webhook & review jobs won't enqueue"
+    echo "     alarms: $alarm_clean"
+    echo "     Likely disk_free_limit relative to host RAM on a small PVC (bundled mode sets"
+    echo "     total_memory_available_override_value to fix this — check you're on a current chart)."
+    echo "     Inspect: $K exec $RMQ_POD -c rabbitmq -- rabbitmqctl status | grep -A3 Alarms"
+  fi
+fi
+
 # --- Summary ---
 section "Summary"
 echo -e "  ${GREEN}${PASS} ok${NC}   ${YELLOW}${WARN} warn${NC}   ${RED}${FAIL} fail${NC}"
