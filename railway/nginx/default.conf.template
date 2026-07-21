@@ -1,6 +1,7 @@
 server {
   listen ${PORT};
   server_name _;
+  resolver 127.0.0.11 valid=30s ipv6=off;
 
   client_max_body_size 50m;
 
@@ -17,11 +18,19 @@ server {
   proxy_set_header X-Forwarded-Proto $scheme;
   proxy_cache_bypass $http_upgrade;
 
+  location ~ ^/agent-wrapper/(?<agent_path>.*)$ {
+    proxy_pass ${AGENT_ROUTER_INTERNAL_URL}/$agent_path$is_args$args;
+  }
+
   location ~ ^/(github|gitlab|bitbucket|azure-repos|azdevops|forgejo)/webhook {
     proxy_pass ${WEBHOOKS_INTERNAL_URL};
   }
 
-  location / {
+  location = /health {
     proxy_pass ${API_INTERNAL_URL};
+  }
+
+  location / {
+    proxy_pass ${WEB_INTERNAL_URL};
   }
 }
