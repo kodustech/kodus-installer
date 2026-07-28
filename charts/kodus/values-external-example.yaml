@@ -6,7 +6,7 @@
 # at what you already have. Layer this on top of values.yaml:
 #
 #   helm install kodus . -f values.yaml -f values-external-example.yaml \
-#     -n kodus --create-namespace --set imageTag=2.1.24
+#     -n kodus --create-namespace --set imageTag=2.1.27
 #
 # ------------------------------------------------------------------------
 # PREREQUISITES (do these on your existing infra FIRST — they are baked into

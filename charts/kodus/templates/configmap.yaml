@@ -17,6 +17,21 @@ data:
   {{- end }}
   {{- end }}
   {{- end }}
+  {{/* Same idea for the MCP OAuth callback: the browser is redirected back to the
+       WEB origin (not the mcp-manager), so an empty value ships a broken OAuth
+       flow. Derive it from the public web URL when the user didn't set one. */}}
+  {{- if index .Values.services "mcp-manager" | dig "enabled" false }}
+  {{- $webBase := include "kodus.webBaseUrl" . }}
+  {{- if and $webBase (not (index $cfg "API_MCP_MANAGER_REDIRECT_URI")) }}
+  {{- $_ := set $cfg "API_MCP_MANAGER_REDIRECT_URI" (printf "%s/setup/mcp/oauth" $webBase) }}
+  {{- end }}
+  {{/* CORS: scope to the web origin when we can derive it. "*" is the fallback for
+       an unknown host, not the default — a wide-open default survives into
+       production precisely because nothing ever fails to remind you. */}}
+  {{- if not (index $cfg "API_MCP_MANAGER_CORS_ORIGINS") }}
+  {{- $_ := set $cfg "API_MCP_MANAGER_CORS_ORIGINS" ($webBase | default "*") }}
+  {{- end }}
+  {{- end }}
   {{- range $key, $value := $cfg }}
   {{ $key }}: {{ tpl (toString $value) $ | quote }}
   {{- end }}

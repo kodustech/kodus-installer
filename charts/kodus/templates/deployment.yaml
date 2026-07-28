@@ -65,7 +65,19 @@ spec:
             {{- toYaml $svc.resources | nindent 12 }}
           volumeMounts:
             {{- include "kodus-common.tmpVolumeMount" $ | nindent 12 }}
+            {{- range $i, $path := ($svc.writablePaths | default list) }}
+            - name: writable-{{ $i }}
+              mountPath: {{ $path | quote }}
+            {{- end }}
       volumes:
         {{- include "kodus-common.tmpVolume" $ | nindent 8 }}
+        {{- /* Per-service scratch dirs for frameworks that insist on writing inside
+               their own tree despite readOnlyRootFilesystem. emptyDir (not a PVC) is
+               deliberate: these hold derived caches, per-pod and safe to lose. */ -}}
+        {{- range $i, $path := ($svc.writablePaths | default list) }}
+        - name: writable-{{ $i }}
+          emptyDir:
+            sizeLimit: {{ $svc.writablePathsSizeLimit | default "256Mi" }}
+        {{- end }}
 {{- end }}
 {{- end }}

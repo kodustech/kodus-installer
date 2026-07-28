@@ -82,7 +82,7 @@ cd charts/kodus
 helm dependency build
 # Kubernetes (bundled data stores — one command, no operators):
 helm install kodus . -n kodus --create-namespace \
-  --set imageTag=2.1.24   # one tag for the whole stack; + hosts — see charts/README.md
+  --set imageTag=2.1.27   # one tag for the whole stack; + hosts — see charts/README.md
 ```
 
 Each data store can run `bundled` (this chart brings it up), `external` (your

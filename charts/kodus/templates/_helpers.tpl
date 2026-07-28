@@ -34,6 +34,31 @@ plausible-but-wrong URL. When empty, doctor-k8s.sh guides the user to set it.
 {{- end -}}
 
 {{/*
+Public base URL of the `web` service. NEXTAUTH_URL wins when set — it is already
+required to be the full public HTTPS URL, so it is the most reliable source and
+keeps the OAuth redirect on the same origin the user signs in on. Otherwise fall
+back to the configured Route/Ingress host, with the same safety rules as
+webhooksBaseUrl: returns "" rather than guessing when the host is unknown or is
+still the example.com placeholder. Used to auto-derive API_MCP_MANAGER_REDIRECT_URI.
+*/}}
+{{- define "kodus.webBaseUrl" -}}
+{{- $url := (.Values.global.config.NEXTAUTH_URL | default "") -}}
+{{- if and $url (not (contains "example.com" $url)) -}}
+{{ trimSuffix "/" $url }}
+{{- else -}}
+{{- $host := "" -}}
+{{- $scheme := "https" -}}
+{{- if eq .Values.platform "openshift" -}}
+{{- if .Values.route.enabled -}}{{- with .Values.route.hosts.web }}{{- $host = .host | default "" -}}{{- end -}}{{- end -}}
+{{- else -}}
+{{- if .Values.ingress.enabled -}}{{- with .Values.ingress.hosts.web }}{{- $host = .host | default "" -}}{{- end -}}{{- end -}}
+{{- if not .Values.ingress.tls.enabled -}}{{- $scheme = "http" -}}{{- end -}}
+{{- end -}}
+{{- if and $host (not (contains "example.com" $host)) -}}{{ printf "%s://%s" $scheme $host }}{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
 Provider → webhook path segment. The webhooks server mounts each controller at
 /<segment>/webhook with NO global prefix (apps/webhooks/src/main.ts has no
 setGlobalPrefix), so the public URL is <base>/<segment>/webhook.

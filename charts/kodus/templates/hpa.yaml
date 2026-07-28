@@ -13,8 +13,13 @@ spec:
     apiVersion: apps/v1
     kind: Deployment
     name: {{ include "kodus-common.serviceFullname" (dict "root" $ "serviceName" $name) }}
-  minReplicas: {{ $.Values.autoscaling.minReplicas | default 2 }}
-  maxReplicas: {{ $.Values.autoscaling.maxReplicas | default 10 }}
+  {{/* A service's own `replicas` is the floor. Without this the global
+       minReplicas silently overrode it — values.yaml declaring `replicas: 1`
+       (mcp-manager, worker-analytics) still produced 2 pods, because a Deployment's
+       replicas field is ignored once an HPA drives it. Treating it as minReplicas
+       keeps the declared value meaningful instead of dead config. */}}
+  minReplicas: {{ $svc.replicas | default $.Values.autoscaling.minReplicas | default 2 }}
+  maxReplicas: {{ max ($svc.replicas | default 0 | int) ($.Values.autoscaling.maxReplicas | default 10 | int) }}
   metrics:
     {{- if $.Values.autoscaling.targetCPU }}
     - type: Resource

@@ -107,7 +107,7 @@ global:
     API_CRON_KODY_LEARNING: "0 0 * * 6"
     API_CRON_CHECK_IF_PR_SHOULD_BE_APPROVED: "*/2 * * * *"
     # MCP (all only relevant when services.mcp-manager.enabled=true)
-    API_MCP_SERVER_ENABLED: "false"
+    API_MCP_SERVER_ENABLED: "true"
     API_KODUS_SERVICE_MCP_MANAGER: "http://{{ .Release.Name }}-mcp-manager:3101"
     API_KODUS_MCP_SERVER_URL: "http://{{ .Release.Name }}-api:3001/mcp"
     # web → mcp-manager (frontend reaches it in-cluster by default)
@@ -119,10 +119,17 @@ global:
     API_MCP_MANAGER_DATABASE_ENV: "production"
     # Browser OAuth setup flow lands here — MUST be your PUBLIC web URL when MCP is
     # enabled, e.g. https://kodus.example.com/setup/mcp/oauth (matches NEXTAUTH_URL host).
+    # AUTO-DERIVED (like the webhook URLs): leave empty and the chart fills it with
+    # <NEXTAUTH_URL or the web Route/Ingress host>/setup/mcp/oauth. Derivation is
+    # skipped when neither is known, so set it explicitly if you let the OpenShift
+    # router auto-assign the web host.
     API_MCP_MANAGER_REDIRECT_URI: ""
-    # CORS for the mcp-manager. "*" is convenient but permissive; scope it to your
-    # web origin (the NEXTAUTH_URL host) for a hardened install.
-    API_MCP_MANAGER_CORS_ORIGINS: "*"
+    # CORS for the mcp-manager. AUTO-DERIVED: left empty, the chart scopes it to
+    # the public web origin (NEXTAUTH_URL, else the web Route/Ingress host) — the
+    # only origin that legitimately calls it. It falls back to "*" only when
+    # neither is known at template time, so a hardened default never depends on
+    # the operator remembering to narrow it. Set explicitly to override.
+    API_MCP_MANAGER_CORS_ORIGINS: ""
     API_MCP_MANAGER_MCP_PROVIDERS: "kodusmcp,custom"
     API_MCP_MANAGER_PG_DB_SCHEMA: "mcp-manager"
     # Git provider webhooks — REQUIRED to connect repos. When you connect a repo,
@@ -147,9 +154,23 @@ global:
 
 # Kodus release version applied to ALL app service images + migrations when their
 # own image.tag is empty — one value for the whole stack, like docker-compose
-# IMAGE_TAG. Override a single service via services.<name>.image.tag. A pinned tag
-# is required in production (no 'latest'); set it here or per-service.
-imageTag: ""
+# IMAGE_TAG. Override a single service via services.<name>.image.tag.
+#
+# Defaults to `latest` so a fresh install always gets the current release: a pinned
+# default goes stale the moment a new version ships, and silently installs old code.
+#
+# PIN THIS for anything you need to reproduce, roll back, or support:
+#   --set imageTag=2.1.27          (or services.<name>.image.digest for SHA pinning)
+# Three things `latest` costs you, all of which pinning buys back:
+#   1. Mixed versions in one Service. imagePullPolicy is Always and the HPA scales
+#      2→4; running pods never re-pull, so a replica added next week pulls a NEWER
+#      image than its siblings and both answer traffic behind the same endpoint.
+#   2. Unintended upgrades. The migration Job is recreated every revision, so a
+#      `helm upgrade` meant to change one limit also pulls new app code and runs its
+#      schema migrations — which do not auto-revert.
+#   3. No rollback. `helm rollback` restores values, not image content; `latest`
+#      re-resolves to the same new image.
+imageTag: latest
 
 # How many old ReplicaSets each Deployment keeps for rollback. Lower than the k8s
 # default (10) so upgrades don't pile up ReplicaSets and exhaust a namespace's
@@ -176,6 +197,12 @@ services:
     replicas: 2
     probes:
       path: /
+    # Next.js writes its image-optimization and ISR caches *inside* its own build
+    # tree, which readOnlyRootFilesystem blocks. It degrades silently rather than
+    # crashing — "Failed to write image to cache … EROFS" in the log, and every
+    # image request re-optimizes from scratch, burning CPU for the pod's lifetime.
+    writablePaths:
+      - /usr/src/app/apps/web/.next/cache
     resources:
       requests: { cpu: 100m, memory: 256Mi }
       limits:   { cpu: 500m, memory: 512Mi }
@@ -190,9 +217,12 @@ services:
     probes:
       path: /health/simple             # shallow (liveness/startup)
       readinessPath: /health           # deep (app + RabbitMQ + Postgres)
+    # Measured idle footprint is ~430Mi, so a 512Mi request left the pod at ~85%
+    # before serving a single review. Requests are what the scheduler and the HPA
+    # divide by, so undersizing them distorts both.
     resources:
-      requests: { cpu: 250m, memory: 512Mi }
-      limits:   { cpu: "1", memory: 1Gi }
+      requests: { cpu: 250m, memory: 768Mi }
+      limits:   { cpu: "1", memory: 1536Mi }
 
   worker:
     enabled: true
@@ -204,16 +234,25 @@ services:
     env:
       WORKER_ROLE: code-review
       RUN_MIGRATIONS: "false"
+    # The worker serves its own health endpoint on 3334, checking its consumer
+    # channels. Prefer it over the exec probe it replaced: an exec probe runs in a
+    # SEPARATE process, so it keeps reporting healthy while the worker's event loop
+    # is wedged — the exact failure a liveness probe exists to catch. It also spawned
+    # a full Node runtime and opened a fresh AMQP connection every 15s per pod.
     probes:
-      type: exec
-      command: ["node", "-e", "require('amqplib').connect(process.env.API_RABBITMQ_URI).then(()=>process.exit(0)).catch(()=>process.exit(1))"]
+      path: /health
+      port: 3334
+    # Idles at ~275Mi, but this is where reviews actually run (diff parsing, AST),
+    # so the ceiling is raised while the request stays at the measured baseline.
     resources:
       requests: { cpu: 250m, memory: 512Mi }
-      limits:   { cpu: "1", memory: 1Gi }
+      limits:   { cpu: "1", memory: 1536Mi }
 
-  # Analytics ingestion worker (Cockpit / self-hosted Enterprise). Opt-in.
+  # Analytics ingestion worker (Cockpit / self-hosted Enterprise). Harmless when
+  # the Enterprise features are unused — it just consumes its queues — so it ships
+  # on to keep the stack complete. Set false to trim it from a minimal install.
   worker-analytics:
-    enabled: false
+    enabled: true
     image:
       repository: ghcr.io/kodustech/kodus-ai-worker
       tag: ""                          # REQUIRED when enabled
@@ -222,9 +261,14 @@ services:
     env:
       WORKER_ROLE: analytics
       RUN_MIGRATIONS: "false"
+    # The worker serves its own health endpoint on 3334, checking its consumer
+    # channels. Prefer it over the exec probe it replaced: an exec probe runs in a
+    # SEPARATE process, so it keeps reporting healthy while the worker's event loop
+    # is wedged — the exact failure a liveness probe exists to catch. It also spawned
+    # a full Node runtime and opened a fresh AMQP connection every 15s per pod.
     probes:
-      type: exec
-      command: ["node", "-e", "require('amqplib').connect(process.env.API_RABBITMQ_URI).then(()=>process.exit(0)).catch(()=>process.exit(1))"]
+      path: /health
+      port: 3334
     resources:
       requests: { cpu: 250m, memory: 512Mi }
       limits:   { cpu: "1", memory: 1Gi }
@@ -239,15 +283,17 @@ services:
     probes:
       path: /health/live               # liveness/startup
       readinessPath: /health/ready     # readiness (503 when degraded)
+    # Idles at ~170Mi (~67% of a 256Mi request) — enough headroom for the scheduler,
+    # but tight once webhook bursts arrive.
     resources:
-      requests: { cpu: 100m, memory: 256Mi }
-      limits:   { cpu: 500m, memory: 512Mi }
+      requests: { cpu: 100m, memory: 384Mi }
+      limits:   { cpu: 500m, memory: 768Mi }
 
   mcp-manager:
-    enabled: false
+    enabled: true
     image:
       repository: ghcr.io/kodustech/kodus-mcp-manager
-      tag: ""                          # REQUIRED when enabled
+      tag: ""                          # falls back to the top-level imageTag
     port: 3101
     replicas: 1
     probes:
@@ -378,9 +424,22 @@ networkPolicy:
 autoscaling:
   enabled: true
   minReplicas: 2
-  maxReplicas: 10
+  # Each app replica holds a Postgres pool, so replicas × pool must stay under the
+  # server's max_connections (bundled default: postgres.bundled.maxConnections).
+  # api + worker + webhooks scale independently, so budget for all three at max.
+  # Raise this together with max_connections (or point at an external/operator DB).
+  maxReplicas: 4
   targetCPU: 80
-  targetMemory: 80
+  # targetMemory is deliberately UNSET. Memory-based HPA does not converge for
+  # these services: each Node process carries a baseline heap that does NOT shrink
+  # when replicas are added, so `replicas × (usage / target)` never falls back below
+  # the target — the HPA ratchets straight to maxReplicas at idle and stays there.
+  # Measured idle usage vs. the requests below is 55-85%, i.e. a target of 80 fires
+  # on an empty install. The visible symptom is not "high memory" but replica
+  # sprawl exhausting Postgres connections, which looks like an app outage.
+  # CPU does converge (more replicas → less CPU each), so it is the only metric here.
+  # Only set this if you have a service whose memory genuinely scales with replicas.
+  targetMemory: null
 
 pdb:
   enabled: true
@@ -417,6 +476,13 @@ postgres:
     database: kodus_db
     username: kodusdev
     password: ""                    # auto-generated when empty
+    # Passed as `-c max_connections=`. The image default (100) is not enough once
+    # api/worker/webhooks each run several replicas with their own pools; the
+    # failure mode is "sorry, too many clients already" from every service at once.
+    # Budget roughly (api + worker + webhooks) × maxReplicas × pool size, plus the
+    # migration Job. Raise together with autoscaling.maxReplicas — and note that
+    # Postgres reserves work memory per connection, so raise the memory request too.
+    maxConnections: 200
     storage:
       size: 10Gi
       storageClass: ""
@@ -455,8 +521,10 @@ mongodb:
     storage:
       size: 10Gi
       storageClass: ""
+    # WiredTiger sizes its cache from the container limit and idles at ~220Mi on an
+    # empty database, which already sat at ~86% of a 256Mi request.
     resources:
-      requests: { cpu: 100m, memory: 256Mi }
+      requests: { cpu: 100m, memory: 512Mi }
       limits:   { cpu: 500m, memory: 1Gi }
   external:
     host: ""

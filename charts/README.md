@@ -32,7 +32,7 @@ cd charts/kodus
 helm dependency build
 helm install kodus . \
   -n kodus --create-namespace \
-  --set imageTag=2.1.24 \
+  --set imageTag=2.1.27 \
   --set global.config.WEB_HOSTNAME_API=api.kodus.example.com \
   --set global.config.NEXTAUTH_URL=https://kodus.example.com \
   --set ingress.hosts.web.host=kodus.example.com \
@@ -40,17 +40,26 @@ helm install kodus . \
 ```
 
 `imageTag` sets the Kodus release for **all** services + migrations at once (like
-docker-compose `IMAGE_TAG`); override one service with
-`services.<name>.image.tag`. A pinned tag is **required** (no `latest` in
-production). Auth/crypto secrets are generated automatically with the correct
-format and stay stable across upgrades.
+docker-compose `IMAGE_TAG`); override one service with `services.<name>.image.tag`.
+It defaults to `latest`, so a fresh install always gets the current release — the
+commands above pin `2.1.27` only to show the syntax. Auth/crypto secrets are
+generated automatically with the correct format and stay stable across upgrades.
+
+**Pin a release for anything you need to reproduce, roll back, or support.** With
+`latest`, three things stop working:
+
+| | why |
+| --- | --- |
+| Consistent version across replicas | `imagePullPolicy: Always` + the HPA (2→4) means a replica added later pulls a **newer** image than its siblings; both then serve traffic behind the same Service. |
+| Predictable upgrades | The migration Job is recreated every revision, so a `helm upgrade` intended to change one limit also pulls new app code and runs its schema migrations — and those do not auto-revert. |
+| Rollback | `helm rollback` restores values, not image content; `latest` re-resolves to the same new image. Use `--set imageTag=<release>` or `image.digest`. |
 
 ### Choosing / upgrading the Kodus version
 
 ```bash
 # upgrade to a new release — the migration Job runs first (a normal Job, recreated
 # per revision — NOT a Helm hook), then the pods roll
-helm upgrade kodus . -n kodus --reuse-values --set imageTag=2.1.25
+helm upgrade kodus . -n kodus --reuse-values --set imageTag=2.1.28
 ```
 
 Secrets are preserved across the upgrade (no re-login). Roll back pods with
@@ -68,13 +77,17 @@ bundled stores.
 
 ### Optional services
 
-Both are off by default — enable per install (the Docker Compose equivalents are
-`API_MCP_SERVER_ENABLED=true` and the `analytics` profile, respectively):
+Both ship **on** so the stack comes up complete. Trim them from a minimal install:
 
 ```bash
---set services.mcp-manager.enabled=true       # MCP servers per organization
---set services.worker-analytics.enabled=true  # WORKER_ROLE=analytics ingestion
+--set services.mcp-manager.enabled=false       # MCP servers per organization
+--set services.worker-analytics.enabled=false  # WORKER_ROLE=analytics ingestion
 ```
+
+`mcp-manager` needs `API_MCP_MANAGER_REDIRECT_URI` — the public URL the browser is
+sent back to after the OAuth dance. The chart derives it from `NEXTAUTH_URL` (or the
+web Route/Ingress host) as `<web-url>/setup/mcp/oauth`; set it explicitly when
+neither is known at template time.
 
 > **Git webhooks (required to trigger reviews).** Connecting a repo makes Kodus
 > register a webhook on the provider using `API_<provider>_CODE_MANAGEMENT_WEBHOOK`.
@@ -102,10 +115,16 @@ cd charts/kodus
 helm dependency build
 helm install kodus . -f values.yaml -f values-openshift.yaml \
   -n kodus --create-namespace \
-  --set imageTag=2.1.24 \
+  --set imageTag=2.1.27 \
   --set route.hosts.web.host=kodus.apps.cluster.example.com \
-  --set route.hosts.api.host=api.kodus.apps.cluster.example.com
+  --set route.hosts.api.host=kodus-api.apps.cluster.example.com \
+  --set route.hosts.webhooks.host=kodus-webhooks.apps.cluster.example.com
 ```
+
+> Note the flat `kodus-api` / `kodus-webhooks` hosts rather than
+> `api.kodus.apps…` — see [Route hostnames must be one label
+> deep](#route-hostnames-must-be-one-label-deep) below for why the nested form
+> breaks TLS.
 
 `values-openshift.yaml` sets `platform: openshift` — Routes replace Ingress, a
 SCC path is wired, and pod UIDs are left to the namespace SCC (no hardcoded UIDs,
@@ -116,15 +135,65 @@ Verified on a Red Hat Developer Sandbox (`restricted-v2` SCC): every pod is
 admitted under an arbitrary UID, the Routes come up with TLS edge, and the bundled
 Postgres (pgvector) and RabbitMQ run fine as that UID.
 
-The one thing to watch on OpenShift is the **registry**, not the SCC: many
-enterprise clusters mirror or block official Docker Hub `library/*` images, so the
-bundled `mongo:8` can fail to pull (`ErrImagePull` against the cluster's mirror).
+The things to watch on OpenShift are the **registry** and the **certificate**, not
+the SCC.
+
+### Docker Hub mirrors break `mongo:8`
+
+Many enterprise clusters transparently rewrite `docker.io/library/*` to an internal
+mirror, so the bundled `mongo:8` fails with `ErrImagePull` — typically
+`unauthorized: The client does not have permission for manifest` against a registry
+you never configured. The rewrite usually targets **only** `library/*`, which is why
+`pgvector/pgvector` and the Kodus images pull fine while Mongo alone fails.
+
+The rewrite may not be visible in the cluster API at all: it can come from
+`registries.conf` on the nodes (a MachineConfig) rather than an
+`ImageDigestMirrorSet`, so `oc get imagedigestmirrorset` returning nothing does not
+mean there is no mirror. Read the actual error on the pod:
+
+```bash
+oc describe pod <release>-mongodb-0 -n <ns> | grep -A3 Failed
+```
+
 Options:
 - override just that image with a public drop-in mirror of the same image —
   `--set mongodb.bundled.image=mirror.gcr.io/library/mongo:8` — or mirror it into
   your own registry and set `global.imageRegistry`;
 - or, for production, use `mode: operator` / `external` for the data stores, so the
   images come from a registry you control.
+
+Changing the image on an already-failing StatefulSet does **not** recreate the pod:
+the controller waits for the current pod to become Ready, and one stuck in
+`ImagePullBackOff` never does. Delete it once after the upgrade —
+`oc delete pod <release>-mongodb-0 -n <ns>`.
+
+### Route hostnames must be one label deep
+
+The cluster's default wildcard certificate is issued for `*.apps.<cluster-domain>`,
+and **a wildcard matches exactly one DNS label**. So a host like
+`api.kodus.apps.example.com` is *not* covered, while `kodus-api.apps.example.com` is.
+
+This fails quietly in the worst way. The app answers normally (`curl -k` returns
+200), the Route reports no error, and only TLS-verifying clients reject it — which
+includes browsers and, critically, **GitHub/GitLab webhook delivery**. Reviews then
+never trigger, with no error surfaced in Kodus.
+
+Prefer flat hostnames under the apps domain:
+
+```bash
+--set route.hosts.web.host=kodus.apps.example.com \
+--set route.hosts.api.host=kodus-api.apps.example.com \
+--set route.hosts.webhooks.host=kodus-webhooks.apps.example.com
+```
+
+Verify with certificate validation **on** (no `-k`); exit code 60 means the cert
+does not cover the host:
+
+```bash
+curl -sS -o /dev/null -w '%{http_code}\n' https://kodus-webhooks.apps.example.com/health/ready
+```
+
+Use a custom certificate on the Route if you need deeper hostnames.
 
 ## Data stores
 
@@ -158,7 +227,7 @@ mode. There's a ready-to-edit overlay — `charts/kodus/values-external-example.
 
 ```bash
 helm install kodus . -f values.yaml -f values-external-example.yaml \
-  -n kodus --create-namespace --set imageTag=2.1.24
+  -n kodus --create-namespace --set imageTag=2.1.27
 ```
 
 **Prerequisites on your existing infra** (the bundled images bake these in; a

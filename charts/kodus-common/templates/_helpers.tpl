@@ -105,7 +105,7 @@ Call with (dict "svcName" $name "image" $svc.image).
 */}}
 {{- define "kodus-common.validateImageTag" -}}
 {{- if and (not .image.tag) (not .image.digest) }}
-{{- fail (printf "ERROR: services.%s.image.tag is required. Set a pinned tag (e.g. '2.1.24') or use image.digest for SHA pinning. Do NOT use 'latest' in production." .svcName) }}
+{{- fail (printf "ERROR: services.%s.image.tag is required. The chart defaults the top-level imageTag to 'latest'; pin a release (e.g. '2.1.27') or use image.digest for SHA pinning when you need reproducible installs." .svcName) }}
 {{- end }}
 {{- end }}
 
@@ -140,7 +140,7 @@ Call with (dict "image" $svc.image "root" $ "name" $name).
 {{- $img := .image -}}
 {{- $tag := $img.tag | default .root.Values.imageTag -}}
 {{- if and (not $tag) (not $img.digest) -}}
-{{- fail (printf "image tag for '%s' is required — set services.%s.image.tag or the top-level imageTag (or use image.digest). Do NOT use 'latest' in production." .name .name) -}}
+{{- fail (printf "image tag for '%s' is required — set services.%s.image.tag or the top-level imageTag (or use image.digest). The chart defaults imageTag to 'latest'; pin a release for reproducible installs." .name .name) -}}
 {{- end -}}
 {{- $ref := "" -}}
 {{- if $img.digest }}{{ $ref = printf "%s@%s" $img.repository $img.digest }}{{ else }}{{ $ref = printf "%s:%s" $img.repository $tag }}{{ end -}}

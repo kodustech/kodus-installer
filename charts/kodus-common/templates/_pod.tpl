@@ -38,21 +38,21 @@ readinessProbe:
 startupProbe:
   httpGet:
     path: {{ .svc.probes.path }}
-    port: http
+    port: {{ .svc.probes.port | default "http" }}
   periodSeconds: 5
   timeoutSeconds: 8          {{/* generous for cold start — a Next.js SSR "/" can take >3s on first hit; only affects startup */}}
   failureThreshold: 30
 livenessProbe:
   httpGet:
     path: {{ .svc.probes.path }}                                 {{/* shallow — liveness must not depend on downstream deps */}}
-    port: http
+    port: {{ .svc.probes.port | default "http" }}
   periodSeconds: 15
   timeoutSeconds: 3
   failureThreshold: 3
 readinessProbe:
   httpGet:
     path: {{ .svc.probes.readinessPath | default .svc.probes.path }}   {{/* deep when defined (app + RabbitMQ + Postgres); pulls a degraded pod from the Service */}}
-    port: http
+    port: {{ .svc.probes.port | default "http" }}
   periodSeconds: 10
   timeoutSeconds: 3
   failureThreshold: 3
