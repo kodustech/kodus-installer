@@ -234,9 +234,14 @@ services:
     env:
       WORKER_ROLE: code-review
       RUN_MIGRATIONS: "false"
+    # The worker serves its own health endpoint on 3334, checking its consumer
+    # channels. Prefer it over the exec probe it replaced: an exec probe runs in a
+    # SEPARATE process, so it keeps reporting healthy while the worker's event loop
+    # is wedged — the exact failure a liveness probe exists to catch. It also spawned
+    # a full Node runtime and opened a fresh AMQP connection every 15s per pod.
     probes:
-      type: exec
-      command: ["node", "-e", "require('amqplib').connect(process.env.API_RABBITMQ_URI).then(()=>process.exit(0)).catch(()=>process.exit(1))"]
+      path: /health
+      port: 3334
     # Idles at ~275Mi, but this is where reviews actually run (diff parsing, AST),
     # so the ceiling is raised while the request stays at the measured baseline.
     resources:
@@ -256,9 +261,14 @@ services:
     env:
       WORKER_ROLE: analytics
       RUN_MIGRATIONS: "false"
+    # The worker serves its own health endpoint on 3334, checking its consumer
+    # channels. Prefer it over the exec probe it replaced: an exec probe runs in a
+    # SEPARATE process, so it keeps reporting healthy while the worker's event loop
+    # is wedged — the exact failure a liveness probe exists to catch. It also spawned
+    # a full Node runtime and opened a fresh AMQP connection every 15s per pod.
     probes:
-      type: exec
-      command: ["node", "-e", "require('amqplib').connect(process.env.API_RABBITMQ_URI).then(()=>process.exit(0)).catch(()=>process.exit(1))"]
+      path: /health
+      port: 3334
     resources:
       requests: { cpu: 250m, memory: 512Mi }
       limits:   { cpu: "1", memory: 1Gi }
