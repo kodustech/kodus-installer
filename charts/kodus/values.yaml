@@ -195,8 +195,12 @@ services:
       tag: ""                          # REQUIRED
     port: 3000
     replicas: 2
+    # /api/health is a route handler returning {"status":"ok"}; "/" server-renders
+    # the whole sign-in page. Probing "/" ties liveness to the React tree, so a
+    # rendering regression on one page reads as a dead pod and CrashLoops the
+    # deployment — and it pays an SSR on every probe of every replica.
     probes:
-      path: /
+      path: /api/health
     # Next.js writes its image-optimization and ISR caches *inside* its own build
     # tree, which readOnlyRootFilesystem blocks. It degrades silently rather than
     # crashing — "Failed to write image to cache … EROFS" in the log, and every
