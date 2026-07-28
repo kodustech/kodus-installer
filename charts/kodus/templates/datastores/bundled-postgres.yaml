@@ -54,6 +54,12 @@ spec:
         - name: postgres
           image: {{ include "kodus-common.regPrefix" . }}{{ $b.image }}
           imagePullPolicy: {{ .Values.image.pullPolicy | default "Always" }}
+          # The stock image defaults to max_connections=100, which the app tier can
+          # exhaust: api + worker + webhooks each hold a pool, so replicas × pool
+          # grows fast under autoscaling. Running out surfaces as
+          # "sorry, too many clients already" and reads as an app outage, not a DB
+          # limit. Keep this in step with autoscaling.maxReplicas.
+          args: ["-c", "max_connections={{ $b.maxConnections }}"]
           ports:
             - name: postgres
               containerPort: 5432

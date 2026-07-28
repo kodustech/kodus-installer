@@ -8,7 +8,7 @@
 #
 # Usage:
 #   ./scripts/test-kind.sh                 # create cluster, install, verify
-#   ./scripts/test-kind.sh --tag 2.1.24    # pin a real release (default: latest)
+#   ./scripts/test-kind.sh --tag 2.1.27    # pin a real release (default: latest)
 #   ./scripts/test-kind.sh --cleanup       # delete the kind cluster and exit
 #   ./scripts/test-kind.sh --keep          # leave the cluster running afterwards
 #
