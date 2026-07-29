@@ -28,22 +28,34 @@ as StatefulSets this chart manages — the equivalent of docker-compose
 `USE_LOCAL_DB=true`. One command, no operators:
 
 ```bash
-cd charts/kodus
-helm dependency build
-helm install kodus . \
+helm install kodus oci://ghcr.io/kodustech/charts/kodus --version 0.2.0 \
   -n kodus --create-namespace \
-  --set imageTag=2.1.27 \
   --set global.config.WEB_HOSTNAME_API=api.kodus.example.com \
   --set global.config.NEXTAUTH_URL=https://kodus.example.com \
   --set ingress.hosts.web.host=kodus.example.com \
   --set ingress.hosts.api.host=api.kodus.example.com
 ```
 
-`imageTag` sets the Kodus release for **all** services + migrations at once (like
-docker-compose `IMAGE_TAG`); override one service with `services.<name>.image.tag`.
-It is **pinned by default** and matches `Chart.yaml`'s `appVersion`, so a given
-chart version always installs the same Kodus release — the `--set imageTag=` above
-is only there to make the knob visible. Auth/crypto secrets are generated
+No clone, no `helm dependency build`. Pinning `--version` is what makes
+`helm rollback` and `helm upgrade` mean something later, and what lets Argo CD or
+Flux track this chart at all.
+
+**Verify it before you install it** — the chart decides which images run, under
+which `securityContext`, holding which RBAC. See
+[verifying what you're about to install](#verifying-what-youre-about-to-install).
+
+Installing from a git checkout still works and is what you want when developing
+the chart:
+
+```bash
+cd charts/kodus && helm dependency build && helm install kodus . -n kodus --create-namespace
+```
+
+Which Kodus release you get is fixed by the chart version: `imageTag` is **pinned**
+and matches `Chart.yaml`'s `appVersion`, so chart `0.2.0` always installs Kodus
+`2.1.27`. It sets the release for **all** services + migrations at once (like
+docker-compose `IMAGE_TAG`); `--set imageTag=` moves the whole stack and
+`services.<name>.image.tag` moves one. Auth/crypto secrets are generated
 automatically with the correct format and stay stable across upgrades.
 
 It used to default to `latest`, which made sense while the only way to install was
