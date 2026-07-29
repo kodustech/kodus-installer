@@ -556,8 +556,14 @@ would silently drop the `helm test` hooks.
 ./scripts/test-kind.sh                              # install on a throwaway kind cluster
 ./scripts/test-kind.sh --keep                       # …and leave it up to poke at
 ./scripts/test-kind.sh --upgrade-from origin/main   # install main first, then upgrade to HEAD
+./scripts/test-kind.sh --tag latest                 # override the version under test
 ./scripts/test-kind.sh --cleanup                    # delete the cluster
 ```
+
+It installs `Chart.yaml`'s `appVersion` by default, not `latest`. `values-dev.yaml`
+still sets `imageTag: latest`, and `--set` beats a values file — without that
+override the E2E would faithfully prove that a tag nobody installs by default
+works, and leave the shipped one unproven.
 
 Rendering correctly and running correctly are different claims. The two bugs this
 chart actually shipped — a PDB that forbade every eviction, and a liveness probe

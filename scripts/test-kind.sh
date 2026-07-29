@@ -8,7 +8,7 @@
 #
 # Usage:
 #   ./scripts/test-kind.sh                 # create cluster, install, verify
-#   ./scripts/test-kind.sh --tag 2.1.27    # pin a real release (default: latest)
+#   ./scripts/test-kind.sh --tag latest    # override (default: Chart.yaml appVersion)
 #   ./scripts/test-kind.sh --cleanup       # delete the kind cluster and exit
 #   ./scripts/test-kind.sh --keep          # leave the cluster running afterwards
 #   ./scripts/test-kind.sh --strict        # exit non-zero if doctor or helm test fails
@@ -36,7 +36,13 @@ GREEN='\033[0;32m'; YELLOW='\033[1;33m'; RED='\033[0;31m'; BLUE='\033[0;34m'; NC
 CLUSTER="kodus-test"
 NS="kodus"
 RELEASE="kodus"
-TAG="latest"
+# Defaults to the chart's own appVersion — the version a real install actually
+# gets — rather than `latest`. values-dev.yaml still says `latest`, and it is
+# passed to helm as a values file, so without this the E2E would faithfully test a
+# tag nobody installs by default and leave the shipped one unproven. `--set` beats
+# a values file, so this wins.
+TAG=$(grep -E '^appVersion:' charts/kodus/Chart.yaml | awk '{print $2}' | tr -d '"')
+[ -n "$TAG" ] || TAG="latest"
 TIMEOUT="12m"
 KEEP="false"
 CLEANUP_ONLY="false"
