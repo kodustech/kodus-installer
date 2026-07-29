@@ -1,0 +1,81 @@
+{{- /*
+  Opens a TCP connection to each data store using THE SAME env block the app pods
+  get (kodus-common.dbEnv / rabbitmqEnv). That is the point: the chart's unit
+  tests assert the host is spelled `kodus-postgres-rw` in operator mode, and this
+  asserts something actually answers there. Static and live checks cover different
+  halves of the same failure.
+
+  Whichever mode each store is in — bundled StatefulSet, operator-generated
+  Service, or an external endpoint — this resolves and dials whatever the app
+  would, with no per-mode branching here.
+
+  `nc -w 3 host port </dev/null` rather than `nc -z`: -z is a build-time extra in
+  busybox and is missing from some images, while connect-then-EOF works on every
+  variant and is equally harmless to a database.
+
+  The pod labels below are load-bearing, not decoration: with networkPolicy
+  enabled, allow-intra-app admits traffic only from pods carrying part-of: kodus
+  and instance: <release>. Strip them from this pod and every probe here times
+  out against a perfectly healthy cluster.
+*/}}
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ include "kodus.fullname" . }}-test-datastores
+  labels:
+    {{- include "kodus.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": test
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  restartPolicy: Never
+  {{- include "kodus-common.imagePullSecrets" . | nindent 2 }}
+  securityContext:
+    runAsNonRoot: true
+    {{- if ne .Values.platform "openshift" }}
+    runAsUser: 65534
+    {{- end }}
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: check
+      image: {{ include "kodus-common.regPrefix" . }}{{ .Values.waitForDeps.image | default "busybox:1.37.0" }}
+      env:
+        {{- include "kodus-common.dbEnv" . | nindent 8 }}
+        {{- include "kodus-common.rabbitmqEnv" . | nindent 8 }}
+      command: ["sh", "-c"]
+      args:
+        - |
+          fail=0
+          probe() {
+            echo -n "  $1 -> $2:$3 ... "
+            if nc -w 3 "$2" "$3" </dev/null >/dev/null 2>&1; then
+              echo "ok"
+            else
+              echo "UNREACHABLE"; fail=1
+            fi
+          }
+          probe postgres "$API_PG_DB_HOST" "$API_PG_DB_PORT"
+          probe mongodb  "$API_MG_DB_HOST" "$API_MG_DB_PORT"
+          # The broker is configured as a URI, so strip credentials and vhost off
+          # it: amqp://user:pass@host:port/vhost -> host, port. An external URI may
+          # omit the port (amqps://host/vhost), in which case fall back by scheme.
+          hostport=$(echo "$API_RABBITMQ_URI" | sed -e 's|^[^/]*//||' -e 's|^.*@||' -e 's|/.*$||')
+          rmqhost=$(echo "$hostport" | cut -d: -f1)
+          rmqport=$(echo "$hostport" | cut -s -d: -f2)
+          if [ -z "$rmqport" ]; then
+            case "$API_RABBITMQ_URI" in
+              amqps://*) rmqport=5671 ;;
+              *)         rmqport=5672 ;;
+            esac
+          fi
+          probe rabbitmq "$rmqhost" "$rmqport"
+          exit $fail
+      resources:
+        requests: { cpu: 10m, memory: 16Mi }
+        limits:   { cpu: 50m, memory: 32Mi }
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: ["ALL"]
