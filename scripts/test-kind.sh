@@ -152,7 +152,11 @@ cleanup_worktree
 
 # --- Verify ---
 section "Doctor"
-./scripts/doctor-k8s.sh -n "$NS" -r "$RELEASE" || soft_fail "doctor reported issues (see above)"
+# --profile dev: this always installs with values-dev.yaml, which points the
+# webhook URL at localhost on purpose. Health checks stay strict; only the
+# "this config is not production-grade" findings drop to warnings.
+./scripts/doctor-k8s.sh -n "$NS" -r "$RELEASE" --profile dev \
+  || soft_fail "doctor reported issues (see above)"
 
 section "helm test"
 if ! helm test "$RELEASE" -n "$NS" --logs 2>&1 | tail -40; then

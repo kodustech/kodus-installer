@@ -5,8 +5,15 @@
 # probes the real health endpoints, never mutating anything.
 #
 # Usage:
-#   ./scripts/doctor-k8s.sh [-n <namespace>] [-r <release>]
-# Defaults: namespace = current kubectl context, release = kodus
+#   ./scripts/doctor-k8s.sh [-n <namespace>] [-r <release>] [--profile prod|dev]
+# Defaults: namespace = current kubectl context, release = kodus, profile = prod
+#
+# The profile separates two questions this script answers at once: "is this
+# deployment healthy?" and "is this configuration fit for production?". On a local
+# trial or a CI smoke test the second one is noise — values-dev.yaml points the
+# webhook URL at localhost deliberately, and reporting that as a failure trains
+# people to ignore red. --profile dev keeps every health check strict and
+# downgrades production-readiness findings to warnings.
 
 set -uo pipefail
 
@@ -20,14 +27,24 @@ section() { echo -e "\n${BLUE}== $1 ==${NC}"; }
 
 RELEASE="kodus"
 NAMESPACE=""
+PROFILE="prod"
 while [ $# -gt 0 ]; do
   case "$1" in
     -n|--namespace) NAMESPACE="$2"; shift 2 ;;
     -r|--release)   RELEASE="$2"; shift 2 ;;
-    -h|--help) echo "Usage: $0 [-n namespace] [-r release]"; exit 0 ;;
+    --profile)      PROFILE="$2"; shift 2 ;;
+    -h|--help) echo "Usage: $0 [-n namespace] [-r release] [--profile prod|dev]"; exit 0 ;;
     *) echo "Unknown arg: $1"; exit 1 ;;
   esac
 done
+case "$PROFILE" in
+  prod|dev) ;;
+  *) echo "Unknown profile: $PROFILE (expected prod or dev)"; exit 1 ;;
+esac
+
+# Production-readiness finding: a real problem for a deployment meant to serve
+# traffic, expected on a local trial. Fails under --profile prod, warns under dev.
+notprod() { if [ "$PROFILE" = "dev" ]; then warn "$1"; else bad "$1"; fi; }
 
 # --- Prerequisites ---
 section "Prerequisites"
@@ -112,7 +129,25 @@ fi
 
 # --- Pods ---
 section "Pod health"
-BADPODS=$($K get pods -l "$SEL" --no-headers 2>/dev/null | awk '$3!="Running" && $3!="Completed" {print $1" ("$3")"}')
+# A pod with a deletionTimestamp is on its way out, not broken. Run this straight
+# after `helm upgrade` and the old ReplicaSet's pods are still draining their
+# terminationGracePeriod while the new ones already serve traffic — reporting
+# those as failures makes a healthy rollout look like an outage. Read the phase
+# and the deletion timestamp explicitly rather than the STATUS column, which
+# collapses both into the word "Terminating".
+#
+# Detection still reads kubectl's computed STATUS column, NOT .status.phase: a
+# CrashLoopBackOff pod has phase=Running, so phase alone would call a crash loop
+# healthy. Terminating pods are identified separately by deletionTimestamp and
+# subtracted from the list.
+TERMINATING=$($K get pods -l "$SEL" \
+  -o jsonpath='{range .items[?(@.metadata.deletionTimestamp)]}{.metadata.name}{"\n"}{end}' 2>/dev/null | grep -v '^$')
+# Exact-name subtraction, not a substring filter: one pod's name can be a prefix
+# of another's, and a grep -F would then hide a genuinely broken pod.
+BADPODS=$($K get pods -l "$SEL" --no-headers 2>/dev/null \
+  | awk -v term="$TERMINATING" '
+      BEGIN { n = split(term, a, "\n"); for (i = 1; i <= n; i++) if (a[i] != "") t[a[i]] = 1 }
+      $3 != "Running" && $3 != "Completed" && !($1 in t) { print $1" ("$3")" }')
 RESTARTS=$($K get pods -l "$SEL" --no-headers 2>/dev/null | awk '$4>5 {print $1" (restarts="$4")"}')
 if [ -z "$($K get pods -l "$SEL" --no-headers 2>/dev/null)" ]; then
   warn "no pods match selector"
@@ -121,6 +156,10 @@ else
     ok "all pods Running/Completed"
   else
     while IFS= read -r p; do [ -n "$p" ] && bad "pod not ready: $p"; done <<< "$BADPODS"
+  fi
+  if [ -n "$TERMINATING" ]; then
+    n=$(echo "$TERMINATING" | grep -c .)
+    warn "$n pod(s) terminating — normal right after an upgrade or a scale-down: $(echo "$TERMINATING" | tr '\n' ' ')"
   fi
   if [ -n "$RESTARTS" ]; then
     while IFS= read -r p; do [ -n "$p" ] && warn "high restart count: $p"; done <<< "$RESTARTS"
@@ -161,7 +200,7 @@ for prov in GITHUB GITLAB; do
   [ -z "$url" ] && continue
   provlc=$(echo "$prov" | tr '[:upper:]' '[:lower:]')
   case "$url" in
-    https://*localhost*|http://*) bad "$key is http/localhost ($url) — the provider will reject it, so 'save repositories' fails. Use a public https URL like https://<public-webhooks-host>/${provlc}/webhook." ;;
+    https://*localhost*|http://*) notprod "$key is http/localhost ($url) — the provider will reject it, so 'save repositories' fails. Use a public https URL like https://<public-webhooks-host>/${provlc}/webhook." ;;
     https://*/${provlc}/webhook) ok "$prov webhook: $url" ;;
     https://*) warn "$prov webhook is https but the path looks off ($url) — expected .../${provlc}/webhook" ;;
   esac
