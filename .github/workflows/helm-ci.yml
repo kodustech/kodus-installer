@@ -35,6 +35,18 @@ jobs:
       - name: Lint (OpenShift)
         run: helm lint charts/kodus -f charts/kodus/values-dev.yaml -f charts/kodus/values-openshift.yaml
 
+      # lint and kubeconform both validate FORM — is this a well-formed chart,
+      # is each rendered object valid against the Kubernetes API schema. Neither
+      # can validate INTENT. A PodDisruptionBudget with minAvailable equal to the
+      # replica count is flawless YAML and a flawless PDB object; it just happens
+      # to forbid every eviction and hang `kubectl drain` forever. That shipped
+      # through this pipeline. These tests assert properties of the rendered
+      # output, which is the only layer that catches it.
+      - name: Unit tests (rendered-output assertions)
+        run: |
+          helm plugin install https://github.com/helm-unittest/helm-unittest --verify=false
+          helm unittest charts/kodus
+
       - name: Anti-drift — chart matches the generated schema manifest
         run: ./scripts/validate-chart-schema.sh
 

@@ -188,6 +188,32 @@ else
   warn "no PVCs labelled for this release (external DBs, or unlabeled bundled claims)"
 fi
 
+# --- Disruption budgets ---
+# A PDB whose minAvailable equals the number of healthy pods yields
+# disruptionsAllowed = 0. That does not slow evictions down — it forbids them
+# permanently, so `kubectl drain` blocks forever and node maintenance, cluster
+# upgrades and autoscaler compaction all stall. The error names the POD
+# ("Cannot evict pod as it would violate the pod's disruption budget"), not the
+# PDB, so it reads as an application problem. Every pod stays Running throughout,
+# which is why nothing else in this script notices.
+section "Disruption budgets"
+PDBS=$($K get pdb -l "app.kubernetes.io/part-of=kodus" \
+  -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.status.currentHealthy}{"\t"}{.status.disruptionsAllowed}{"\n"}{end}' 2>/dev/null)
+if [ -z "$PDBS" ]; then
+  ok "no PodDisruptionBudgets for this release (pdb.enabled=false, or every service runs a single replica)"
+else
+  while IFS=$'\t' read -r name healthy allowed; do
+    [ -z "$name" ] && continue
+    if [ "${allowed:-0}" = "0" ]; then
+      bad "pdb $name allows 0 disruptions (healthy=$healthy) — drain will hang on its pods"
+      echo "      raise the service's replicas above 1, or drop the PDB:"
+      echo "      helm upgrade ... --set services.<name>.replicas=2"
+    else
+      ok "pdb $name allows $allowed disruption(s) (healthy=$healthy)"
+    fi
+  done <<< "$PDBS"
+fi
+
 # --- HTTP health endpoints (via port-forward) ---
 section "Service health endpoints"
 probe() {

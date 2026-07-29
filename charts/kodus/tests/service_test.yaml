@@ -1,0 +1,64 @@
+suite: Service
+# A Service's selector is {name, instance, part-of}, and the bundled datastore
+# pods carry exactly those labels with name set to the store — so a service
+# declared as `postgres` would render a Service that selects the DATABASE pods.
+# The chart fails the render rather than installing a silent misroute.
+templates:
+  - templates/service.yaml
+tests:
+  - it: emits a Service only for services that declare a port
+    # worker and worker-analytics declare no port — they consume a queue, nothing
+    # dials them — so they get no Service.
+    asserts:
+      - hasDocuments:
+          count: 4
+
+  - it: refuses a service named after the bundled Postgres
+    set:
+      services:
+        postgres: { port: 9999 }
+    asserts:
+      - failedTemplate:
+          errorMessage: >-
+            ERROR: services.postgres is a reserved name. The bundled postgres
+            StatefulSet labels its pods app.kubernetes.io/name=postgres, so this
+            service's selector would match the datastore pods instead of its own.
+            Rename the service (e.g. postgres-api).
+
+  - it: refuses a service named after the bundled MongoDB
+    set:
+      services:
+        mongodb: { port: 9999 }
+    asserts:
+      - failedTemplate: {}
+
+  - it: refuses a service named after the bundled RabbitMQ
+    set:
+      services:
+        rabbitmq: { port: 9999 }
+    asserts:
+      - failedTemplate: {}
+
+  - it: refuses a reserved name even when the service is disabled
+    # The guard runs before the enabled/port filter: a disabled service still
+    # sits in values, and enabling it later would install the collision.
+    set:
+      services:
+        postgres: { enabled: false }
+    asserts:
+      - failedTemplate: {}
+
+  - it: allows a name that merely contains a reserved word
+    set:
+      services:
+        postgres-proxy: { port: 9999, replicas: 1 }
+    asserts:
+      - hasDocuments:
+          count: 5
+
+  - it: targets the named container port rather than a number
+    documentIndex: 0
+    asserts:
+      - equal:
+          path: spec.ports[0].targetPort
+          value: http
