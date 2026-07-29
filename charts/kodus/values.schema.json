@@ -82,7 +82,16 @@
     },
     "pdb": {
       "type": "object",
-      "properties": { "enabled": { "type": "boolean" } }
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "minAvailable": {
+          "description": "Pods that must stay up during a voluntary disruption. An integer must leave room below each service's replica floor or the chart refuses to render (disruptionsAllowed would be 0); a percentage such as \"50%\" scales with the replica count instead.",
+          "oneOf": [
+            { "type": "integer", "minimum": 0 },
+            { "type": "string", "pattern": "^[0-9]{1,3}%$" }
+          ]
+        }
+      }
     },
     "resourceQuota": {
       "type": "object",

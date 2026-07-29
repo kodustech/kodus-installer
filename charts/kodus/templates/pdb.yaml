@@ -1,6 +1,39 @@
 {{- if .Values.pdb.enabled }}
 {{- range $name, $svc := .Values.services }}
 {{- if or (kindIs "invalid" $svc.enabled) $svc.enabled }}
+{{- /*
+  Effective replica floor — mirrors whichever controller actually drives the
+  count: the HPA's minReplicas when autoscaling is on, the Deployment's replicas
+  when it isn't. Must stay in step with hpa.yaml and deployment.yaml.
+*/}}
+{{- $floor := 0 }}
+{{- if $.Values.autoscaling.enabled }}
+{{- $floor = $svc.replicas | default $.Values.autoscaling.minReplicas | default 2 | int }}
+{{- else }}
+{{- $floor = $svc.replicas | default 1 | int }}
+{{- end }}
+{{- /*
+  Skip single-replica services. `minAvailable: 1` against a floor of 1 yields
+  disruptionsAllowed = 1 - 1 = 0, which does not merely slow evictions down — it
+  forbids them outright and forever. `oc adm drain` then hangs on that pod, and
+  the error names the pod rather than the PDB, so node maintenance and cluster
+  upgrades stall on what looks like an application problem. A PDB that blocks
+  every eviction is worse than no PDB: it trades seconds of downtime for a
+  cluster that can no longer be maintained. mcp-manager and worker-analytics both
+  run at replicas 1 by default and hit exactly this.
+*/}}
+{{- if gt $floor 1 }}
+{{- /*
+  Same arithmetic, applied to the value the user actually chose. Skipping the
+  floor-of-1 services above only fixes the default; nothing stopped an operator
+  from setting pdb.minAvailable to the replica count and rebuilding the deadlock
+  by hand. `int` on a percentage string ("50%") yields 0, so percentage budgets
+  fall through untouched — they can't reach 0 disruptions the way an integer can.
+*/}}
+{{- $min := $.Values.pdb.minAvailable | default 1 }}
+{{- if ge ($min | int) $floor }}
+{{- fail (printf "ERROR: pdb.minAvailable is %v and service %q has a replica floor of %d, so disruptionsAllowed = %d - %v = 0. That PDB does not slow evictions down, it forbids them permanently, and `kubectl drain` will hang on those pods forever. Set pdb.minAvailable below %d, or raise services.%s.replicas." $min $name $floor $floor $min $floor $name) }}
+{{- end }}
 ---
 apiVersion: policy/v1
 kind: PodDisruptionBudget
@@ -9,10 +42,12 @@ metadata:
   labels:
     {{- include "kodus-common.serviceLabels" (dict "root" $ "serviceName" $name) | nindent 4 }}
 spec:
+  {{- /* Raising this to the replica floor recreates the deadlock described above. */}}
   minAvailable: {{ $.Values.pdb.minAvailable | default 1 }}
   selector:
     matchLabels:
       {{- include "kodus-common.serviceSelectorLabels" (dict "root" $ "serviceName" $name) | nindent 6 }}
+{{- end }}
 {{- end }}
 {{- end }}
 {{- end }}

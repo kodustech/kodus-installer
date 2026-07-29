@@ -14,3 +14,7 @@
 .idea/
 *.tmproj
 .vscode/
+# helm-unittest suites — CI-only, no reason to ship them to installers.
+# The leading slash anchors this to the chart root: a bare `tests/` also matches
+# templates/tests/, which silently drops the `helm test` hook from the package.
+/tests/

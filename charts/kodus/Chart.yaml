@@ -2,7 +2,10 @@ apiVersion: v2
 name: kodus
 description: Deploy Kodus AI (self-hosted) on Kubernetes
 type: application
-version: 0.1.0
+# Chart version — independent of the Kodus release in appVersion. Bump on every
+# PR that touches templates or values; helm-ci.yml enforces it, because the chart
+# is published to a registry by tag and a published version can never be re-cut.
+version: 0.2.0
 # appVersion tracks the Kodus self-hosted release (docker image tag).
 appVersion: "2.1.27"
 keywords:

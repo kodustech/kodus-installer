@@ -1,0 +1,56 @@
+{{- if (index .Values.services "webhooks" "enabled" | default true) }}
+{{- /*
+  The webhooks server is the path that makes the product do anything: a provider
+  POSTs here and a review starts. It is also the service with the most history of
+  being wired wrong — it needs its own host at the root (no path prefix), and it
+  is the only one whose Service the app never dials itself, so a broken selector
+  or an unready endpoint shows up nowhere until a real webhook is dropped.
+
+  Hitting readinessPath THROUGH the Service (not the pod IP) is what makes this
+  worth running: it proves the selector matches, the EndpointSlice is populated,
+  and the app answers — the three things that must all hold for a delivery to
+  land.
+
+  The pod labels below are load-bearing: with networkPolicy enabled, the
+  webhooks-ingress policy admits the ingress controller, and allow-intra-app
+  admits pods carrying part-of: kodus + instance: <release>. This pod is neither
+  unless it keeps those labels.
+*/}}
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ include "kodus.fullname" . }}-test-webhooks-health
+  labels:
+    {{- include "kodus.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": test
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  restartPolicy: Never
+  {{- include "kodus-common.imagePullSecrets" . | nindent 2 }}
+  securityContext:
+    runAsNonRoot: true
+    {{- if ne .Values.platform "openshift" }}
+    runAsUser: 65534          # busybox has no non-root USER; pin nobody
+    {{- end }}                {{/* openshift: SCC assigns the UID; 65534 would be rejected by restricted-v2 */}}
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: check
+      image: {{ include "kodus-common.regPrefix" . }}{{ .Values.waitForDeps.image | default "busybox:1.37.0" }}
+      command: ["sh", "-c"]
+      args:
+        - |
+          set -e
+          url="http://{{ include "kodus-common.serviceFullname" (dict "root" . "serviceName" "webhooks") }}:{{ .Values.services.webhooks.port }}{{ .Values.services.webhooks.probes.readinessPath | default "/health/ready" }}"
+          echo "GET $url"
+          wget -q -T 10 -O- "$url"
+      resources:
+        requests: { cpu: 10m, memory: 16Mi }
+        limits:   { cpu: 50m, memory: 32Mi }
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: ["ALL"]
+{{- end }}

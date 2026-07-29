@@ -1,0 +1,135 @@
+suite: PodDisruptionBudget
+# A PDB whose minAvailable equals the healthy pod count yields
+# disruptionsAllowed = 0 — evictions are not slowed, they are forbidden
+# permanently, and `kubectl drain` hangs on those pods forever.
+#
+# This is invisible to helm lint and kubeconform: the offending template rendered
+# perfectly valid YAML, and `minAvailable: 1` is a perfectly valid integer. Only
+# the arithmetic against the replica count exposes it, which is what these tests
+# assert.
+templates:
+  - templates/pdb.yaml
+tests:
+  - it: emits one PDB per service whose replica floor is above 1
+    # Defaults: api/web/webhooks/worker at 2, mcp-manager/worker-analytics at 1.
+    asserts:
+      - hasDocuments:
+          count: 4
+
+  - it: skips a service pinned to a single replica
+    set:
+      services:
+        api: { replicas: 1 }
+        web: { replicas: 1 }
+        webhooks: { replicas: 1 }
+        worker: { replicas: 1 }
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: emits a PDB once a single-replica service is scaled up
+    set:
+      services:
+        mcp-manager: { replicas: 2 }
+    asserts:
+      - hasDocuments:
+          count: 5
+
+  - it: reads the floor from the HPA when autoscaling drives the count
+    # A Deployment's replicas field is ignored once an HPA targets it, so the
+    # floor is the HPA's minReplicas — which the chart seeds from the service's
+    # own replicas, falling back to autoscaling.minReplicas.
+    set:
+      autoscaling:
+        enabled: true
+        minReplicas: 3
+      services:
+        mcp-manager: { replicas: null }
+        worker-analytics: { replicas: null }
+    asserts:
+      - hasDocuments:
+          count: 6
+
+  - it: reads the floor from the Deployment when autoscaling is off
+    set:
+      autoscaling:
+        enabled: false
+    asserts:
+      - hasDocuments:
+          count: 4
+
+  - it: treats an unset replicas as the autoscaling floor, not as one
+    set:
+      autoscaling:
+        enabled: false
+      services:
+        mcp-manager: { replicas: null }
+    asserts:
+      # replicas unset + autoscaling off falls back to 1, so still no PDB for it.
+      - hasDocuments:
+          count: 4
+
+  - it: keeps minAvailable at 1 so a floor of 2 still allows one eviction
+    documentIndex: 0
+    asserts:
+      - isKind:
+          of: PodDisruptionBudget
+      - equal:
+          path: spec.minAvailable
+          value: 1
+
+  - it: selects only its own service's pods
+    documentIndex: 0
+    asserts:
+      - equal:
+          path: spec.selector.matchLabels["app.kubernetes.io/part-of"]
+          value: kodus
+
+  - it: refuses a minAvailable that reaches the replica floor
+    # Skipping single-replica services fixes the DEFAULT. It does nothing to stop
+    # an operator from raising minAvailable to the replica count and rebuilding
+    # the same deadlock by hand — which is exactly what "make the PDB stricter"
+    # looks like if you don't know the arithmetic.
+    set:
+      pdb:
+        minAvailable: 2
+    asserts:
+      - failedTemplate:
+          errorPattern: disruptionsAllowed = 2 - 2 = 0
+
+  - it: allows a minAvailable that still leaves one disruption
+    set:
+      services:
+        api: { replicas: 3 }
+        web: { replicas: 3 }
+        webhooks: { replicas: 3 }
+        worker: { replicas: 3 }
+      pdb:
+        minAvailable: 2
+    asserts:
+      - hasDocuments: { count: 4 }
+      - equal:
+          path: spec.minAvailable
+          value: 2
+          documentIndex: 0
+
+  - it: lets a percentage budget through untouched
+    # A percentage can't hit 0 disruptions the way an integer can, and `int` on
+    # "50%" is 0, so the guard has nothing to compare — it must not fire here.
+    set:
+      pdb:
+        minAvailable: 50%
+    asserts:
+      - hasDocuments: { count: 4 }
+      - equal:
+          path: spec.minAvailable
+          value: 50%
+          documentIndex: 0
+
+  - it: emits nothing when disabled
+    set:
+      pdb:
+        enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0

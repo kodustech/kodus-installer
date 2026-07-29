@@ -1,0 +1,191 @@
+suite: ConfigMap — derived public URLs
+# The chart auto-derives three families of public URL from the Ingress/Route the
+# user configured: the per-provider webhook endpoints, the MCP OAuth callback,
+# and the mcp-manager CORS origin. All three fail SILENTLY when wrong:
+#
+#   - a wrong webhook URL registers fine on GitHub and simply never delivers, so
+#     reviews stop triggering with no error anywhere;
+#   - a wrong redirect URI fails the OAuth handshake at the provider, after the
+#     user has already signed in;
+#   - a wrong CORS origin leaves "*" in production.
+#
+# None of that is visible to lint or kubeconform — every one of those values is a
+# perfectly valid string. These tests pin the derivation itself.
+templates:
+  - templates/configmap.yaml
+release:
+  name: kodus
+tests:
+  - it: leaves the webhook URLs empty rather than guessing from the placeholder host
+    # The shipped values carry webhooks.kodus.example.com. Deriving from it would
+    # produce a confident, well-formed, undeliverable URL — worse than empty,
+    # because empty is what doctor-k8s.sh looks for when it tells the user to set it.
+    asserts:
+      - equal: { path: data.API_GITHUB_CODE_MANAGEMENT_WEBHOOK, value: "" }
+      - equal: { path: data.API_GITLAB_CODE_MANAGEMENT_WEBHOOK, value: "" }
+      - equal: { path: data.GLOBAL_BITBUCKET_CODE_MANAGEMENT_WEBHOOK, value: "" }
+      - equal: { path: data.GLOBAL_AZURE_REPOS_CODE_MANAGEMENT_WEBHOOK, value: "" }
+      - equal: { path: data.API_FORGEJO_CODE_MANAGEMENT_WEBHOOK, value: "" }
+      - equal: { path: data.API_MCP_MANAGER_REDIRECT_URI, value: "" }
+
+  - it: derives every provider webhook from the ingress host
+    # The webhooks server mounts each controller at /<segment>/webhook with no
+    # global prefix, so the segment spelling is load-bearing: azure-repos, not
+    # azure_repos or azureRepos.
+    set:
+      ingress:
+        hosts:
+          webhooks:
+            host: hooks.acme.io
+    asserts:
+      - equal:
+          path: data.API_GITHUB_CODE_MANAGEMENT_WEBHOOK
+          value: https://hooks.acme.io/github/webhook
+      - equal:
+          path: data.API_GITLAB_CODE_MANAGEMENT_WEBHOOK
+          value: https://hooks.acme.io/gitlab/webhook
+      - equal:
+          path: data.GLOBAL_BITBUCKET_CODE_MANAGEMENT_WEBHOOK
+          value: https://hooks.acme.io/bitbucket/webhook
+      - equal:
+          path: data.GLOBAL_AZURE_REPOS_CODE_MANAGEMENT_WEBHOOK
+          value: https://hooks.acme.io/azure-repos/webhook
+      - equal:
+          path: data.API_FORGEJO_CODE_MANAGEMENT_WEBHOOK
+          value: https://hooks.acme.io/forgejo/webhook
+
+  - it: follows the ingress TLS setting when choosing the scheme
+    set:
+      ingress:
+        tls:
+          enabled: false
+        hosts:
+          webhooks: { host: hooks.acme.io }
+          web: { host: app.acme.io }
+    asserts:
+      - equal:
+          path: data.API_GITHUB_CODE_MANAGEMENT_WEBHOOK
+          value: http://hooks.acme.io/github/webhook
+      - equal:
+          path: data.API_MCP_MANAGER_REDIRECT_URI
+          value: http://app.acme.io/setup/mcp/oauth
+
+  - it: reads the Route hosts on OpenShift, always over https
+    # route.yaml always emits a tls: block (termination defaults to edge), so
+    # there is no plaintext Route to account for.
+    set:
+      platform: openshift
+      route:
+        hosts:
+          webhooks: { host: hooks.apps.ocp, serviceName: webhooks }
+          web: { host: app.apps.ocp, serviceName: web }
+    asserts:
+      - equal:
+          path: data.API_GITHUB_CODE_MANAGEMENT_WEBHOOK
+          value: https://hooks.apps.ocp/github/webhook
+      - equal:
+          path: data.API_MCP_MANAGER_REDIRECT_URI
+          value: https://app.apps.ocp/setup/mcp/oauth
+
+  - it: ignores the Ingress host on OpenShift and the Route host on Kubernetes
+    # Each platform reads exactly one source. Falling back to the other would
+    # derive a URL from an object the cluster never created.
+    set:
+      platform: openshift
+      route:
+        enabled: false
+      ingress:
+        hosts:
+          webhooks: { host: hooks.acme.io }
+    asserts:
+      - equal: { path: data.API_GITHUB_CODE_MANAGEMENT_WEBHOOK, value: "" }
+
+  - it: prefers NEXTAUTH_URL over the ingress host and strips its trailing slash
+    # NEXTAUTH_URL is already required to be the full public URL, and the OAuth
+    # redirect must land on the same origin the user signed in on. The trailing
+    # slash matters: "https://host//setup/mcp/oauth" will not match the redirect
+    # URI registered with the provider.
+    set:
+      global:
+        config:
+          NEXTAUTH_URL: https://canonical.acme.io/
+      ingress:
+        hosts:
+          web: { host: app.acme.io }
+    asserts:
+      - equal:
+          path: data.API_MCP_MANAGER_REDIRECT_URI
+          value: https://canonical.acme.io/setup/mcp/oauth
+      - equal:
+          path: data.API_MCP_MANAGER_CORS_ORIGINS
+          value: https://canonical.acme.io
+
+  - it: derives the web URLs independently of the webhooks host
+    # Two different hosts serve two different services; knowing one says nothing
+    # about the other.
+    set:
+      ingress:
+        hosts:
+          web: { host: app.acme.io }
+    asserts:
+      - equal:
+          path: data.API_MCP_MANAGER_REDIRECT_URI
+          value: https://app.acme.io/setup/mcp/oauth
+      - equal: { path: data.API_GITHUB_CODE_MANAGEMENT_WEBHOOK, value: "" }
+
+  - it: never overwrites a URL the user set explicitly
+    set:
+      global:
+        config:
+          API_GITHUB_CODE_MANAGEMENT_WEBHOOK: https://proxy.internal/gh
+          API_MCP_MANAGER_CORS_ORIGINS: https://locked.example
+      ingress:
+        hosts:
+          webhooks: { host: hooks.acme.io }
+          web: { host: app.acme.io }
+    asserts:
+      - equal:
+          path: data.API_GITHUB_CODE_MANAGEMENT_WEBHOOK
+          value: https://proxy.internal/gh
+      - equal:
+          path: data.API_MCP_MANAGER_CORS_ORIGINS
+          value: https://locked.example
+      # Derivation still fills the ones left empty.
+      - equal:
+          path: data.API_GITLAB_CODE_MANAGEMENT_WEBHOOK
+          value: https://hooks.acme.io/gitlab/webhook
+
+  - it: scopes CORS to the web origin instead of falling back to "*"
+    # "*" is the fallback for an unknown host, not the default. A wide-open
+    # default survives into production precisely because nothing ever fails.
+    set:
+      ingress:
+        hosts:
+          web: { host: app.acme.io }
+    asserts:
+      - equal:
+          path: data.API_MCP_MANAGER_CORS_ORIGINS
+          value: https://app.acme.io
+
+  - it: touches neither MCP value when mcp-manager is disabled
+    # No mcp-manager pod means no CORS policy to widen — "*" here would be a
+    # gratuitous finding in an audit of a cluster that isn't even running it.
+    set:
+      services:
+        mcp-manager:
+          enabled: false
+      ingress:
+        hosts:
+          web: { host: app.acme.io }
+    asserts:
+      - equal: { path: data.API_MCP_MANAGER_CORS_ORIGINS, value: "" }
+      - equal: { path: data.API_MCP_MANAGER_REDIRECT_URI, value: "" }
+
+  - it: resolves Release.Name templating inside values
+    # configmap.yaml runs every value through `tpl`, which is what lets the
+    # shipped defaults point at in-cluster Services without knowing the release
+    # name. If that call is ever dropped, the web pod dials a host literally
+    # named "{{ .Release.Name }}-api".
+    asserts:
+      - equal: { path: data.WEB_HOSTNAME_API, value: kodus-api }
+      - equal: { path: data.API_FRONTEND_URL, value: "http://kodus-web:3000" }
