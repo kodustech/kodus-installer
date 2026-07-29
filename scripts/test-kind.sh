@@ -13,9 +13,19 @@
 #   ./scripts/test-kind.sh --keep          # leave the cluster running afterwards
 #   ./scripts/test-kind.sh --strict        # exit non-zero if doctor or helm test fails
 #   ./scripts/test-kind.sh --timeout 10m   # per-deploy rollout budget (default 12m)
+#   ./scripts/test-kind.sh --from-oci 0.2.0
+#                                          # install the PUBLISHED chart from the
+#                                          # registry instead of this working tree
 #   ./scripts/test-kind.sh --upgrade-from origin/main
 #                                          # install THAT ref's chart first, then
 #                                          # upgrade to the working tree
+#
+# --from-oci tests a different claim from every other mode here. The rest prove the
+# source tree installs; this proves the artifact people actually receive installs.
+# In between sit packaging, .helmignore, the vendored subchart and a registry round
+# trip — and a .helmignore mistake breaks the published chart while the source tree
+# stays green, which is exactly how the `helm test` hook once vanished from the
+# package.
 #
 # --strict is what CI runs. Interactively the default is lenient: you want to see
 # every problem and then poke at the cluster. In CI a swallowed failure is a green
@@ -49,6 +59,8 @@ CLEANUP_ONLY="false"
 STRICT="false"
 UPGRADE_FROM=""
 WORKTREE=""
+FROM_OCI=""
+OCI_REPO="oci://ghcr.io/kodustech/charts/kodus"
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -58,6 +70,7 @@ while [ $# -gt 0 ]; do
     --cleanup) CLEANUP_ONLY="true"; shift ;;
     --strict) STRICT="true"; shift ;;
     --timeout) TIMEOUT="$2"; shift 2 ;;
+    --from-oci) FROM_OCI="$2"; shift 2 ;;
     --upgrade-from) UPGRADE_FROM="$2"; shift 2 ;;
     -h|--help) grep '^#' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "Unknown arg: $1"; exit 1 ;;
@@ -147,13 +160,41 @@ if [ -n "$UPGRADE_FROM" ]; then
   deploy "$WORKTREE/charts/kodus" "baseline install"
 fi
 
-if [ -n "$UPGRADE_FROM" ]; then
+if [ -n "$FROM_OCI" ]; then
+  # Pulled to a local .tgz first so the failure mode is unambiguous: a registry or
+  # auth problem fails here, with the registry's own error, instead of surfacing
+  # later as a confusing rollout failure.
+  section "helm install from the registry ($OCI_REPO --version $FROM_OCI)"
+  PKGDIR=$(mktemp -d)
+  helm pull "$OCI_REPO" --version "$FROM_OCI" -d "$PKGDIR" \
+    || die "could not pull $OCI_REPO --version $FROM_OCI (published? public?)"
+  PKG=$(ls "$PKGDIR"/*.tgz 2>/dev/null | head -1)
+  [ -n "$PKG" ] || die "pull reported success but produced no chart archive"
+  echo -e "  ${GREEN}✔${NC} pulled $(basename "$PKG")"
+  # Deliberately NOT `helm dependency build`: a published chart must already carry
+  # its subcharts. If it does not, that is the bug this mode exists to catch.
+  set -x
+  helm upgrade --install "$RELEASE" "$PKG" \
+    -f charts/kodus/values-dev.yaml \
+    --set imageTag="$TAG" \
+    -n "$NS" --create-namespace \
+    --wait --timeout "$TIMEOUT"
+  rc=$?
+  set +x
+  rm -rf "$PKGDIR"
+  if [ $rc -ne 0 ]; then
+    diagnose "install from the registry did not converge"
+    die "the published chart failed to install (see diagnostics above)."
+  fi
+  echo -e "${GREEN}install from the registry converged.${NC}"
+elif [ -n "$UPGRADE_FROM" ]; then
   section "helm upgrade onto the baseline (bundled, tag=$TAG)"
+  deploy charts/kodus "install"
 else
   section "helm install (bundled, tag=$TAG)"
   echo -e "  ${YELLOW}pulling images + starting pods (can take a few minutes on first run)...${NC}"
+  deploy charts/kodus "install"
 fi
-deploy charts/kodus "install"
 cleanup_worktree
 
 # --- Verify ---

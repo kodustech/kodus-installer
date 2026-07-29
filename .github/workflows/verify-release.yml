@@ -1,0 +1,118 @@
+name: Verify published release
+
+# Installs the chart FROM THE REGISTRY, the way a user does, and verifies its
+# signature — after it has been published.
+#
+# helm-e2e.yml proves the source tree installs. That is a different claim from
+# "the artifact people receive installs". Between the two sit `helm package`,
+# `.helmignore`, the vendored kodus-common subchart, and a registry round trip.
+# A `.helmignore` mistake breaks the published chart while every source-tree check
+# stays green — which is precisely how the `helm test` hook once disappeared from
+# the package and was only caught by reading `tar -tzf` by hand.
+#
+# It also catches what no local check can: the package left private (401 for
+# everyone), a signature that never landed, or a version tag pointing at the wrong
+# digest. The first release hit two of those — cosign failed to authenticate, and
+# the package turned out to be public when the workflow assumed private.
+#
+# Triggered by chart-release.yml completing, so a broken publish is caught in
+# minutes rather than by the first person who tries to install it.
+
+on:
+  workflow_run:
+    workflows: ["Release chart (OCI)"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Chart version to verify (default: Chart.yaml version on main)'
+        type: string
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    # A failed release has nothing to verify, and re-reporting it as a second
+    # failure just doubles the noise.
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Helm
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        with:
+          version: v4.2.3
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      - name: Resolve version
+        id: v
+        shell: bash
+        run: |
+          set -euo pipefail
+          V="${{ inputs.version }}"
+          [ -n "$V" ] || V=$(grep -E '^version:' charts/kodus/Chart.yaml | awk '{print $2}')
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "verifying $V"
+
+      # No credentials anywhere in this job, deliberately. A package left private
+      # would pull fine with a token and fail for every actual user; running
+      # unauthenticated is what makes this check mean "a stranger can install it".
+      - name: Signature is valid and comes from our release workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          REF="ghcr.io/${{ github.repository_owner }}/charts/kodus:${{ steps.v.outputs.version }}"
+          cosign verify "$REF" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            --certificate-identity-regexp '^https://github.com/${{ github.repository }}/\.github/workflows/chart-release\.yml@'
+
+      # The positive case alone would pass against a chart signed by anyone at all.
+      # This asserts the identity constraint actually constrains.
+      - name: Verification rejects a foreign identity
+        shell: bash
+        run: |
+          REF="ghcr.io/${{ github.repository_owner }}/charts/kodus:${{ steps.v.outputs.version }}"
+          if cosign verify "$REF" \
+              --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+              --certificate-identity-regexp '^https://github.com/not-our-org/not-our-repo/' 2>/dev/null; then
+            echo "::error::cosign accepted a signature from an unrelated identity — the documented verify command proves nothing"
+            exit 1
+          fi
+          echo "correctly rejected"
+
+      - name: Install kind
+        uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc # v1.14.0
+        with:
+          version: v0.32.0
+          install_only: true
+
+      - name: The published chart installs and passes its tests
+        run: ./scripts/test-kind.sh --strict --keep --timeout 15m --from-oci "${{ steps.v.outputs.version }}"
+
+      - name: Collect diagnostics
+        if: failure()
+        run: |
+          mkdir -p /tmp/e2e
+          kubectl get all -n kodus -o wide > /tmp/e2e/resources.txt 2>&1 || true
+          kubectl get events -n kodus --sort-by=.lastTimestamp > /tmp/e2e/events.txt 2>&1 || true
+          for p in $(kubectl get pods -n kodus -o name 2>/dev/null); do
+            kubectl logs "$p" -n kodus --all-containers --tail 400 > "/tmp/e2e/logs-$(basename "$p").txt" 2>&1 || true
+          done
+
+      - name: Upload diagnostics
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: verify-release-${{ steps.v.outputs.version }}
+          path: /tmp/e2e
+          retention-days: 7
+
+      - name: Tear down
+        if: always()
+        run: ./scripts/test-kind.sh --cleanup || true

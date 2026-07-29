@@ -78,12 +78,15 @@ Then, inside [Claude Code](https://claude.ai/claude-code), run `/kodus-install`.
 Charts live in [`charts/`](charts/README.md).
 
 ```bash
-cd charts/kodus
-helm dependency build
-# Kubernetes (bundled data stores — one command, no operators):
-helm install kodus . -n kodus --create-namespace \
-  --set imageTag=2.1.27   # one tag for the whole stack; + hosts — see charts/README.md
+# Kubernetes (bundled data stores — one command, no operators, no clone):
+helm install kodus oci://ghcr.io/kodustech/charts/kodus --version 0.2.0 \
+  -n kodus --create-namespace   # + hosts — see charts/README.md
 ```
+
+The chart is signed; every release can be verified before you install it
+([how](charts/README.md#verifying-what-youre-about-to-install)). The chart version
+fixes the Kodus release — `0.2.0` installs `2.1.27` — so `helm rollback` and
+`helm upgrade` mean something.
 
 Each data store can run `bundled` (this chart brings it up), `external` (your
 managed DB), or `operator` (CloudNativePG / RabbitMQ / Mongo operators for HA).
