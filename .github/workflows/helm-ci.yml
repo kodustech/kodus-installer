@@ -44,7 +44,11 @@ jobs:
       # output, which is the only layer that catches it.
       - name: Unit tests (rendered-output assertions)
         run: |
-          helm plugin install https://github.com/helm-unittest/helm-unittest --verify=false
+          # Pinned: an unpinned install tracks the plugin's default branch, so CI
+          # is neither reproducible nor protected against an upstream change
+          # landing straight in every PR run. Bump deliberately.
+          helm plugin install https://github.com/helm-unittest/helm-unittest \
+            --version v1.1.2 --verify=false
           helm unittest charts/kodus
 
       - name: Anti-drift — chart matches the generated schema manifest
