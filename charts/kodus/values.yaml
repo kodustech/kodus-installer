@@ -156,21 +156,32 @@ global:
 # own image.tag is empty — one value for the whole stack, like docker-compose
 # IMAGE_TAG. Override a single service via services.<name>.image.tag.
 #
-# Defaults to `latest` so a fresh install always gets the current release: a pinned
-# default goes stale the moment a new version ships, and silently installs old code.
+# PINNED, and it must stay pinned. This used to default to `latest`, on the
+# reasoning that a pinned default goes stale the moment a new version ships. That
+# reasoning belonged to a chart you installed from a git checkout, where the only
+# version you had was whatever HEAD happened to be. The chart is now published and
+# versioned, so staleness is handled by releasing a new chart version — and
+# Chart.yaml's appVersion, which this must match, is what says which Kodus release
+# a given chart version installs.
 #
-# PIN THIS for anything you need to reproduce, roll back, or support:
-#   --set imageTag=2.1.27          (or services.<name>.image.digest for SHA pinning)
-# Three things `latest` costs you, all of which pinning buys back:
+# Three things `latest` costs, all of which pinning buys back:
 #   1. Mixed versions in one Service. imagePullPolicy is Always and the HPA scales
 #      2→4; running pods never re-pull, so a replica added next week pulls a NEWER
 #      image than its siblings and both answer traffic behind the same endpoint.
 #   2. Unintended upgrades. The migration Job is recreated every revision, so a
 #      `helm upgrade` meant to change one limit also pulls new app code and runs its
 #      schema migrations — which do not auto-revert.
-#   3. No rollback. `helm rollback` restores values, not image content; `latest`
-#      re-resolves to the same new image.
-imageTag: latest
+#   3. No rollback. `helm rollback` restores values, not image content, so `latest`
+#      re-resolves to the same new image and the rollback silently does nothing.
+#
+# The third one is why a floating default cannot survive in a published chart:
+# shipping `helm rollback kodus 0.2.0` as a supported operation while the images
+# float makes the command a lie.
+#
+# Track a newer Kodus release without waiting for a chart release:
+#   --set imageTag=2.1.28          (or services.<name>.image.digest to pin by SHA)
+# Keep this value and Chart.yaml's appVersion in step when bumping.
+imageTag: "2.1.27"
 
 # How many old ReplicaSets each Deployment keeps for rollback. Lower than the k8s
 # default (10) so upgrades don't pile up ReplicaSets and exhaust a namespace's

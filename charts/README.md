@@ -41,18 +41,29 @@ helm install kodus . \
 
 `imageTag` sets the Kodus release for **all** services + migrations at once (like
 docker-compose `IMAGE_TAG`); override one service with `services.<name>.image.tag`.
-It defaults to `latest`, so a fresh install always gets the current release — the
-commands above pin `2.1.27` only to show the syntax. Auth/crypto secrets are
-generated automatically with the correct format and stay stable across upgrades.
+It is **pinned by default** and matches `Chart.yaml`'s `appVersion`, so a given
+chart version always installs the same Kodus release — the `--set imageTag=` above
+is only there to make the knob visible. Auth/crypto secrets are generated
+automatically with the correct format and stay stable across upgrades.
 
-**Pin a release for anything you need to reproduce, roll back, or support.** With
-`latest`, three things stop working:
+It used to default to `latest`, which made sense while the only way to install was
+a git checkout. It does not survive a published chart: `helm rollback kodus 0.2.0`
+restores values, not image content, so with a floating tag the images re-resolve
+to whatever is newest and the rollback silently does nothing. Offering that
+command as supported while the tag floats would make it a lie.
+
+Three things `latest` costs, all of which pinning buys back:
 
 | | why |
 | --- | --- |
 | Consistent version across replicas | `imagePullPolicy: Always` + the HPA (2→4) means a replica added later pulls a **newer** image than its siblings; both then serve traffic behind the same Service. |
 | Predictable upgrades | The migration Job is recreated every revision, so a `helm upgrade` intended to change one limit also pulls new app code and runs its schema migrations — and those do not auto-revert. |
-| Rollback | `helm rollback` restores values, not image content; `latest` re-resolves to the same new image. Use `--set imageTag=<release>` or `image.digest`. |
+| Rollback | `helm rollback` restores values, not image content; `latest` re-resolves to the same new image. |
+
+To run a newer Kodus release than the chart version pins, without waiting for a
+chart release: `--set imageTag=2.1.28`, or `services.<name>.image.digest` to pin by
+SHA. `values-dev.yaml` deliberately keeps `latest` — a throwaway trial wants the
+newest build, and nothing there is rolled back.
 
 ### Choosing / upgrading the Kodus version
 
@@ -364,6 +375,43 @@ redacted support bundle to share with Kodus support:
 Still stuck? Reach the Kodus team at **support@kodus.io**, the
 [Discord](https://discord.gg/QFzwwmNmdN), or [docs.kodus.io](https://docs.kodus.io).
 
+### Deployment fingerprint
+
+Every install stamps its own configuration onto the ConfigMap, so the first
+questions on any ticket — which chart, which Kodus release, which platform,
+which datastore modes — have one answer instead of three approximations. The
+doctor prints it last, ready to paste, or read it directly:
+
+```bash
+kubectl get cm -n kodus -l app.kubernetes.io/part-of=kodus \
+  -o go-template='{{range $k, $v := (index .items 0).metadata.annotations}}{{$k}}={{$v}}{{"\n"}}{{end}}' \
+  | grep '^kodus.io/'
+```
+
+```
+kodus.io/chart-version=0.2.0
+kodus.io/app-version=2.1.27
+kodus.io/platform=kubernetes
+kodus.io/datastores=postgres=bundled,mongodb=bundled,rabbitmq=bundled
+kodus.io/services=api=2.1.27,mcp-manager=2.1.27,web=2.1.27,webhooks=2.1.27,worker=2.1.27
+kodus.io/ingress=ingress
+kodus.io/secrets=chart-generated
+kodus.io/hardening=networkPolicy=true,pdb=true,autoscaling=true
+```
+
+**It is safe to paste in public.** It records which knobs are set, never what they
+are set to when the value is yours: no hostnames, no URLs, no secrets, no
+identifiers. Nothing is transmitted anywhere — the chart writes it, the cluster
+holds it, and you decide whether to share it. `kodus.io/services` is the one to
+read when a single service was pinned to a different tag from the rest.
+
+Each workload also carries `app.kubernetes.io/version` set to the image it is
+**actually** running, not the chart's `appVersion` — so `kubectl get deploy -L
+app.kubernetes.io/version` stays truthful after a `--set imageTag=` or a
+per-service override. The bundled datastores are the exception: they run images
+this chart does not version, so their label reports the chart's `appVersion` and
+their real images come from `kubectl get sts -o wide`.
+
 | Symptom | Cause | Fix |
 |---|---|---|
 | UI: **"Error saving repositories"** on setup | `WEB_HOSTNAME_API` is `localhost` (or `http`), so the Git provider can't reach the webhook it tries to register | Set `WEB_HOSTNAME_API` to a public hostname and the `API_*_CODE_MANAGEMENT_WEBHOOK` to `https://<host>/<provider>/webhook`. For local testing, front it with a public tunnel/edge. |
@@ -508,8 +556,14 @@ would silently drop the `helm test` hooks.
 ./scripts/test-kind.sh                              # install on a throwaway kind cluster
 ./scripts/test-kind.sh --keep                       # …and leave it up to poke at
 ./scripts/test-kind.sh --upgrade-from origin/main   # install main first, then upgrade to HEAD
+./scripts/test-kind.sh --tag latest                 # override the version under test
 ./scripts/test-kind.sh --cleanup                    # delete the cluster
 ```
+
+It installs `Chart.yaml`'s `appVersion` by default, not `latest`. `values-dev.yaml`
+still sets `imageTag: latest`, and `--set` beats a values file — without that
+override the E2E would faithfully prove that a tag nobody installs by default
+works, and leave the shipped one unproven.
 
 Rendering correctly and running correctly are different claims. The two bugs this
 chart actually shipped — a PDB that forbade every eviction, and a liveness probe
@@ -559,8 +613,22 @@ the version forward between releases and leave gaps where 0.3.0 and 0.4.0 were
 never published artifacts — chore without control. Bump when you release.
 
 The chart version is independent of `appVersion`, which tracks the Kodus release
-(the container image tag). A chart-only fix bumps the chart and leaves
-`appVersion` alone; a new Kodus release bumps `appVersion`.
+(the container image tag). Which part you bump follows from what actually changed:
+
+| change | bump | example |
+| --- | --- | --- |
+| Only the Kodus release — `imageTag` + `appVersion`, nothing else | **patch** | 0.2.0 → 0.2.1 |
+| Chart templates or values, backward compatible | **minor** | 0.2.1 → 0.3.0 |
+| Breaking: a value renamed or removed, or a change that needs a reinstall rather than an upgrade | **major** | 0.3.0 → 1.0.0 |
+
+The first row is the common one — roughly three or four self-hosted releases a
+month — and it is handled by `bump-app-version.yml`, which opens the PR for you.
+The chart itself did not change in that case, which is exactly what a patch bump
+says.
+
+That third row is not theoretical: `StatefulSet.spec.serviceName`,
+`Service.clusterIP` and `Deployment.spec.selector` are immutable, so touching them
+is a major, and the release notes have to say "uninstall and reinstall" out loud.
 
 Once a version is published, installing no longer needs a git clone:
 

@@ -306,6 +306,26 @@ else
   fi
 fi
 
+# --- Support fingerprint ---
+# Printed last and deliberately plain — no colour, no check marks — so it can be
+# pasted straight into an issue. It is read from the ConfigMap the chart writes,
+# not reconstructed here, so it cannot drift from what is actually installed.
+section "Deployment fingerprint (paste this into a support ticket)"
+# Plain text/template — range and $k/$v only. `hasPrefix` looks like it belongs
+# here but is a sprig function; kubectl's templates are the standard library, so
+# the kodus.io/ filter is grep's job.
+FP=$($K get configmap "${RELEASE}-config" \
+  -o go-template='{{range $k, $v := .metadata.annotations}}{{$k}}={{$v}}{{"\n"}}{{end}}' 2>/dev/null \
+  | grep '^kodus\.io/')
+if [ -n "$FP" ]; then
+  echo "$FP" | sed 's|^kodus\.io/|  |'
+  # Not in the ConfigMap: these describe the cluster, not the release.
+  echo "  kubernetes=$(kubectl version -o json 2>/dev/null | sed -n 's/.*"gitVersion": *"\([^"]*\)".*/\1/p' | tail -1)"
+  echo "  namespace=$NAMESPACE  release=$RELEASE"
+else
+  warn "no fingerprint annotations — this release predates them; upgrade the chart"
+fi
+
 # --- Summary ---
 section "Summary"
 echo -e "  ${GREEN}${PASS} ok${NC}   ${YELLOW}${WARN} warn${NC}   ${RED}${FAIL} fail${NC}"
