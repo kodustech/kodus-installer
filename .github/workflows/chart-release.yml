@@ -1,0 +1,217 @@
+name: Release chart (OCI)
+
+# Publishes charts/kodus to ghcr.io as a SIGNED OCI artifact, so installing stops
+# requiring a git clone:
+#
+#   helm install kodus oci://ghcr.io/kodustech/charts/kodus --version 0.2.0
+#
+# That is not cosmetic. Without a published chart there is no `helm upgrade` to a
+# named version, no `helm rollback` to a previous one, and Argo CD / Flux have
+# nothing to point an Application/HelmRelease at — a git path is not a chart
+# source they can pin or diff.
+#
+# Triggered by a tag, so publishing is always a deliberate act with a commit
+# behind it:
+#
+#   git tag chart-v0.2.0 && git push origin chart-v0.2.0
+#
+# ── Supply chain ──────────────────────────────────────────────────────────────
+# A chart is executable infrastructure: it declares the images that run, the
+# securityContexts they run under, the RBAC they hold and the Secrets they mount.
+# Someone who can alter a published chart owns the cluster that installs it. The
+# controls here, and what each one actually stops:
+#
+#   Actions pinned by commit SHA  — a tag like @v7 is a moving pointer. Anyone who
+#     can push to the action's repo can repoint it at new code, and every workflow
+#     that trusts the tag runs that code with this job's token on the next run. A
+#     SHA cannot be repointed.
+#   Keyless cosign signature      — proves an artifact was built by THIS workflow,
+#     in this repo, from this tag. A chart pushed to the registry by anyone else,
+#     including with a stolen registry credential, has no valid signature.
+#   Build provenance attestation  — records the commit, workflow and runner that
+#     produced the artifact, verifiable with `gh attestation verify`.
+#   Digest recheck before push    — the package is hashed the moment it is built,
+#     before any third-party tooling runs, and re-hashed immediately before the
+#     push. Anything that mutates it in between fails the build.
+#   Least-privilege token         — read-only by default; write scopes are granted
+#     per job, not per workflow.
+#
+# Consumers verify with the commands in charts/README.md → "Releasing the chart".
+
+on:
+  push:
+    tags:
+      - 'chart-v*'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Package and validate, but do not push'
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write        # push to ghcr.io
+      id-token: write        # OIDC identity for keyless signing
+      attestations: write    # record build provenance
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Helm
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        with:
+          version: v4.2.3
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      - name: Chart version matches the tag
+        if: startsWith(github.ref, 'refs/tags/chart-v')
+        run: |
+          TAG="${GITHUB_REF#refs/tags/chart-v}"
+          CHART=$(grep -E '^version:' charts/kodus/Chart.yaml | awk '{print $2}')
+          echo "tag=$TAG  Chart.yaml=$CHART"
+          if [ "$TAG" != "$CHART" ]; then
+            echo "::error::tag chart-v$TAG does not match Chart.yaml version $CHART. Bump the chart version in the same commit you tag."
+            exit 1
+          fi
+
+      - name: Registry login
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "${{ secrets.GITHUB_TOKEN }}" \
+            | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      # THE invariant worth protecting: never two different chart contents under
+      # one version. It is checked here, at release time, and deliberately NOT on
+      # every PR — forcing a bump per merge would march the version forward
+      # between releases and leave gaps where 0.3.0 and 0.4.0 were never published
+      # artifacts, for no gain. Versions advance when we decide to release.
+      - name: Version is not already published
+        shell: bash
+        run: |
+          set -uo pipefail
+          VERSION=$(grep -E '^version:' charts/kodus/Chart.yaml | awk '{print $2}')
+          REF="oci://ghcr.io/${{ github.repository_owner }}/charts/kodus"
+          if helm show chart "$REF" --version "$VERSION" >/dev/null 2>&1; then
+            echo "::error file=charts/kodus/Chart.yaml::$VERSION is already published at $REF. A published version cannot be re-cut — consumers may have pulled it. Bump the chart version."
+            exit 1
+          fi
+          echo "$VERSION is not published yet — ok to release"
+
+      - name: Build dependencies
+        run: helm dependency build charts/kodus
+
+      # Packaged BEFORE any third-party tooling is installed, and hashed
+      # immediately. Everything after this point is checked against that hash.
+      - name: Package
+        id: package
+        run: |
+          helm package charts/kodus -d dist
+          PKG=$(ls dist/kodus-*.tgz)
+          SUM=$(sha256sum "$PKG" | awk '{print $1}')
+          echo "path=$PKG" >> "$GITHUB_OUTPUT"
+          echo "sha256=$SUM" >> "$GITHUB_OUTPUT"
+          echo "packaged $PKG"
+          echo "sha256   $SUM"
+
+      # Never publish something that would fail the PR gate. A bad render is
+      # recoverable; a bad artifact in a registry is permanent — consumers may
+      # already have pulled it before anyone notices.
+      - name: Validate before publishing
+        run: |
+          helm lint charts/kodus -f charts/kodus/values-dev.yaml
+          helm lint charts/kodus -f charts/kodus/values-dev.yaml -f charts/kodus/values-openshift.yaml
+          ./scripts/validate-chart-schema.sh
+          # The plugin is fetched from GitHub at run time — pinned to a released
+          # version, but still third-party code executing in a job that holds
+          # packages:write. It runs after packaging, and the digest check below
+          # is what makes that safe rather than merely ordered.
+          helm plugin install https://github.com/helm-unittest/helm-unittest \
+            --version v1.1.2 --verify=false
+          helm unittest charts/kodus
+
+      - name: Package is unchanged since it was built
+        run: |
+          NOW=$(sha256sum "${{ steps.package.outputs.path }}" | awk '{print $1}')
+          if [ "$NOW" != "${{ steps.package.outputs.sha256 }}" ]; then
+            echo "::error::the package changed after it was built (${{ steps.package.outputs.sha256 }} -> $NOW). Something in the validation step mutated the artifact — do not publish."
+            exit 1
+          fi
+          echo "digest verified: $NOW"
+
+      - name: Push to ghcr.io
+        id: push
+        if: github.event_name == 'push' || inputs.dry_run == false
+        # The default `run` shell is `bash -e`, WITHOUT pipefail — so a failing
+        # `helm push` piped into tee would exit 0 and this step would go green on
+        # a chart that was never published. Set it explicitly.
+        shell: bash
+        run: |
+          set -euo pipefail
+          REPO="ghcr.io/${{ github.repository_owner }}/charts"
+          helm push "${{ steps.package.outputs.path }}" "oci://$REPO" 2>&1 | tee push.log
+          # `helm push` reports the manifest digest; sign and attest by digest,
+          # never by tag — a tag can later be moved to a different manifest.
+          DIGEST=$(grep -oE 'sha256:[0-9a-f]{64}' push.log | head -1)
+          [ -n "$DIGEST" ] || { echo "::error::could not read the pushed digest"; exit 1; }
+          echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
+          echo "ref=$REPO/kodus" >> "$GITHUB_OUTPUT"
+
+      # Keyless: the signing identity is this workflow's OIDC token, so there is
+      # no private key to store, leak or rotate. Verification checks the identity,
+      # not a key we own.
+      - name: Sign the artifact
+        if: steps.push.outcome == 'success'
+        run: cosign sign --yes "${{ steps.push.outputs.ref }}@${{ steps.push.outputs.digest }}"
+
+      - name: Attest build provenance
+        if: steps.push.outcome == 'success'
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-name: ${{ steps.push.outputs.ref }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
+
+      - name: Summary
+        if: always()
+        run: |
+          VERSION=$(grep -E '^version:' charts/kodus/Chart.yaml | awk '{print $2}')
+          OWNER="${{ github.repository_owner }}"
+          {
+            echo "### Chart $VERSION"
+            echo ''
+            if [ "${{ steps.push.outcome }}" != "success" ]; then
+              echo 'Dry run — packaged and validated, nothing pushed.'
+              echo ''
+              echo "sha256: \`${{ steps.package.outputs.sha256 }}\`"
+            else
+              echo '```bash'
+              echo "helm install kodus oci://ghcr.io/$OWNER/charts/kodus --version $VERSION \\"
+              echo "  -n kodus --create-namespace"
+              echo '```'
+              echo ''
+              echo '**Verify before installing:**'
+              echo '```bash'
+              echo "cosign verify ghcr.io/$OWNER/charts/kodus:$VERSION \\"
+              echo "  --certificate-oidc-issuer https://token.actions.githubusercontent.com \\"
+              echo "  --certificate-identity-regexp '^https://github.com/${{ github.repository }}/\\.github/workflows/chart-release\\.yml@'"
+              echo ''
+              echo "gh attestation verify oci://ghcr.io/$OWNER/charts/kodus:$VERSION \\"
+              echo "  --repo ${{ github.repository }}"
+              echo '```'
+              echo ''
+              echo 'digest: `${{ steps.push.outputs.digest }}`'
+              echo ''
+              echo 'The package is **private by default** — make it public in the'
+              echo 'package settings, or consumers need a pull secret.'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

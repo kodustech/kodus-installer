@@ -500,7 +500,111 @@ that catches those. CI runs them on every PR touching `charts/`.
 
 They're packaged out of the release tarball via `.helmignore`; note the leading
 slash on `/tests/`, since a bare `tests/` also matches `templates/tests/` and
-would silently drop the `helm test` hook.
+would silently drop the `helm test` hooks.
+
+**End-to-end, on a real cluster:**
+
+```bash
+./scripts/test-kind.sh                              # install on a throwaway kind cluster
+./scripts/test-kind.sh --keep                       # …and leave it up to poke at
+./scripts/test-kind.sh --upgrade-from origin/main   # install main first, then upgrade to HEAD
+./scripts/test-kind.sh --cleanup                    # delete the cluster
+```
+
+Rendering correctly and running correctly are different claims. The two bugs this
+chart actually shipped — a PDB that forbade every eviction, and a liveness probe
+on `/` that tied pod health to server-rendering a whole React page — were valid
+YAML and valid Kubernetes objects. Only an install shows them.
+
+`--upgrade-from` covers the failure the chart cannot recover from. Several fields
+are immutable once created (`StatefulSet.spec.serviceName`, `Service.clusterIP`,
+`Deployment.spec.selector`), so a change can install perfectly on an empty cluster
+and still break `helm upgrade` for everyone who already has it. That's why the
+datastore `serviceName` issue documented in `templates/datastores/` is a comment
+rather than a fix.
+
+CI runs both scenarios in parallel on every PR touching `charts/`
+(`.github/workflows/helm-e2e.yml`), with `--strict` so a failing doctor or
+`helm test` fails the build. Diagnostics from a failed run are uploaded as an
+artifact.
+
+**The `helm test` hooks** (`templates/tests/`) run against a live release via
+`helm test kodus -n kodus`:
+
+| hook | asserts |
+| --- | --- |
+| `test-api-health` | the API answers `/health/simple` through its Service |
+| `test-webhooks-health` | the webhooks server answers `/health/ready` through its Service — selector matches, EndpointSlice populated, app up. This is the path a provider POSTs to, and the only service the app never dials itself, so nothing else would notice it being unreachable. |
+| `test-datastores` | Postgres, MongoDB and RabbitMQ accept a TCP connection at exactly the addresses `_env.tpl` handed the app — in whatever mode each store is in |
+
+### Releasing the chart
+
+The chart is published to ghcr.io as an OCI artifact, tag-driven:
+
+```bash
+# bump charts/kodus/Chart.yaml version in the same commit
+git tag chart-v0.2.0 && git push origin chart-v0.2.0
+```
+
+`.github/workflows/chart-release.yml` refuses to publish if the tag and
+`Chart.yaml`'s `version` disagree, if that version is **already in the registry**,
+or if lint, the unit tests or the schema anti-drift check fail — a bad render is
+recoverable, a bad artifact in a registry is not, since consumers may have pulled
+it before anyone notices.
+
+Note where that check lives: at **release** time, not on every PR. The invariant
+worth protecting is "never two different chart contents under one version", and
+that is decided when you publish. Requiring a bump on every merged PR would march
+the version forward between releases and leave gaps where 0.3.0 and 0.4.0 were
+never published artifacts — chore without control. Bump when you release.
+
+The chart version is independent of `appVersion`, which tracks the Kodus release
+(the container image tag). A chart-only fix bumps the chart and leaves
+`appVersion` alone; a new Kodus release bumps `appVersion`.
+
+Once a version is published, installing no longer needs a git clone:
+
+```bash
+helm install kodus oci://ghcr.io/kodustech/charts/kodus --version 0.2.0 \
+  -n kodus --create-namespace
+```
+
+That is what makes `helm upgrade` to a named version, `helm rollback` to a
+previous one, and Argo CD / Flux possible at all — a git path is not a chart
+source they can pin or diff. **GitHub packages are private by default**: flip the
+package to public, or consumers need a pull secret.
+
+#### Verifying what you're about to install
+
+A chart is executable infrastructure: it decides which images run, under which
+`securityContext`, holding which RBAC, mounting which Secrets. Whoever can alter
+a published chart owns the cluster that installs it. Every release is signed
+keylessly with cosign and carries a build provenance attestation, both bound to
+the manifest **digest** rather than the tag — a tag can be moved to a different
+manifest, a digest cannot.
+
+```bash
+# was this built by our release workflow, from a tag, in this repo?
+cosign verify ghcr.io/kodustech/charts/kodus:0.2.0 \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-identity-regexp '^https://github.com/kodustech/kodus-installer/\.github/workflows/chart-release\.yml@'
+
+# which commit, workflow and runner produced it?
+gh attestation verify oci://ghcr.io/kodustech/charts/kodus:0.2.0 \
+  --repo kodustech/kodus-installer
+```
+
+There is no signing key to store, leak or rotate — the identity is the workflow's
+own OIDC token. A chart pushed by anyone else, including with a stolen registry
+credential, produces no valid signature.
+
+On our side of the line: every GitHub Action is pinned by **commit SHA**, with the
+version in a trailing comment. A tag like `@v7` is a moving pointer — anyone who
+can push to the action's repo can repoint it, and it runs with the job's token on
+the next build. **Do not "tidy" those SHAs back into tags.** kubeconform is
+checksum-verified against its release `CHECKSUMS` before it executes, and the
+release job hashes the packaged chart before any third-party tooling runs, then
+re-checks that hash immediately before pushing.
 
 ### Logs & observability (Pino + OpenTelemetry)
 
