@@ -446,9 +446,19 @@ PDB. Give them a floor of 2 and they do:
 --set services.mcp-manager.replicas=2
 ```
 
-Raising `pdb.minAvailable` to match the floor recreates the same deadlock — leave
-it at 1 unless you have a quorum-based workload that genuinely prefers downtime
-over losing quorum.
+Raising `pdb.minAvailable` to match the floor recreates the same deadlock by
+hand, so the chart refuses to render it — the error names the service and shows
+the arithmetic:
+
+```
+ERROR: pdb.minAvailable is 2 and service "api" has a replica floor of 2, so
+disruptionsAllowed = 2 - 2 = 0.
+```
+
+Leave it at 1 unless you have a quorum-based workload that genuinely prefers
+downtime over losing quorum. If you want the budget to scale with the replica
+count instead of pinning to it, use a percentage — `--set pdb.minAvailable=50%`
+is accepted as-is, since a percentage can't reach zero the way an integer can.
 
 **Memory is deliberately not an HPA metric.** Each Node process carries a
 baseline heap that does not shrink as replicas are added, so `replicas × (usage /
@@ -471,6 +481,26 @@ with a message naming the collision instead of letting it install.
 Splitting the labels apart would be the tidier fix, but `Deployment.spec.selector`
 is immutable — adding a `component` label would break `helm upgrade` on every
 existing release. Failing fast costs nothing and touches no selector.
+
+### Testing the chart
+
+```bash
+helm plugin install https://github.com/helm-unittest/helm-unittest --version v1.1.2
+helm dependency build charts/kodus     # rebuilds the vendored kodus-common
+helm unittest charts/kodus
+```
+
+`helm lint` and `kubeconform` validate **form** — is this a well-formed chart, is
+each rendered object valid against the API schema. Neither can validate **intent**,
+and every bug this chart has actually shipped lived in that gap: a PDB that
+forbids every eviction is flawless YAML; so is a webhook URL pointing at the wrong
+host, or a `secretKeyRef` naming a Secret no operator creates. The suites under
+`charts/kodus/tests/` assert properties of the *rendered output* — the only layer
+that catches those. CI runs them on every PR touching `charts/`.
+
+They're packaged out of the release tarball via `.helmignore`; note the leading
+slash on `/tests/`, since a bare `tests/` also matches `templates/tests/` and
+would silently drop the `helm test` hook.
 
 ### Logs & observability (Pino + OpenTelemetry)
 

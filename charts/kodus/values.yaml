@@ -453,7 +453,10 @@ pdb:
   # not slowed, they are forbidden permanently, and `kubectl drain` hangs on that
   # pod for as long as it exists. mcp-manager and worker-analytics ship at
   # replicas 1, so they are skipped; raise their replicas to get a PDB.
-  # Keep this at 1: setting it to the replica floor recreates the same deadlock.
+  # Keep this at 1: setting it to the replica floor recreates the same deadlock,
+  # so the chart REFUSES to render when minAvailable >= the floor of any service
+  # (the error names the service and shows the arithmetic). A percentage — "50%" —
+  # is accepted as-is: it scales with the replica count instead of pinning to it.
   minAvailable: 1
 
 resourceQuota:

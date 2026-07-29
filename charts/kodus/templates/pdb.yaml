@@ -23,6 +23,17 @@
   run at replicas 1 by default and hit exactly this.
 */}}
 {{- if gt $floor 1 }}
+{{- /*
+  Same arithmetic, applied to the value the user actually chose. Skipping the
+  floor-of-1 services above only fixes the default; nothing stopped an operator
+  from setting pdb.minAvailable to the replica count and rebuilding the deadlock
+  by hand. `int` on a percentage string ("50%") yields 0, so percentage budgets
+  fall through untouched — they can't reach 0 disruptions the way an integer can.
+*/}}
+{{- $min := $.Values.pdb.minAvailable | default 1 }}
+{{- if ge ($min | int) $floor }}
+{{- fail (printf "ERROR: pdb.minAvailable is %v and service %q has a replica floor of %d, so disruptionsAllowed = %d - %v = 0. That PDB does not slow evictions down, it forbids them permanently, and `kubectl drain` will hang on those pods forever. Set pdb.minAvailable below %d, or raise services.%s.replicas." $min $name $floor $floor $min $floor $name) }}
+{{- end }}
 ---
 apiVersion: policy/v1
 kind: PodDisruptionBudget
