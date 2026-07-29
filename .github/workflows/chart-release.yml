@@ -83,12 +83,19 @@ jobs:
             exit 1
           fi
 
+      # TWO logins, because helm and cosign do not share a credential store.
+      # `helm registry login` writes to helm's own registry config; cosign reads
+      # the Docker config. With only the first, `helm push` succeeds and
+      # `cosign sign` fails with UNAUTHORIZED against a registry we are demonstrably
+      # authenticated to — which is exactly how it failed the first time.
       - name: Registry login
         shell: bash
         run: |
           set -euo pipefail
           echo "${{ secrets.GITHUB_TOKEN }}" \
             | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
+          echo "${{ secrets.GITHUB_TOKEN }}" \
+            | cosign login ghcr.io -u "${{ github.actor }}" --password-stdin
 
       # THE invariant worth protecting: never two different chart contents under
       # one version. It is checked here, at release time, and deliberately NOT on
@@ -180,6 +187,47 @@ jobs:
           subject-name: ${{ steps.push.outputs.ref }}
           subject-digest: ${{ steps.push.outputs.digest }}
           push-to-registry: true
+
+      # Publishing happens before signing, unavoidably — a signature binds to a
+      # digest, and the digest only exists once the artifact is pushed. So there is
+      # a window where the job fails with the chart already in the registry, and a
+      # red job reads as "nothing happened" when it means "published, unverifiable".
+      # Say it out loud, with the fix.
+      - name: Warn if published but unsigned
+        if: failure() && steps.push.outcome == 'success'
+        shell: bash
+        run: |
+          V=$(grep -E '^version:' charts/kodus/Chart.yaml | awk '{print $2}')
+          REPO="ghcr.io/${{ github.repository_owner }}/charts/kodus"
+          {
+            echo "### ⚠️ Published, but not signed"
+            echo
+            echo "\`$REPO:$V\` is IN THE REGISTRY and failed to sign or attest."
+            echo "The README tells consumers to \`cosign verify\` before installing;"
+            echo "against this version that check will fail."
+            echo
+            echo "**Check the package visibility before deciding.** A ghcr package"
+            echo "inherits the repository's visibility, so it can be public from the"
+            echo "first push — do not assume it is private:"
+            echo
+            echo '```bash'
+            echo "gh api /orgs/${{ github.repository_owner }}/packages/container/charts%2Fkodus --jq .visibility"
+            echo '```'
+            echo
+            echo "**Private, or public but seconds old and unannounced** — delete this"
+            echo "version and release again under the same number:"
+            echo
+            echo '```bash'
+            echo "gh api /orgs/${{ github.repository_owner }}/packages/container/charts%2Fkodus/versions \\"
+            echo "  --jq '.[] | \"\\(.id) \\(.metadata.container.tags)\"'"
+            echo "gh api -X DELETE /orgs/${{ github.repository_owner }}/packages/container/charts%2Fkodus/versions/<id>"
+            echo "git push --delete origin chart-v\$V && git tag -d chart-v\$V"
+            echo '```'
+            echo
+            echo "**Public long enough that someone may have pulled it** — do not delete."
+            echo "Cut the next patch version instead; a deleted version breaks whoever"
+            echo "pinned it, and you cannot prove nobody did."
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Summary
         if: always()
