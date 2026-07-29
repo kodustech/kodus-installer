@@ -41,18 +41,29 @@ helm install kodus . \
 
 `imageTag` sets the Kodus release for **all** services + migrations at once (like
 docker-compose `IMAGE_TAG`); override one service with `services.<name>.image.tag`.
-It defaults to `latest`, so a fresh install always gets the current release — the
-commands above pin `2.1.27` only to show the syntax. Auth/crypto secrets are
-generated automatically with the correct format and stay stable across upgrades.
+It is **pinned by default** and matches `Chart.yaml`'s `appVersion`, so a given
+chart version always installs the same Kodus release — the `--set imageTag=` above
+is only there to make the knob visible. Auth/crypto secrets are generated
+automatically with the correct format and stay stable across upgrades.
 
-**Pin a release for anything you need to reproduce, roll back, or support.** With
-`latest`, three things stop working:
+It used to default to `latest`, which made sense while the only way to install was
+a git checkout. It does not survive a published chart: `helm rollback kodus 0.2.0`
+restores values, not image content, so with a floating tag the images re-resolve
+to whatever is newest and the rollback silently does nothing. Offering that
+command as supported while the tag floats would make it a lie.
+
+Three things `latest` costs, all of which pinning buys back:
 
 | | why |
 | --- | --- |
 | Consistent version across replicas | `imagePullPolicy: Always` + the HPA (2→4) means a replica added later pulls a **newer** image than its siblings; both then serve traffic behind the same Service. |
 | Predictable upgrades | The migration Job is recreated every revision, so a `helm upgrade` intended to change one limit also pulls new app code and runs its schema migrations — and those do not auto-revert. |
-| Rollback | `helm rollback` restores values, not image content; `latest` re-resolves to the same new image. Use `--set imageTag=<release>` or `image.digest`. |
+| Rollback | `helm rollback` restores values, not image content; `latest` re-resolves to the same new image. |
+
+To run a newer Kodus release than the chart version pins, without waiting for a
+chart release: `--set imageTag=2.1.28`, or `services.<name>.image.digest` to pin by
+SHA. `values-dev.yaml` deliberately keeps `latest` — a throwaway trial wants the
+newest build, and nothing there is rolled back.
 
 ### Choosing / upgrading the Kodus version
 
@@ -559,8 +570,22 @@ the version forward between releases and leave gaps where 0.3.0 and 0.4.0 were
 never published artifacts — chore without control. Bump when you release.
 
 The chart version is independent of `appVersion`, which tracks the Kodus release
-(the container image tag). A chart-only fix bumps the chart and leaves
-`appVersion` alone; a new Kodus release bumps `appVersion`.
+(the container image tag). Which part you bump follows from what actually changed:
+
+| change | bump | example |
+| --- | --- | --- |
+| Only the Kodus release — `imageTag` + `appVersion`, nothing else | **patch** | 0.2.0 → 0.2.1 |
+| Chart templates or values, backward compatible | **minor** | 0.2.1 → 0.3.0 |
+| Breaking: a value renamed or removed, or a change that needs a reinstall rather than an upgrade | **major** | 0.3.0 → 1.0.0 |
+
+The first row is the common one — roughly three or four self-hosted releases a
+month — and it is handled by `bump-app-version.yml`, which opens the PR for you.
+The chart itself did not change in that case, which is exactly what a patch bump
+says.
+
+That third row is not theoretical: `StatefulSet.spec.serviceName`,
+`Service.clusterIP` and `Deployment.spec.selector` are immutable, so touching them
+is a major, and the release notes have to say "uninstall and reinstall" out loud.
 
 Once a version is published, installing no longer needs a git clone:
 

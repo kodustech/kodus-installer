@@ -1,0 +1,209 @@
+name: Bump Kodus version
+
+# Watches kodus-ai for a new SELF-HOSTED release and opens a PR bumping the three
+# fields that have to move together:
+#
+#   values.yaml   imageTag    which images every install pulls
+#   Chart.yaml    appVersion  which Kodus release this chart installs
+#   Chart.yaml    version     patch bump — the chart itself did not change
+#
+# Self-hosted releases are tagged `selfhosted-X.Y.Z` and deliberately lag the
+# cloud track (kodus-ai's selfhosted-promote.yml gates that), so this follows the
+# selfhosted-* tags and nothing else.
+#
+# Why a PR and not a direct push: the bump changes what every fresh install pulls.
+# That deserves a human and a diff.
+#
+# Why this workflow runs the E2E itself instead of leaving it to the PR: a pull
+# request opened with GITHUB_TOKEN does NOT trigger other workflows — GitHub
+# blocks that to prevent workflows from recursively triggering each other. So the
+# PR would arrive with no checks and the reviewer would have nothing to look at.
+# Validating here, before opening it, means the PR arrives already proven: these
+# images exist, and the chart installs and passes its tests with them. The
+# alternative is a personal access token, which trades a maintenance burden and a
+# long-lived credential for the same outcome.
+
+on:
+  schedule:
+    - cron: '0 9 * * 1-5'      # weekdays, 09:00 UTC
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Kodus version to pin (default: latest selfhosted-* release)'
+        type: string
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: write            # push the branch
+      pull-requests: write       # open the PR
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Resolve target version
+        id: target
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          WANT="${{ inputs.version }}"
+          if [ -z "$WANT" ]; then
+            # Highest selfhosted-* release, not merely the most recently published:
+            # a re-published older release must not drag the chart backwards.
+            WANT=$(gh api repos/kodustech/kodus-ai/releases --paginate \
+                     --jq '.[] | select(.draft == false and (.tag_name | startswith("selfhosted-"))) | .tag_name' \
+                   | sed 's/^selfhosted-//' \
+                   | sort -V | tail -1)
+          fi
+          [ -n "$WANT" ] || { echo "::error::could not resolve a selfhosted release"; exit 1; }
+          CURRENT=$(grep -E '^imageTag:' charts/kodus/values.yaml | awk '{print $2}' | tr -d '"')
+          echo "current=$CURRENT  target=$WANT"
+          echo "version=$WANT" >> "$GITHUB_OUTPUT"
+          if [ "$CURRENT" = "$WANT" ]; then
+            echo "already on $WANT — nothing to do"
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # A release tag can exist before every image finishes pushing, and a tag
+      # that is merely absent would make this chart the default that no-one can
+      # install. Check all five before touching a file.
+      - name: Images exist for that version
+        if: steps.target.outputs.changed == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          V="${{ steps.target.outputs.version }}"
+          fail=0
+          for img in kodus-ai-api kodus-ai-web kodus-ai-worker kodus-ai-webhook kodus-mcp-manager; do
+            tok=$(curl -sS "https://ghcr.io/token?scope=repository:kodustech/$img:pull&service=ghcr.io" | jq -r .token)
+            code=$(curl -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $tok" \
+              -H 'Accept: application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json,application/vnd.docker.distribution.manifest.v2+json' \
+              "https://ghcr.io/v2/kodustech/$img/manifests/$V")
+            printf '%-22s %s -> HTTP %s\n' "$img" "$V" "$code"
+            [ "$code" = "200" ] || fail=1
+          done
+          [ "$fail" = "0" ] || { echo "::error::not every image is published at $V — refusing to pin a version that cannot be installed"; exit 1; }
+
+      - name: Apply the bump
+        if: steps.target.outputs.changed == 'true'
+        id: bump
+        shell: bash
+        run: |
+          set -euo pipefail
+          V="${{ steps.target.outputs.version }}"
+          OLD_CHART=$(grep -E '^version:' charts/kodus/Chart.yaml | awk '{print $2}')
+          # Patch bump: only appVersion moved, so the chart itself is unchanged.
+          NEW_CHART=$(echo "$OLD_CHART" | awk -F. '{printf "%d.%d.%d", $1, $2, $3 + 1}')
+          sed -i -E "s|^imageTag: .*|imageTag: \"$V\"|" charts/kodus/values.yaml
+          sed -i -E "s|^appVersion: .*|appVersion: \"$V\"|" charts/kodus/Chart.yaml
+          sed -i -E "s|^version: .*|version: $NEW_CHART|" charts/kodus/Chart.yaml
+          echo "chart=$NEW_CHART" >> "$GITHUB_OUTPUT"
+          echo "chart $OLD_CHART -> $NEW_CHART, app -> $V"
+          git diff --stat
+
+      - name: Set up Helm
+        if: steps.target.outputs.changed == 'true'
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        with:
+          version: v4.2.3
+
+      - name: Install kind
+        if: steps.target.outputs.changed == 'true'
+        uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc # v1.14.0
+        with:
+          version: v0.32.0
+          install_only: true
+
+      # values-dev.yaml overrides imageTag with `latest`, so the E2E would happily
+      # prove that `latest` works and tell us nothing about the version being
+      # pinned. Pass it explicitly.
+      - name: Prove the chart installs with those images
+        if: steps.target.outputs.changed == 'true'
+        run: ./scripts/test-kind.sh --strict --keep --timeout 15m --tag "${{ steps.target.outputs.version }}"
+
+      - name: Collect diagnostics
+        if: failure() && steps.target.outputs.changed == 'true'
+        run: |
+          mkdir -p /tmp/e2e
+          kubectl get all -n kodus -o wide > /tmp/e2e/resources.txt 2>&1 || true
+          kubectl get events -n kodus --sort-by=.lastTimestamp > /tmp/e2e/events.txt 2>&1 || true
+          for p in $(kubectl get pods -n kodus -o name 2>/dev/null); do
+            kubectl logs "$p" -n kodus --all-containers --tail 400 > "/tmp/e2e/logs-$(basename "$p").txt" 2>&1 || true
+          done
+
+      - name: Upload diagnostics
+        if: failure() && steps.target.outputs.changed == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: bump-diagnostics-${{ steps.target.outputs.version }}
+          path: /tmp/e2e
+          retention-days: 7
+
+      - name: Tear down
+        if: always() && steps.target.outputs.changed == 'true'
+        run: ./scripts/test-kind.sh --cleanup || true
+
+      - name: Open the PR
+        if: steps.target.outputs.changed == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          V="${{ steps.target.outputs.version }}"
+          CHART="${{ steps.bump.outputs.chart }}"
+          BRANCH="chore/kodus-$V"
+          if gh pr list --head "$BRANCH" --state open --json number --jq 'length' | grep -qv '^0$'; then
+            echo "a PR for $BRANCH is already open — nothing to do"; exit 0
+          fi
+          git config user.name  'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          git checkout -b "$BRANCH"
+          git commit -aqm "chore(chart): Kodus $V (chart $CHART)
+
+          Only imageTag and appVersion moved, so this is a patch bump — the chart
+          templates are unchanged.
+
+          Verified before this PR was opened: all five images are published at $V,
+          and the chart installs on a kind cluster with them and passes its
+          helm test hooks."
+          git push -q origin "$BRANCH"
+          RUN_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          # Built line by line rather than with a heredoc: inside a YAML block
+          # scalar the terminator would have to sit at column 1, which ends the
+          # scalar and breaks the workflow file.
+          {
+            echo "Follows \`selfhosted-$V\` in kodustech/kodus-ai."
+            echo
+            echo "| | to |"
+            echo "| --- | --- |"
+            echo "| \`imageTag\` | \`$V\` |"
+            echo "| \`appVersion\` | \`$V\` |"
+            echo "| chart \`version\` | \`$CHART\` |"
+            echo
+            echo "Patch bump: only the Kodus release moved, the chart templates are unchanged."
+            echo
+            echo "**Already verified by the workflow that opened this** — all five images are"
+            echo "published at \`$V\`, and the chart installs on a kind cluster with them and"
+            echo "passes its \`helm test\` hooks."
+            echo
+            echo "GitHub does not run workflows on a PR opened by \`GITHUB_TOKEN\`, so the checks"
+            echo "below will stay empty. The validation happened in [this run]($RUN_URL)."
+            echo
+            echo "After merging, publish with:"
+            echo '```bash'
+            echo "git tag chart-v$CHART && git push origin chart-v$CHART"
+            echo '```'
+          } > /tmp/pr-body.md
+          gh pr create --base main --head "$BRANCH" \
+            --title "chore(chart): Kodus $V (chart $CHART)" \
+            --body-file /tmp/pr-body.md
