@@ -1,3 +1,6 @@
+{{- /* Guard before any Service renders — a name colliding with a bundled datastore
+       would produce a selector that matches the DB pods. See _helpers.tpl. */}}
+{{- include "kodus.validateServiceNames" . }}
 {{- range $name, $svc := .Values.services }}
 {{- if and (or (kindIs "invalid" $svc.enabled) $svc.enabled) $svc.port }}
 ---

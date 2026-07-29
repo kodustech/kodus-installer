@@ -34,6 +34,21 @@ metadata:
   labels:
     {{- include "kodus.labels" . | nindent 4 }}
 spec:
+  # NOTE: serviceName points at the ClusterIP Service above, not a headless one.
+  # The StatefulSet contract expects headless (clusterIP: None) — that is what
+  # makes the controller's pod.spec.subdomain resolve into per-pod DNS
+  # (<pod>-0.<svc>.<ns>.svc.cluster.local). Those records do not exist here.
+  #
+  # Harmless at replicas 1: nothing dials an individual pod, and clients reach the
+  # DB through the ClusterIP name. It would matter for a multi-replica datastore,
+  # where peers discover each other by per-pod DNS — but that is what postgres.mode
+  # "operator" (CloudNativePG) is for; bundled is deliberately single-instance.
+  #
+  # Not fixed in place because BOTH sides are immutable: serviceName cannot be
+  # changed on an existing StatefulSet, and a Service cannot go ClusterIP -> None.
+  # Correcting it means recreating the StatefulSet (delete with
+  # --cascade=orphan to keep the pods, or accept downtime) — a migration, not an
+  # upgrade. Do it only alongside real multi-replica support.
   serviceName: {{ $name }}
   replicas: 1
   selector:

@@ -24,6 +24,12 @@ metadata:
   labels:
     {{- include "kodus.labels" . | nindent 4 }}
 spec:
+  # NOTE: serviceName points at the ClusterIP Service above, not a headless one,
+  # so per-pod DNS (<pod>-0.<svc>.<ns>.svc.cluster.local) is not created — see the
+  # long note in bundled-postgres.yaml. Harmless at replicas 1; it would matter for
+  # a replica set, where members discover each other by per-pod DNS. That is what
+  # mongodb.mode "operator" is for. Both serviceName and a Service's clusterIP are
+  # immutable, so correcting this is a StatefulSet recreation, not an upgrade.
   serviceName: {{ $name }}
   replicas: 1
   selector:

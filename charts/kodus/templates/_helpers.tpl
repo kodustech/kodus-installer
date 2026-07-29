@@ -89,3 +89,29 @@ are parsed with Buffer.from(x,'hex') and MUST be valid hex.
 - API_MCP_MANAGER_JWT_SECRET
 - CODE_MANAGEMENT_WEBHOOK_TOKEN
 {{- end }}
+
+{{/*
+Reject app service names that would collide with a bundled datastore.
+
+A Service's selector is {name: <svcName>, instance: <release>, part-of: kodus}
+(kodus-common.serviceSelectorLabels), and the bundled datastore pods carry
+{name: postgres|mongodb|rabbitmq, instance: <release>, part-of: kodus}. So a
+service declared as `postgres:` under .Values.services renders a Service whose
+selector matches all three labels on the DATABASE pods — app traffic would be
+balanced onto Postgres, and the failure reads as a bizarre protocol error rather
+than a naming mistake.
+
+Fixing this in the labels themselves is not an option on an existing release:
+Deployment.spec.selector is immutable, so adding a `component` label would break
+`helm upgrade`. Failing the render is the cheap equivalent — it costs nothing,
+touches no selector, and turns a silent misroute into a clear message at install
+time. Call once with the root context.
+*/}}
+{{- define "kodus.validateServiceNames" -}}
+{{- $reserved := list "postgres" "mongodb" "rabbitmq" }}
+{{- range $name, $svc := .Values.services }}
+{{- if has $name $reserved }}
+{{- fail (printf "ERROR: services.%s is a reserved name. The bundled %s StatefulSet labels its pods app.kubernetes.io/name=%s, so this service's selector would match the datastore pods instead of its own. Rename the service (e.g. %s-api)." $name $name $name $name) }}
+{{- end }}
+{{- end }}
+{{- end }}

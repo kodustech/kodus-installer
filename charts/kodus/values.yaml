@@ -447,6 +447,13 @@ autoscaling:
 
 pdb:
   enabled: true
+  # A PDB is generated ONLY for services whose replica floor is above 1 (the HPA's
+  # minReplicas when autoscaling is on, else the Deployment's replicas). At a floor
+  # of 1, `disruptionsAllowed = currentHealthy - minAvailable` is 0 — evictions are
+  # not slowed, they are forbidden permanently, and `kubectl drain` hangs on that
+  # pod for as long as it exists. mcp-manager and worker-analytics ship at
+  # replicas 1, so they are skipped; raise their replicas to get a PDB.
+  # Keep this at 1: setting it to the replica floor recreates the same deadlock.
   minAvailable: 1
 
 resourceQuota:

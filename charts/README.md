@@ -89,6 +89,11 @@ sent back to after the OAuth dance. The chart derives it from `NEXTAUTH_URL` (or
 web Route/Ingress host) as `<web-url>/setup/mcp/oauth`; set it explicitly when
 neither is known at template time.
 
+Both default to `replicas: 1`, so neither gets a PodDisruptionBudget — see
+[Availability](#availability-replicas-hpa-and-pdb). Adding your own service under
+`.Values.services` is supported, but `postgres`, `mongodb` and `rabbitmq` are
+[reserved names](#reserved-service-names).
+
 > **Git webhooks (required to trigger reviews).** Connecting a repo makes Kodus
 > register a webhook on the provider using `API_<provider>_CODE_MANAGEMENT_WEBHOOK`.
 > If that value is empty the app **silently skips registration** — repos connect
@@ -402,6 +407,70 @@ that makes health flap under load:
 
 These are dev-convenience defaults for **bundled** stores. In production the
 `operator`/`external` stores bring their own, operator-managed health model.
+
+### Availability: replicas, HPA and PDB
+
+Three settings decide how many pods run and how many may be evicted at once.
+They interact, and getting the combination wrong breaks node maintenance rather
+than the app — which is why the failure is easy to misread.
+
+**Replica floor.** With `autoscaling.enabled` (the default), the HPA owns the
+count and a Deployment's `replicas` field is ignored — so the chart feeds each
+service's `replicas` in as the HPA's `minReplicas`, keeping the declared value
+meaningful instead of dead config. With autoscaling off, `replicas` is used
+directly. Either way the *floor* is what matters below.
+
+**PDBs are only generated for services whose floor is above 1.** A
+`PodDisruptionBudget` caps **voluntary** disruptions — `kubectl drain`, cluster
+upgrades, autoscaler compaction. It does nothing for involuntary ones (node
+death, OOM kill); it is a brake on automation, not an availability guarantee.
+The arithmetic is `disruptionsAllowed = currentHealthy − minAvailable`, so
+`minAvailable: 1` against a single-replica service yields **zero** — evictions
+are not slowed, they are forbidden outright and permanently:
+
+```
+kodus-api                minAvailable 1, healthy 2 → 1 allowed   ✅
+kodus-mcp-manager        minAvailable 1, healthy 1 → 0 allowed   ❌ drain hangs
+```
+
+`oc adm drain` then blocks forever, and the error names the *pod*
+(`Cannot evict pod as it would violate the pod's disruption budget`) rather than
+the PDB — so a node upgrade stalls on what reads as an application problem. A PDB
+that blocks every eviction is worse than no PDB: it trades seconds of downtime
+for a cluster that can no longer be maintained.
+
+`mcp-manager` and `worker-analytics` default to `replicas: 1`, so they get no
+PDB. Give them a floor of 2 and they do:
+
+```bash
+--set services.mcp-manager.replicas=2
+```
+
+Raising `pdb.minAvailable` to match the floor recreates the same deadlock — leave
+it at 1 unless you have a quorum-based workload that genuinely prefers downtime
+over losing quorum.
+
+**Memory is deliberately not an HPA metric.** Each Node process carries a
+baseline heap that does not shrink as replicas are added, so `replicas × (usage /
+target)` never falls back below the target: the HPA ratchets to `maxReplicas` at
+idle and stays there. The visible symptom is not high memory but replica sprawl
+exhausting Postgres connections, which reads as an app outage. CPU converges and
+is the only metric used. Keep `autoscaling.maxReplicas` in step with
+`postgres.bundled.maxConnections` — every replica holds a pool.
+
+### Reserved service names
+
+`postgres`, `mongodb` and `rabbitmq` cannot be used as keys under
+`.Values.services`. A service's Service selector is
+`{name: <svcName>, instance: <release>, part-of: kodus}`, and the bundled
+datastore pods carry exactly those labels with `name` set to the store — so a
+service named `postgres` would render a Service that selects the **database**
+pods, silently balancing app traffic onto Postgres. The chart fails the render
+with a message naming the collision instead of letting it install.
+
+Splitting the labels apart would be the tidier fix, but `Deployment.spec.selector`
+is immutable — adding a `component` label would break `helm upgrade` on every
+existing release. Failing fast costs nothing and touches no selector.
 
 ### Logs & observability (Pino + OpenTelemetry)
 
