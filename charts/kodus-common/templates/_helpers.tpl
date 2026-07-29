@@ -78,8 +78,29 @@ Call with (dict "root" . "serviceName" $name).
 {{- define "kodus-common.serviceLabels" -}}
 {{ include "kodus-common.serviceSelectorLabels" . }}
 helm.sh/chart: {{ include "kodus-common.chart" .root }}
-{{- if .root.Chart.AppVersion }}
-app.kubernetes.io/version: {{ .root.Chart.AppVersion | quote }}
+{{- /*
+  Report the version this service is ACTUALLY running, not the one the chart was
+  built around. Chart.AppVersion is what the chart ships with; a user who ran
+  `--set imageTag=2.1.28`, or overrode one service's image.tag, is running
+  something else. A version label that disagrees with the running image is worse
+  than no label — support debugs against the wrong release, and the label is what
+  told them to.
+
+  Resolution mirrors deployment.yaml: the service's own image.tag, else the
+  stack-wide imageTag, else the chart's appVersion. Truncated to 63 characters
+  because that is the label-value limit; a longer tag would fail admission.
+
+  Components with no entry under .Values.services — the bundled datastores — keep
+  the chart's appVersion. It says nothing useful about pgvector or mongo, but
+  those run images this chart does not version, and rewriting their pod-template
+  labels would restart a database on upgrade to fix a cosmetic field. Their real
+  images are one `kubectl get sts -o wide` away, and the support annotations on
+  the ConfigMap spell out the whole picture.
+*/}}
+{{- $svc := (index .root.Values.services .serviceName) | default dict }}
+{{- $tag := (dig "image" "tag" "" $svc) | default .root.Values.imageTag | default .root.Chart.AppVersion }}
+{{- if $tag }}
+app.kubernetes.io/version: {{ $tag | toString | trunc 63 | trimSuffix "-" | trimSuffix "." | quote }}
 {{- end }}
 app.kubernetes.io/managed-by: {{ .root.Release.Service }}
 {{- with .root.Values.global.labels }}

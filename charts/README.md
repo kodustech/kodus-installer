@@ -375,6 +375,43 @@ redacted support bundle to share with Kodus support:
 Still stuck? Reach the Kodus team at **support@kodus.io**, the
 [Discord](https://discord.gg/QFzwwmNmdN), or [docs.kodus.io](https://docs.kodus.io).
 
+### Deployment fingerprint
+
+Every install stamps its own configuration onto the ConfigMap, so the first
+questions on any ticket — which chart, which Kodus release, which platform,
+which datastore modes — have one answer instead of three approximations. The
+doctor prints it last, ready to paste, or read it directly:
+
+```bash
+kubectl get cm -n kodus -l app.kubernetes.io/part-of=kodus \
+  -o go-template='{{range $k, $v := (index .items 0).metadata.annotations}}{{$k}}={{$v}}{{"\n"}}{{end}}' \
+  | grep '^kodus.io/'
+```
+
+```
+kodus.io/chart-version=0.2.0
+kodus.io/app-version=2.1.27
+kodus.io/platform=kubernetes
+kodus.io/datastores=postgres=bundled,mongodb=bundled,rabbitmq=bundled
+kodus.io/services=api=2.1.27,mcp-manager=2.1.27,web=2.1.27,webhooks=2.1.27,worker=2.1.27
+kodus.io/ingress=ingress
+kodus.io/secrets=chart-generated
+kodus.io/hardening=networkPolicy=true,pdb=true,autoscaling=true
+```
+
+**It is safe to paste in public.** It records which knobs are set, never what they
+are set to when the value is yours: no hostnames, no URLs, no secrets, no
+identifiers. Nothing is transmitted anywhere — the chart writes it, the cluster
+holds it, and you decide whether to share it. `kodus.io/services` is the one to
+read when a single service was pinned to a different tag from the rest.
+
+Each workload also carries `app.kubernetes.io/version` set to the image it is
+**actually** running, not the chart's `appVersion` — so `kubectl get deploy -L
+app.kubernetes.io/version` stays truthful after a `--set imageTag=` or a
+per-service override. The bundled datastores are the exception: they run images
+this chart does not version, so their label reports the chart's `appVersion` and
+their real images come from `kubectl get sts -o wide`.
+
 | Symptom | Cause | Fix |
 |---|---|---|
 | UI: **"Error saving repositories"** on setup | `WEB_HOSTNAME_API` is `localhost` (or `http`), so the Git provider can't reach the webhook it tries to register | Set `WEB_HOSTNAME_API` to a public hostname and the `API_*_CODE_MANAGEMENT_WEBHOOK` to `https://<host>/<provider>/webhook`. For local testing, front it with a public tunnel/edge. |

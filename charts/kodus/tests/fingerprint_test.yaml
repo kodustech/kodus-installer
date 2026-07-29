@@ -1,0 +1,161 @@
+suite: Version reporting
+# Two things a maintainer reads off a cluster before debugging anything: which
+# version a workload is running, and how the release was configured. Both are
+# generated, and both are the kind of thing that rots silently — nobody notices a
+# stale version label until it has sent someone down the wrong path.
+templates:
+  - templates/deployment.yaml
+  - templates/configmap.yaml
+  - templates/secrets.yaml
+release:
+  name: kodus
+tests:
+  - it: labels a service with the version it is actually running
+    # Not Chart.AppVersion. Someone who ran --set imageTag=2.1.28 is running
+    # 2.1.28, and a label that still claims the chart's appVersion is worse than
+    # no label — it is a confident wrong answer.
+    set:
+      imageTag: 2.1.28
+    documentSelector:
+      path: metadata.name
+      value: kodus-api
+    asserts:
+      - equal:
+          path: metadata.labels["app.kubernetes.io/version"]
+          value: "2.1.28"
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: ghcr.io/kodustech/kodus-ai-api:2.1.28
+
+  - it: follows a single service's tag override without touching the others
+    set:
+      services:
+        api:
+          image:
+            tag: "2.1.99"
+    documentSelector:
+      path: metadata.name
+      value: kodus-api
+    asserts:
+      - equal:
+          path: metadata.labels["app.kubernetes.io/version"]
+          value: "2.1.99"
+
+  - it: leaves other services on the stack-wide tag
+    set:
+      services:
+        api:
+          image:
+            tag: "2.1.99"
+    documentSelector:
+      path: metadata.name
+      value: kodus-web
+    asserts:
+      - equal:
+          path: metadata.labels["app.kubernetes.io/version"]
+          value: "2.1.27"
+
+  - it: keeps the version label within the 63-character limit
+    # Label values over 63 characters are rejected by the API server, so a long
+    # tag would take the whole install down rather than just look untidy.
+    set:
+      imageTag: aaaaaaaaaa-bbbbbbbbbb-cccccccccc-dddddddddd-eeeeeeeeee-ffffffffff-gggggggggg
+    documentSelector:
+      path: metadata.name
+      value: kodus-api
+    asserts:
+      - matchRegex:
+          path: metadata.labels["app.kubernetes.io/version"]
+          pattern: ^.{1,63}$
+
+  - it: records the deployment shape on the ConfigMap
+    documentSelector:
+      path: metadata.name
+      value: kodus-config
+    asserts:
+      - equal:
+          path: metadata.annotations["kodus.io/platform"]
+          value: kubernetes
+      - equal:
+          path: metadata.annotations["kodus.io/datastores"]
+          value: postgres=bundled,mongodb=bundled,rabbitmq=bundled
+      - equal:
+          path: metadata.annotations["kodus.io/ingress"]
+          value: ingress
+      - equal:
+          path: metadata.annotations["kodus.io/secrets"]
+          value: chart-generated
+
+  - it: reports each enabled service's effective tag and omits disabled ones
+    set:
+      services:
+        api:
+          image:
+            tag: "2.1.99"
+        worker-analytics:
+          enabled: false
+    documentSelector:
+      path: metadata.name
+      value: kodus-config
+    asserts:
+      - equal:
+          path: metadata.annotations["kodus.io/services"]
+          value: api=2.1.99,mcp-manager=2.1.27,web=2.1.27,webhooks=2.1.27,worker=2.1.27
+
+  - it: distinguishes how secrets are sourced
+    # Changes what a maintainer should even ask for: with external-secrets, an
+    # empty value is the operator's problem, not the chart's.
+    set:
+      global:
+        existingSecret: my-vault-secret
+    documentSelector:
+      path: metadata.name
+      value: kodus-config
+    asserts:
+      - equal:
+          path: metadata.annotations["kodus.io/secrets"]
+          value: existing-secret
+
+  - it: reports Routes rather than Ingress on OpenShift
+    set:
+      platform: openshift
+    documentSelector:
+      path: metadata.name
+      value: kodus-config
+    asserts:
+      - equal:
+          path: metadata.annotations["kodus.io/ingress"]
+          value: route
+
+  - it: does not absorb hostnames or URLs from the release config
+    # The fingerprint exists so a user can paste it into a public issue. It
+    # reports which knobs are set, not what they are set to — the moment a
+    # hostname or URL lands here, pasting it stops being safe and the annotations
+    # stop being useful.
+    #
+    # Scoped to app-version and services because those are the only two
+    # annotations built from user-supplied free text (imageTag and per-service
+    # image.tag). The rest are enums the chart itself produces. A NEW annotation
+    # carrying a user string would not be caught here — asserting the whole map
+    # would catch it, but would then fail on every version bump and break the
+    # automated bump PR, so the guard is deliberately narrower than the rule.
+    set:
+      ingress:
+        hosts:
+          web: { host: internal.acme-corp.example }
+      global:
+        config:
+          NEXTAUTH_URL: https://internal.acme-corp.example
+    documentSelector:
+      path: metadata.name
+      value: kodus-config
+    asserts:
+      - notMatchRegex:
+          path: metadata.annotations["kodus.io/services"]
+          pattern: (acme-corp|https?://)
+      - notMatchRegex:
+          path: metadata.annotations["kodus.io/app-version"]
+          pattern: (acme-corp|https?://)
+      - notMatchRegex:
+          path: metadata.annotations["kodus.io/datastores"]
+          pattern: (acme-corp|https?://)
