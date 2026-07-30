@@ -5,9 +5,9 @@ type: application
 # Chart version — independent of the Kodus release in appVersion. Bump on every
 # PR that touches templates or values; helm-ci.yml enforces it, because the chart
 # is published to a registry by tag and a published version can never be re-cut.
-version: 0.2.0
+version: 0.2.1
 # appVersion tracks the Kodus self-hosted release (docker image tag).
-appVersion: "2.1.27"
+appVersion: "2.1.28"
 keywords:
   - kodus
   - ai

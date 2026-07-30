@@ -181,7 +181,7 @@ global:
 # Track a newer Kodus release without waiting for a chart release:
 #   --set imageTag=2.1.28          (or services.<name>.image.digest to pin by SHA)
 # Keep this value and Chart.yaml's appVersion in step when bumping.
-imageTag: "2.1.27"
+imageTag: "2.1.28"
 
 # How many old ReplicaSets each Deployment keeps for rollback. Lower than the k8s
 # default (10) so upgrades don't pile up ReplicaSets and exhaust a namespace's
