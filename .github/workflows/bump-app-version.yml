@@ -123,6 +123,19 @@ jobs:
           version: v0.32.0
           install_only: true
 
+      # The E2E proves the chart RUNS with the new images. It says nothing about
+      # rendered-output assertions, and this workflow opens a PR that GitHub will
+      # not run any checks on — so whatever slips through here lands on main
+      # unverified. That is not hypothetical: the 2.1.28 bump broke two unit tests
+      # that pinned the old appVersion literally, and main went red on merge.
+      - name: Rendered output still holds
+        run: |
+          helm lint charts/kodus -f charts/kodus/values-dev.yaml
+          helm plugin install https://github.com/helm-unittest/helm-unittest \
+            --version v1.1.2 --verify=false
+          helm unittest charts/kodus
+          ./scripts/validate-chart-schema.sh
+
       # values-dev.yaml overrides imageTag with `latest`, so the E2E would happily
       # prove that `latest` works and tell us nothing about the version being
       # pinned. Pass it explicitly.

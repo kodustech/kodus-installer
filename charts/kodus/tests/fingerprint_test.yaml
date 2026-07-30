@@ -11,21 +11,26 @@ release:
   name: kodus
 tests:
   - it: labels a service with the version it is actually running
-    # Not Chart.AppVersion. Someone who ran --set imageTag=2.1.28 is running
-    # 2.1.28, and a label that still claims the chart's appVersion is worse than
-    # no label — it is a confident wrong answer.
+    # Not Chart.AppVersion. Someone who ran --set imageTag= is running that, and a
+    # label still claiming the chart's appVersion is worse than no label — it is a
+    # confident wrong answer.
+    #
+    # The value is deliberately one no Kodus release will ever carry. An earlier
+    # version of this test used the next real release number, which stopped
+    # proving anything the moment appVersion caught up to it: the assertion passed
+    # whether or not the override was honoured.
     set:
-      imageTag: 2.1.28
+      imageTag: "9.9.9"
     documentSelector:
       path: metadata.name
       value: kodus-api
     asserts:
       - equal:
           path: metadata.labels["app.kubernetes.io/version"]
-          value: "2.1.28"
+          value: "9.9.9"
       - equal:
           path: spec.template.spec.containers[0].image
-          value: ghcr.io/kodustech/kodus-ai-api:2.1.28
+          value: ghcr.io/kodustech/kodus-ai-api:9.9.9
 
   - it: follows a single service's tag override without touching the others
     set:
@@ -42,7 +47,13 @@ tests:
           value: "2.1.99"
 
   - it: leaves other services on the stack-wide tag
+    # imageTag is set explicitly rather than relying on the chart's appVersion.
+    # Asserting the shipped appVersion literally makes every routine Kodus bump
+    # fail this test — which is exactly what happened, and it fails the automated
+    # bump PR that exists to make those bumps painless. A test that breaks when
+    # the thing it does not test changes is a tax, not a guard.
     set:
+      imageTag: "9.9.9"
       services:
         api:
           image:
@@ -53,7 +64,7 @@ tests:
     asserts:
       - equal:
           path: metadata.labels["app.kubernetes.io/version"]
-          value: "2.1.27"
+          value: "9.9.9"
 
   - it: keeps the version label within the 63-character limit
     # Label values over 63 characters are rejected by the API server, so a long
@@ -87,7 +98,10 @@ tests:
           value: chart-generated
 
   - it: reports each enabled service's effective tag and omits disabled ones
+    # Same reason as above: pin imageTag here so a Kodus release bump cannot fail
+    # a test about per-service override and enablement.
     set:
+      imageTag: "9.9.9"
       services:
         api:
           image:
@@ -100,7 +114,7 @@ tests:
     asserts:
       - equal:
           path: metadata.annotations["kodus.io/services"]
-          value: api=2.1.99,mcp-manager=2.1.27,web=2.1.27,webhooks=2.1.27,worker=2.1.27
+          value: api=2.1.99,mcp-manager=9.9.9,web=9.9.9,webhooks=9.9.9,worker=9.9.9
 
   - it: distinguishes how secrets are sourced
     # Changes what a maintainer should even ask for: with external-secrets, an
