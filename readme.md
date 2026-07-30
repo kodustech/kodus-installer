@@ -88,6 +88,13 @@ The chart is signed; every release can be verified before you install it
 fixes the Kodus release — `0.2.0` installs `2.1.27` — so `helm rollback` and
 `helm upgrade` mean something.
 
+> Landing here from the **GitHub package page**? Ignore its `docker pull` snippet.
+> That page renders any registry as if it held container images: it shows the
+> cosign *signature* (`sha256-…`) as "Latest" and builds the command from it, so
+> copying it fails with `no matching manifest`. A Helm chart is not a container
+> image — use the `helm install` above.
+> [Why](charts/README.md#verifying-what-youre-about-to-install).
+
 Each data store can run `bundled` (this chart brings it up), `external` (your
 managed DB), or `operator` (CloudNativePG / RabbitMQ / Mongo operators for HA).
 OpenShift uses `-f values-openshift.yaml` (Routes + SCC). Verify any deployment

@@ -678,6 +678,31 @@ There is no signing key to store, leak or rotate — the identity is the workflo
 own OIDC token. A chart pushed by anyone else, including with a stolen registry
 credential, produces no valid signature.
 
+> **The package page on GitHub will mislead you.** It renders every OCI registry
+> as if it held container images, and it does not know what a Helm chart or a
+> cosign signature is. Two consequences:
+>
+> - A tag named `sha256-<digest>` appears alongside the real versions. That is the
+>   **signature of** the chart with that digest, not a chart. cosign stores it
+>   under a name derived from what it signed (`:` is not legal in a tag, so it
+>   becomes `-`), and `cosign verify` derives that name for you — you never type
+>   it.
+> - Because the signature is necessarily pushed *after* the chart (a signature
+>   binds to a digest, which does not exist until the artifact is pushed), GitHub
+>   sorts it first and labels it **Latest**, then builds its "Install from the
+>   command line" snippet from it. Copying that snippet gives you
+>   `docker pull …:sha256-…`, which fails with `no matching manifest for
+>   linux/arm64/v8` — the signature has no filesystem layers and no platform.
+>
+> Neither is a problem with the chart. Use `helm pull` / `helm install` with the
+> version number, never the page's snippet.
+>
+> Publishing signatures to a separate repository would tidy the listing, at the
+> price of every consumer needing `COSIGN_REPOSITORY` set to verify — and whoever
+> forgot it would get "no signatures found" and reasonably conclude the chart is
+> unsigned. A confusing failure in the one step whose job is to establish trust
+> costs more than an untidy page, so the signatures stay where cosign puts them.
+
 On our side of the line: every GitHub Action is pinned by **commit SHA**, with the
 version in a trailing comment. A tag like `@v7` is a moving pointer — anyone who
 can push to the action's repo can repoint it, and it runs with the job's token on
