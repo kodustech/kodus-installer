@@ -29,6 +29,29 @@ spec:
         # churn this hash — only a real change rolls the pods.
         checksum/secrets: {{ include (print $.Template.BasePath "/secrets.yaml") $ | sha256sum }}
     spec:
+      {{- /*
+        DERIVED from the app's own drain timeout, never written by hand. Kubernetes
+        sends SIGTERM, waits this long, then SIGKILLs — so a grace period below the
+        drain timeout makes the app's shutdown path dead code, killed before it can
+        finish. That was the state before this: the default 30s against
+        API_WORKER_DRAIN_TIMEOUT_MS of 600000 (10 minutes) meant every worker was
+        killed at 30 seconds, on every rollout, scale-down and node drain, leaving
+        in-flight jobs orphaned in PROCESSING.
+
+        Two numbers that must agree cannot be left to agree by hand — one of them
+        gets tuned and the other is forgotten. The buffer covers SIGTERM delivery
+        and connection teardown after the drain itself returns.
+
+        Note what this deliberately does NOT try to do: a Kodus review job may
+        legitimately run 105 minutes, and no grace period can accommodate that —
+        a node drain would take two hours and `helm upgrade --wait` would hang.
+        Draining means "stop consuming and let the queue reclaim the work", not
+        "finish it". Anything killed mid-flight is the stale-job reaper's problem
+        (WORKFLOW_STALE_JOB_* below), which is also the only net under OOMKill,
+        where no SIGTERM is delivered at all.
+      */}}
+      {{- $drainMs := (dig "API_WORKER_DRAIN_TIMEOUT_MS" "" $.Values.global.config) | default "60000" | toString | atoi }}
+      terminationGracePeriodSeconds: {{ add (div $drainMs 1000) ($.Values.terminationGraceBufferSeconds | default 30 | int) }}
       serviceAccountName: {{ include "kodus-common.serviceAccountName" $ }}
       {{- include "kodus-common.imagePullSecrets" $ | nindent 6 }}
       securityContext:

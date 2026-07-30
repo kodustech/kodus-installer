@@ -1,0 +1,93 @@
+suite: Graceful shutdown
+# Kubernetes sends SIGTERM, waits terminationGracePeriodSeconds, then SIGKILLs.
+# A grace period below the app's own drain timeout makes the shutdown path dead
+# code — killed before it can finish — and that is not hypothetical: the chart
+# shipped with no grace period at all, so the default 30s ran against a drain
+# timeout of 600000ms and every worker was killed at 30 seconds, on every rollout,
+# scale-down and node drain, leaving in-flight jobs orphaned in PROCESSING.
+#
+# Nothing rendered invalid YAML. The two numbers simply disagreed, in different
+# files, one of them implicit. So the grace period is DERIVED, and these tests pin
+# the derivation rather than the number.
+templates:
+  - templates/deployment.yaml
+  - templates/configmap.yaml
+  - templates/secrets.yaml
+release:
+  name: kodus
+tests:
+  - it: waits longer than the app spends draining
+    # The invariant. Any value, any buffer: Kubernetes must outlast the drain.
+    documentSelector:
+      path: metadata.name
+      value: kodus-worker
+    asserts:
+      - equal:
+          path: spec.template.spec.terminationGracePeriodSeconds
+          value: 90        # 60s drain + 30s buffer
+
+  - it: follows the drain timeout when it is raised
+    set:
+      global:
+        config:
+          API_WORKER_DRAIN_TIMEOUT_MS: "120000"
+    documentSelector:
+      path: metadata.name
+      value: kodus-worker
+    asserts:
+      - equal:
+          path: spec.template.spec.terminationGracePeriodSeconds
+          value: 150
+
+  - it: applies to every service, not just the workers
+    # api and webhooks hold in-flight HTTP requests; being SIGKILLed mid-request
+    # is the same failure wearing different clothes.
+    documentSelector:
+      path: metadata.name
+      value: kodus-api
+    asserts:
+      - equal:
+          path: spec.template.spec.terminationGracePeriodSeconds
+          value: 90
+
+  - it: keeps a floor when the drain timeout is cleared
+    # An operator who empties the value must not silently fall back to a bare
+    # buffer — or worse, to zero, which asks Kubernetes to SIGKILL immediately.
+    set:
+      global:
+        config:
+          API_WORKER_DRAIN_TIMEOUT_MS: ""
+    documentSelector:
+      path: metadata.name
+      value: kodus-worker
+    asserts:
+      - equal:
+          path: spec.template.spec.terminationGracePeriodSeconds
+          value: 90
+
+  - it: ships the stale-job reaper settings
+    # The only net under OOMKill, where no SIGTERM is delivered and the process
+    # vanishes with its job still claimed. Absent from the chart entirely until
+    # now, while being more necessary on Kubernetes than under Compose.
+    documentSelector:
+      path: metadata.name
+      value: kodus-config
+    asserts:
+      - equal:
+          path: data.WORKFLOW_STALE_JOB_REAPER_CRON
+          value: "0 */10 * * * *"
+      - equal:
+          path: data.WORKFLOW_STALE_JOB_TIMEOUT_MINUTES
+          value: "180"
+
+  - it: keeps the reaper threshold above the longest legitimate run
+    # A review job may run 105 minutes, and the inbox claim lasts 150. A reaper
+    # threshold below either kills live work and calls it cleanup — the failure
+    # would look like random job loss under load, which is close to undebuggable.
+    documentSelector:
+      path: metadata.name
+      value: kodus-config
+    asserts:
+      - matchRegex:
+          path: data.WORKFLOW_STALE_JOB_TIMEOUT_MINUTES
+          pattern: ^(1[6-9][0-9]|[2-9][0-9]{2,})$   # >= 160

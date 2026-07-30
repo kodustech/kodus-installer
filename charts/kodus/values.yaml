@@ -102,6 +102,28 @@ global:
     SANDBOX_PROVIDER: "local"
     API_AGENT_REVIEW_ENABLED: "true"
     NODE_ENV: "production"
+    # --- Graceful shutdown ---
+    # How long a worker spends draining after SIGTERM before exiting. The pod's
+    # terminationGracePeriodSeconds is DERIVED from this (see deployment.yaml), so
+    # the two can never disagree — Kubernetes will always wait longer than the app
+    # asks for.
+    #
+    # 60s, not the 600000 the schema suggests. Draining here means "stop consuming
+    # and let the queue reclaim the work", not "finish it": a review job may
+    # legitimately run 105 minutes, so no shutdown window can finish one, and a
+    # 10-minute grace period would make every node drain and `helm upgrade` crawl
+    # for no benefit. Raise it only if your workers genuinely complete work during
+    # shutdown, and expect drains to slow by the same amount.
+    API_WORKER_DRAIN_TIMEOUT_MS: "60000"
+    # Stale-job reaper — fails jobs left in PROCESSING by a worker that died
+    # mid-processing. This matters far more on Kubernetes than under Compose:
+    # OOMKill delivers no SIGTERM at all, so the process simply vanishes with the
+    # job still claimed, and HPA scale-down, node drains and rollouts all end
+    # workers routinely. Without the reaper those jobs are stuck forever.
+    WORKFLOW_STALE_JOB_REAPER_CRON: "0 */10 * * * *"
+    # Must exceed the longest legitimate run — the 105min job-abort timeout and the
+    # 150min inbox claim timeout — or the reaper kills live work. 180 leaves margin.
+    WORKFLOW_STALE_JOB_TIMEOUT_MINUTES: "180"
     # Cron (UTC)
     API_CRON_SYNC_CODE_REVIEW_REACTIONS: "0 0 * * *"
     API_CRON_KODY_LEARNING: "0 0 * * 6"
@@ -188,6 +210,12 @@ imageTag: "2.1.28"
 # replicaset quota (multi-tenant / OpenShift sandbox). Raise if you need deeper
 # `kubectl rollout undo` history.
 revisionHistoryLimit: 3
+
+# Added to the app's drain timeout to form terminationGracePeriodSeconds. It covers
+# what happens after the drain returns — SIGTERM delivery, closing the AMQP and
+# database connections, the process actually exiting. Kubernetes must always wait
+# longer than the app asks for, or the drain never completes.
+terminationGraceBufferSeconds: 30
 
 image:
   pullPolicy: Always
