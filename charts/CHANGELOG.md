@@ -10,6 +10,37 @@ upgrade. See [Releasing the chart](README.md#releasing-the-chart).
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.2.2] — 2026-07-30 · Kodus 2.1.28
+
+Fixes a shutdown bug and exposes the settings around it. The Kodus release is unchanged.
+
+### Fixed
+
+- **Workers were SIGKILLed 30 seconds into a 10-minute drain.** The chart set no
+  `terminationGracePeriodSeconds` at all, so Kubernetes applied its 30s default
+  while the app's `API_WORKER_DRAIN_TIMEOUT_MS` was 600000. The shutdown path was
+  dead code — killed twenty times over before it could finish — on every rollout,
+  every HPA scale-down and every node drain, leaving in-flight jobs orphaned in
+  `PROCESSING`. Nothing rendered invalid: the two numbers simply disagreed, in
+  different files, one of them implicit.
+
+  The grace period is now **derived** from the drain timeout plus a buffer, so the
+  two cannot drift apart again. Draining is defined as "stop consuming and let the
+  queue reclaim the work", not "finish it" — a review job may legitimately run 105
+  minutes, and no grace period can accommodate that without making node drains
+  take hours.
+
+### Added
+
+- `API_WORKER_DRAIN_TIMEOUT_MS` (60s) and `terminationGraceBufferSeconds` (30s),
+  both now visible and tunable instead of implicit.
+- `WORKFLOW_STALE_JOB_REAPER_CRON` and `WORKFLOW_STALE_JOB_TIMEOUT_MINUTES`, from
+  Kodus 2.1.28. These matter more here than under Compose: OOMKill delivers no
+  SIGTERM at all, so a worker can vanish with its job still claimed, and the
+  reaper is the only thing that reclaims it. The threshold stays above the 105min
+  job-abort and 150min claim timeouts — a lower one would kill live work and call
+  it cleanup, surfacing as random job loss under load.
+
 ## [0.2.1] — 2026-07-30 · Kodus 2.1.28
 
 Patch: only the Kodus release moved. No chart templates changed.
