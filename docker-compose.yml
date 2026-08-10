@@ -1,6 +1,6 @@
 services:
   kodus-web:
-    image: ghcr.io/kodustech/kodus-ai-web:${IMAGE_TAG:-latest}
+    image: ${KODUS_REGISTRY:-ghcr.io/kodustech}/kodus-ai-web:${IMAGE_TAG:-latest}
     container_name: kodus-web-prod
     ports:
       - "${WEB_PORT}:${WEB_PORT}"
@@ -14,7 +14,7 @@ services:
       - .env
 
   api:
-    image: ghcr.io/kodustech/kodus-ai-api:${IMAGE_TAG:-latest}
+    image: ${KODUS_REGISTRY:-ghcr.io/kodustech}/kodus-ai-api:${IMAGE_TAG:-latest}
     platform: linux/amd64
     container_name: ${GLOBAL_API_CONTAINER_NAME:-kodus-api}
     volumes:
@@ -40,7 +40,7 @@ services:
       - rabbitmq
 
   worker:
-    image: ghcr.io/kodustech/kodus-ai-worker:${IMAGE_TAG:-latest}
+    image: ${KODUS_REGISTRY:-ghcr.io/kodustech}/kodus-ai-worker:${IMAGE_TAG:-latest}
     platform: linux/amd64
     container_name: kodus-worker-prod
     volumes:
@@ -78,7 +78,7 @@ services:
   # don't pay for an idle worker. Enable with `COMPOSE_PROFILES=analytics`
   # (and set the ANALYTICS_* block in .env). See docs → Analytics Worker.
   worker-analytics:
-    image: ghcr.io/kodustech/kodus-ai-worker:${IMAGE_TAG:-latest}
+    image: ${KODUS_REGISTRY:-ghcr.io/kodustech}/kodus-ai-worker:${IMAGE_TAG:-latest}
     platform: linux/amd64
     container_name: kodus-worker-analytics
     profiles:
@@ -107,7 +107,7 @@ services:
       - rabbitmq
 
   webhooks:
-    image: ghcr.io/kodustech/kodus-ai-webhook:${IMAGE_TAG:-latest}
+    image: ${KODUS_REGISTRY:-ghcr.io/kodustech}/kodus-ai-webhook:${IMAGE_TAG:-latest}
     platform: linux/amd64
     container_name: kodus-webhooks-prod
     volumes:
@@ -136,7 +136,7 @@ services:
       - rabbitmq
 
   kodus-mcp-manager:
-    image: ghcr.io/kodustech/kodus-mcp-manager:${IMAGE_TAG:-latest}
+    image: ${KODUS_REGISTRY:-ghcr.io/kodustech}/kodus-mcp-manager:${IMAGE_TAG:-latest}
     platform: linux/amd64
     container_name: kodus-mcp-manager
     ports:
@@ -160,7 +160,7 @@ services:
     # tag rather than :latest because this image tracks the RabbitMQ + plugin
     # version, not the Kodus release. The local docker/rabbitmq/ build context
     # is kept as a fallback but is no longer used.
-    image: ghcr.io/kodustech/kodus-rabbitmq:4.2.2-kodus
+    image: ${KODUS_REGISTRY:-ghcr.io/kodustech}/kodus-rabbitmq:4.2.2-kodus
     container_name: rabbitmq-prod
     hostname: ${RABBITMQ_HOSTNAME:-rabbitmq}
     ports:
