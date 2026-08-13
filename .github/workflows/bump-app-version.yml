@@ -129,7 +129,12 @@ jobs:
       # unverified. That is not hypothetical: the 2.1.28 bump broke two unit tests
       # that pinned the old appVersion literally, and main went red on merge.
       - name: Rendered output still holds
+        if: steps.target.outputs.changed == 'true'
         run: |
+          # kodus-common is a file:// sub-chart and charts/*/charts/ is gitignored,
+          # so the runner has no charts/kodus/charts/ — every helm command that
+          # renders a template fails without this.
+          helm dependency build charts/kodus
           helm lint charts/kodus -f charts/kodus/values-dev.yaml
           helm plugin install https://github.com/helm-unittest/helm-unittest \
             --version v1.1.2 --verify=false
