@@ -10,6 +10,13 @@ upgrade. See [Releasing the chart](README.md#releasing-the-chart).
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.2.4] — 2026-08-30 · Kodus 2.1.31
+
+### Fixed
+
+- Bundled RabbitMQ now keeps consumers alive for the full two-hour code-review
+  processing timeout instead of using RabbitMQ's 30-minute default.
+
 ## [0.2.2] — 2026-07-30 · Kodus 2.1.28
 
 Fixes a shutdown bug and exposes the settings around it. The Kodus release is unchanged.

@@ -114,7 +114,9 @@ spec:
                   name: {{ $name }}-secret
                   key: password
             - name: RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS
-              value: "-rabbit heartbeat 60"
+              # Code-review jobs may run for up to two hours; RabbitMQ's 30-minute
+              # default consumer timeout would close the channel while work is active.
+              value: "-rabbit heartbeat 60 -rabbit consumer_timeout 7200000"
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:

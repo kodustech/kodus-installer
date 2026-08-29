@@ -173,7 +173,9 @@ services:
     environment:
       - RABBITMQ_DEFAULT_USER=${RABBITMQ_DEFAULT_USER:-kodus}
       - RABBITMQ_DEFAULT_PASS=${RABBITMQ_DEFAULT_PASS:-kodus}
-      - RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS=-rabbit heartbeat 60
+      # Code-review jobs may run for up to two hours; RabbitMQ's 30-minute
+      # default consumer timeout would close the channel while work is active.
+      - RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS=-rabbit heartbeat 60 -rabbit consumer_timeout 7200000
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "-q", "check_running"]
       interval: 30s

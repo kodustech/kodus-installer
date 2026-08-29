@@ -1,0 +1,16 @@
+suite: Bundled RabbitMQ
+templates:
+  - templates/datastores/bundled-rabbitmq.yaml
+release:
+  name: kodus
+tests:
+  - it: allows long-running code reviews to finish before RabbitMQ closes the consumer
+    documentSelector:
+      path: kind
+      value: StatefulSet
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS
+            value: "-rabbit heartbeat 60 -rabbit consumer_timeout 7200000"
