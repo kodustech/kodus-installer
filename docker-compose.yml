@@ -38,9 +38,12 @@ services:
     env_file:
       - .env
     depends_on:
-      - db_kodus_postgres
-      - db_kodus_mongodb
-      - rabbitmq
+      db_kodus_postgres:
+        condition: service_healthy
+      db_kodus_mongodb:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
 
   worker:
     image: ${KODUS_REGISTRY:-ghcr.io/kodustech}/kodus-ai-worker:${IMAGE_TAG:-latest}
@@ -69,9 +72,12 @@ services:
     env_file:
       - .env
     depends_on:
-      - db_kodus_postgres
-      - db_kodus_mongodb
-      - rabbitmq
+      db_kodus_postgres:
+        condition: service_healthy
+      db_kodus_mongodb:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
 
   # Analytics ingestion worker (Enterprise / Cockpit). Same image as `worker`,
   # only WORKER_ROLE differs: this process runs the cockpit warehouse ingestion
@@ -107,9 +113,12 @@ services:
     env_file:
       - .env
     depends_on:
-      - db_kodus_postgres
-      - db_kodus_mongodb
-      - rabbitmq
+      db_kodus_postgres:
+        condition: service_healthy
+      db_kodus_mongodb:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
 
   webhooks:
     image: ${KODUS_REGISTRY:-ghcr.io/kodustech}/kodus-ai-webhook:${IMAGE_TAG:-latest}
@@ -137,9 +146,12 @@ services:
     env_file:
       - .env
     depends_on:
-      - db_kodus_postgres
-      - db_kodus_mongodb
-      - rabbitmq
+      db_kodus_postgres:
+        condition: service_healthy
+      db_kodus_mongodb:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
 
   kodus-mcp-manager:
     image: ${KODUS_REGISTRY:-ghcr.io/kodustech}/kodus-mcp-manager:${IMAGE_TAG:-latest}
@@ -209,9 +221,23 @@ services:
       - ./docker-entrypoint-initdb.d:/docker-entrypoint-initdb.d
     networks:
       - kodus-backend-services
+    healthcheck:
+      test:
+        ["CMD-SHELL", "pg_isready -U ${API_PG_DB_USERNAME} -d ${API_PG_DB_DATABASE}"]
+      interval: 5s
+      timeout: 3s
+      retries: 6
+      start_period: 30s
 
   db_kodus_mongodb:
-    image: docker.io/mongo:8
+    # Floating major by default, so an existing installation keeps reading its
+    # own data files: a pin would be a downgrade for anyone whose feature
+    # compatibility version is already ahead of it. Overridable because MongoDB
+    # 8.0.21-8.0.29 and 8.3.0-8.3.8 refuse to start on Linux kernels 6.19+
+    # (SERVER-121912 - tcmalloc violates the rseq ABI). Fixed in 8.0.30 / 8.3.9;
+    # until those publish, an environment on an affected kernel sets
+    # MONGO_IMAGE_TAG to a version that runs there.
+    image: docker.io/mongo:${MONGO_IMAGE_TAG:-8}
     container_name: db_kodus_mongodb
     ports:
       - "27017"
@@ -224,6 +250,21 @@ services:
       MONGO_INITDB_DATABASE: ${API_MG_DB_DATABASE}
     networks:
       - kodus-backend-services
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "echo 'db.runCommand({ ping: 1 }).ok' | mongosh --quiet mongodb://$${MONGO_INITDB_ROOT_USERNAME}:$${MONGO_INITDB_ROOT_PASSWORD}@localhost:27017/admin | grep -q 1",
+        ]
+      # `start_period` absorbs a slow first boot (a fresh volume has to create
+      # the root user before it answers); failures inside it do not consume a
+      # retry. `retries` absorbs flakiness, which a database does not have: it
+      # is either serving or dead. Sized so a dead mongod is reported in ~60s
+      # instead of the ~4 minutes a 20-retry ladder would take.
+      interval: 5s
+      timeout: 5s
+      retries: 6
+      start_period: 40s
 
 volumes:
   log_volume:
