@@ -64,6 +64,12 @@ model id. Not required to boot, but no reviews run without it.
 **Version pinning.** `IMAGE_TAG` selects the Kodus version for every app image
 (defaults to `latest` — pin a real tag like `2.1.24` in production).
 
+**MongoDB observability.** Docker Compose installations default
+`OBSERVABILITY_MONGO_ENABLED` to `false` because the exporter persists logs and
+telemetry in MongoDB. Set it to `true` explicitly only when you intend to retain
+and monitor that data. Disabling the exporter does not disable Kodus' primary
+MongoDB connection.
+
 ### Optional services
 
 - **MCP manager** — set `API_MCP_SERVER_ENABLED=true` and `install.sh` starts the
