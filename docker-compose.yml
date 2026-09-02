@@ -226,7 +226,7 @@ services:
         ["CMD-SHELL", "pg_isready -U ${API_PG_DB_USERNAME} -d ${API_PG_DB_DATABASE}"]
       interval: 5s
       timeout: 3s
-      retries: 6
+      retries: 5
       start_period: 30s
 
   db_kodus_mongodb:
@@ -259,11 +259,13 @@ services:
       # `start_period` absorbs a slow first boot (a fresh volume has to create
       # the root user before it answers); failures inside it do not consume a
       # retry. `retries` absorbs flakiness, which a database does not have: it
-      # is either serving or dead. Sized so a dead mongod is reported in ~60s
-      # instead of the ~4 minutes a 20-retry ladder would take.
+      # is either serving or dead. Neither database declares a restart policy,
+      # so a mongod that exits is reported to the dependent service in about a
+      # second; this ladder only bounds how long a database that is merely slow
+      # gets to become ready.
       interval: 5s
       timeout: 5s
-      retries: 6
+      retries: 5
       start_period: 40s
 
 volumes:
