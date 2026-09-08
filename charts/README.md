@@ -53,7 +53,7 @@ cd charts/kodus && helm dependency build && helm install kodus . -n kodus --crea
 
 Which Kodus release you get is fixed by the chart version: `imageTag` is **pinned**
 and matches `Chart.yaml`'s `appVersion`, so chart `0.2.0` always installs Kodus
-`2.1.27`. It sets the release for **all** services + migrations at once (like
+`2.2.1`. It sets the release for **all** services + migrations at once (like
 docker-compose `IMAGE_TAG`); `--set imageTag=` moves the whole stack and
 `services.<name>.image.tag` moves one. Auth/crypto secrets are generated
 automatically with the correct format and stay stable across upgrades.
@@ -73,7 +73,7 @@ Three things `latest` costs, all of which pinning buys back:
 | Rollback | `helm rollback` restores values, not image content; `latest` re-resolves to the same new image. |
 
 To run a newer Kodus release than the chart version pins, without waiting for a
-chart release: `--set imageTag=2.1.28`, or `services.<name>.image.digest` to pin by
+chart release: `--set imageTag=2.2.1`, or `services.<name>.image.digest` to pin by
 SHA. `values-dev.yaml` deliberately keeps `latest` — a throwaway trial wants the
 newest build, and nothing there is rolled back.
 
@@ -82,7 +82,7 @@ newest build, and nothing there is rolled back.
 ```bash
 # upgrade to a new release — the migration Job runs first (a normal Job, recreated
 # per revision — NOT a Helm hook), then the pods roll
-helm upgrade kodus . -n kodus --reuse-values --set imageTag=2.1.28
+helm upgrade kodus . -n kodus --reuse-values --set imageTag=2.2.1
 ```
 
 Secrets are preserved across the upgrade (no re-login). Roll back pods with
@@ -143,7 +143,7 @@ cd charts/kodus
 helm dependency build
 helm install kodus . -f values.yaml -f values-openshift.yaml \
   -n kodus --create-namespace \
-  --set imageTag=2.1.27 \
+  --set imageTag=2.2.1 \
   --set route.hosts.web.host=kodus.apps.cluster.example.com \
   --set route.hosts.api.host=kodus-api.apps.cluster.example.com \
   --set route.hosts.webhooks.host=kodus-webhooks.apps.cluster.example.com
@@ -255,7 +255,7 @@ mode. There's a ready-to-edit overlay — `charts/kodus/values-external-example.
 
 ```bash
 helm install kodus . -f values.yaml -f values-external-example.yaml \
-  -n kodus --create-namespace --set imageTag=2.1.27
+  -n kodus --create-namespace --set imageTag=2.2.1
 ```
 
 **Prerequisites on your existing infra** (the bundled images bake these in; a
@@ -402,10 +402,10 @@ kubectl get cm -n kodus -l app.kubernetes.io/part-of=kodus \
 
 ```
 kodus.io/chart-version=0.2.0
-kodus.io/app-version=2.1.27
+kodus.io/app-version=2.2.1
 kodus.io/platform=kubernetes
 kodus.io/datastores=postgres=bundled,mongodb=bundled,rabbitmq=bundled
-kodus.io/services=api=2.1.27,mcp-manager=2.1.27,web=2.1.27,webhooks=2.1.27,worker=2.1.27
+kodus.io/services=api=2.2.1,mcp-manager=2.2.1,web=2.2.1,webhooks=2.2.1,worker=2.2.1
 kodus.io/ingress=ingress
 kodus.io/secrets=chart-generated
 kodus.io/hardening=networkPolicy=true,pdb=true,autoscaling=true
