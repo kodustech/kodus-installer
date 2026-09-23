@@ -70,8 +70,14 @@ doctor_add_app_tsv() {
                 if [ "$(printf '%s' "$line" | awk -F'\t' '{print NF}')" = 6 ]; then
                     printf 'app:%s\n' "$line" >> "$DOCTOR_RESULTS"
                 else
-                    doctor_add unknown reviews.doctor "" "One review check line could not be read." \
-                        "" "Run ./scripts/doctor.sh --verbose and share the api output with support."
+                    # The status is the first field and never holds a tab, so
+                    # a malformed ✘ or ! still counts: it must not turn a real
+                    # failure into "Reviews: OK".
+                    local status=${line%%$'\t'*}
+                    case "$status" in fail|warn) ;; *) status=unknown ;; esac
+                    printf 'app:%s\treviews.doctor\t\t%s\t\t%s\n' "$status" \
+                        "One review check line could not be read." \
+                        "Run ./scripts/doctor.sh --verbose and share the api output with support." >> "$DOCTOR_RESULTS"
                 fi
                 ;;
         esac
