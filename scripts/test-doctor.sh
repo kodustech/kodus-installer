@@ -88,7 +88,9 @@ APP_FAIL='#verdict\tNOT_RUNNING\n#version\t2.4.0\nfail\tgit.webhook\tacme/core\t
 
 pass=0; fail=0
 run() {
-    (cd "$WORK/install" && env PATH="$WORK/bin:$PATH" "$@" ./scripts/doctor.sh) 2>&1 | sed 's/\x1b\[[0-9;]*m//g'
+    local flags=()
+    case " $* " in *" DOCTOR_TEST_VERBOSE=1 "*) flags=(--verbose) ;; esac
+    (cd "$WORK/install" && env PATH="$WORK/bin:$PATH" "$@" ./scripts/doctor.sh ${flags[@]+"${flags[@]}"}) 2>&1 | sed 's/\x1b\[[0-9;]*m//g'
     return "${PIPESTATUS[0]}"
 }
 check() {
@@ -134,8 +136,8 @@ EXTRA_NEEDLES=("? The review checks are not available in this Kodus version.")
 check "image without the doctor client: ? line, exit 0" 0 "Reviews: OK" STUB_APP_RC=42
 
 # A malformed app line keeps its ✘: a tab inside provider text must not hide a failure.
-EXTRA_NEEDLES=("✘ One review check line could not be read.")
-check "malformed app fail line still fails the run" 1 "Reviews: NOT RUNNING" 'STUB_APP_TSV=#version\t2.4.0\nfail\tllm.completion\t\tmodel\tsaid\tthis\ttoo many\n'
+EXTRA_NEEDLES=("✘ One review check line could not be read." "== Review checks (api output) ==" "too many")
+check "malformed app fail line still fails the run, raw line in --verbose" 1 "Reviews: NOT RUNNING" DOCTOR_TEST_VERBOSE=1 'STUB_APP_TSV=#version\t2.4.0\nfail\tllm.completion\t\tmodel\tsaid\tthis\ttoo many\n'
 
 EXTRA_NEEDLES=("✘ The api service is not running.")
 check "api container down: NOT RUNNING, exit 1" 1 "Reviews: NOT RUNNING" STUB_API_DOWN=1

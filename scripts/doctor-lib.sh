@@ -77,7 +77,7 @@ doctor_add_app_tsv() {
                     case "$status" in fail|warn) ;; *) status=unknown ;; esac
                     printf 'app:%s\treviews.doctor\t\t%s\t\t%s\n' "$status" \
                         "One review check line could not be read." \
-                        "Run ./scripts/doctor.sh --verbose and share the api output with support." >> "$DOCTOR_RESULTS"
+                        "Run this script again with --verbose: the api's output is under 'Review checks (api output)'; share it with support." >> "$DOCTOR_RESULTS"
                 fi
                 ;;
         esac
@@ -91,6 +91,9 @@ doctor_run_app_checks() {
     out=$($exec_prefix sh -c \
         'test -f scripts/doctor/doctor-client.mjs || exit 42; node scripts/doctor/doctor-client.mjs --format tsv' 2>&1)
     rc=$?
+    # Kept for --verbose, which prints the detail log: the api already
+    # redacts secrets from what it sends.
+    printf '\n== Review checks (api output) ==\n%s\n' "$out" >> "$DOCTOR_DETAIL"
     if [ $rc -eq 0 ]; then
         # Here-string, not a pipe: a pipe would run it in a subshell and
         # lose DOCTOR_APP_VERSION.
