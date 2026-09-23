@@ -61,7 +61,19 @@ doctor_add_app_tsv() {
         case "$line" in
             '#version'*) DOCTOR_APP_VERSION="${line#*	}" ;;
             '#'*|'') ;;
-            *) printf 'app:%s\n' "$line" >> "$DOCTOR_RESULTS" ;;
+            *)
+                # The api is trusted to send 6 tab-separated fields, but its
+                # text can carry provider messages: drop control bytes (ANSI
+                # included) and anything that is not exactly 6 fields, so the
+                # renderer's columns cannot shift.
+                line=$(printf '%s' "$line" | tr -d '\000-\010\013-\037\177')
+                if [ "$(printf '%s' "$line" | awk -F'\t' '{print NF}')" = 6 ]; then
+                    printf 'app:%s\n' "$line" >> "$DOCTOR_RESULTS"
+                else
+                    doctor_add unknown reviews.doctor "" "One review check line could not be read." \
+                        "" "Run ./scripts/doctor.sh --verbose and share the api output with support."
+                fi
+                ;;
         esac
     done
 }

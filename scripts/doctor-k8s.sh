@@ -27,7 +27,8 @@ PASS=0; WARN=0; FAIL=0
 # the lines echoed here only reach the terminal with --verbose.
 ok()   { echo -e "  ${GREEN}✔${NC} $1"; PASS=$((PASS+1)); doctor_add ok infra "" "$1"; }
 warn() { echo -e "  ${YELLOW}!${NC} $1"; WARN=$((WARN+1)); doctor_add unknown infra "" "$1"; }
-bad()  { echo -e "  ${RED}✘${NC} $1"; FAIL=$((FAIL+1)); doctor_add fail infra "" "$1" "Kodus depends on this; reviews may not run until it is fixed."; }
+# bad <what> [impact] [fix] — a check that knows its consequence and remedy passes them.
+bad()  { echo -e "  ${RED}✘${NC} $1"; FAIL=$((FAIL+1)); doctor_add fail infra "" "$1" "${2:-Kodus depends on this; reviews may not run until it is fixed.}" "${3:-}"; }
 section() { echo -e "\n${BLUE}== $1 ==${NC}"; }
 
 RELEASE="kodus"
@@ -258,7 +259,9 @@ else
   while IFS=$'\t' read -r name healthy allowed; do
     [ -z "$name" ] && continue
     if [ "${allowed:-0}" = "0" ]; then
-      bad "pdb $name allows 0 disruptions (healthy=$healthy) — drain will hang on its pods"
+      bad "pdb $name allows 0 disruptions (healthy=$healthy) — drain will hang on its pods" \
+        "Pods of this service can never be evicted: node drains, cluster upgrades and autoscaler compaction hang." \
+        "Raise the service's replicas above 1 (helm upgrade ... --set services.<name>.replicas=2), or drop the PDB."
       echo "      raise the service's replicas above 1, or drop the PDB:"
       echo "      helm upgrade ... --set services.<name>.replicas=2"
     else
@@ -312,7 +315,9 @@ else
   elif [ $alarm_rc -ne 0 ] || [ -z "$alarm_clean" ]; then
     warn "couldn't read RabbitMQ alarms: ${alarm_out}"
   else
-    bad "RabbitMQ resource ALARM active — publishers blocked; webhook & review jobs won't enqueue"
+    bad "RabbitMQ resource ALARM active — publishers blocked; webhook & review jobs won't enqueue" \
+      "Webhooks and review jobs stop being enqueued while every pod still reports Running." \
+      "Likely disk_free_limit relative to the node's RAM on a small PVC: upgrade to a current chart (it sets total_memory_available_override_value). Inspect: $K exec $RMQ_POD -c rabbitmq -- rabbitmqctl status | grep -A3 Alarms"
     echo "     alarms: $alarm_clean"
     echo "     Likely disk_free_limit relative to host RAM on a small PVC (bundled mode sets"
     echo "     total_memory_available_override_value to fix this — check you're on a current chart)."

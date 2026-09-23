@@ -35,10 +35,11 @@ note() {
     doctor_add info infra "" "$1"
 }
 
+# err <what> [impact] [fix]
 err() {
     echo -e "${RED}ERROR${NC} $1"
     errors=$((errors + 1))
-    doctor_add fail infra "" "$1" "Kodus depends on this; reviews may not run until it is fixed."
+    doctor_add fail infra "" "$1" "${2:-Kodus depends on this; reviews may not run until it is fixed.}" "${3:-}"
 }
 
 normalize_bool() {
