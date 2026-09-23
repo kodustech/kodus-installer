@@ -138,6 +138,12 @@ check "image without the doctor client: ? line, exit 0" 0 "Reviews: OK" STUB_APP
 # A malformed app line keeps its ✘: a tab inside provider text must not hide a failure.
 EXTRA_NEEDLES=("✘ One review check line could not be read." "== Review checks (api output) ==" "too many")
 check "malformed app fail line still fails the run, raw line in --verbose" 1 "Reviews: NOT RUNNING" DOCTOR_TEST_VERBOSE=1 'STUB_APP_TSV=#version\t2.4.0\nfail\tllm.completion\t\tmodel\tsaid\tthis\ttoo many\n'
+out=$(run DOCTOR_TEST_VERBOSE=1 'STUB_APP_TSV=#version\t2.4.0\nfail\tllm.completion\t\tmodel said \033]52;c;ZXZpbA==\a\033[2Jx\tImpact\tFix\n')
+if printf '%s' "$out" | LC_ALL=C grep -q "$(printf '\033')"; then
+    fail=$((fail + 1)); echo "FAIL escape bytes from the api reached the --verbose output"
+else
+    pass=$((pass + 1)); echo "ok   api escape bytes are stripped from report and --verbose log"
+fi
 
 EXTRA_NEEDLES=("✘ The api service is not running.")
 check "api container down: NOT RUNNING, exit 1" 1 "Reviews: NOT RUNNING" STUB_API_DOWN=1

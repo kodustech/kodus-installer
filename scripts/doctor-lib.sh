@@ -91,9 +91,11 @@ doctor_run_app_checks() {
     out=$($exec_prefix sh -c \
         'test -f scripts/doctor/doctor-client.mjs || exit 42; node scripts/doctor/doctor-client.mjs --format tsv' 2>&1)
     rc=$?
-    # Kept for --verbose, which prints the detail log: the api already
-    # redacts secrets from what it sends.
-    printf '\n== Review checks (api output) ==\n%s\n' "$out" >> "$DOCTOR_DETAIL"
+    # Kept for --verbose, which prints the detail log. Same control-byte
+    # filter as the report (tab and newline kept), so provider text cannot
+    # carry terminal escapes into the operator's screen or a support thread.
+    printf '\n== Review checks (api output) ==\n%s\n' \
+        "$(printf '%s' "$out" | tr -d '\000-\010\013-\037\177')" >> "$DOCTOR_DETAIL"
     if [ $rc -eq 0 ]; then
         # Here-string, not a pipe: a pipe would run it in a subshell and
         # lose DOCTOR_APP_VERSION.
