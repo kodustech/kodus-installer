@@ -26,9 +26,17 @@ DOCTOR_APP_VERSION=""
 # Checks whose ✘ does not fail the exit code (doctor-k8s.sh --profile dev).
 DOCTOR_SOFT_APP_FAILS=false
 
+# Drops C0 controls (tab/newline kept) and UTF-8-encoded C1 controls
+# (U+0080-U+009F: CSI, OSC...), which xterm-family terminals still act on.
+# awk, not sed: \xNN is GNU-only, and a byte-range tr would cut valid
+# UTF-8 (the report's own ✘ holds 0x9C). Works in BSD awk, mawk, busybox.
+_doctor_strip_controls() {
+    tr -d '\000-\010\013-\037\177' | LC_ALL=C awk '{ gsub(/\302[\200-\237]/, ""); print }'
+}
+
 # One line, no control bytes: every record goes through here before the
 # renderer prints it to a terminal.
-_doctor_oneline() { printf '%s' "$1" | tr '\t\r\n' '   ' | tr -d '\000-\010\013-\037\177'; }
+_doctor_oneline() { printf '%s' "$1" | tr '\t\r\n' '   ' | _doctor_strip_controls; }
 
 # doctor_add <status> <check> <scope> <title> [impact] [fix]
 doctor_add() {
@@ -68,7 +76,7 @@ doctor_add_app_tsv() {
                 # text can carry provider messages: drop control bytes (ANSI
                 # included) and anything that is not exactly 6 fields, so the
                 # renderer's columns cannot shift.
-                line=$(printf '%s' "$line" | tr -d '\000-\010\013-\037\177')
+                line=$(printf '%s' "$line" | _doctor_strip_controls)
                 if [ "$(printf '%s' "$line" | awk -F'\t' '{print NF}')" = 6 ]; then
                     printf 'app:%s\n' "$line" >> "$DOCTOR_RESULTS"
                 else
@@ -97,7 +105,7 @@ doctor_run_app_checks() {
     # the TSV parser, the error title below): provider text cannot carry
     # terminal escapes into the operator's screen or a support thread.
     # Tab and newline are kept, so the TSV shape is untouched.
-    out=$(printf '%s' "$out" | tr -d '\000-\010\013-\037\177')
+    out=$(printf '%s' "$out" | _doctor_strip_controls)
     printf '\n== Review checks (api output) ==\n%s\n' "$out" >> "$DOCTOR_DETAIL"
     if [ $rc -eq 0 ]; then
         # Here-string, not a pipe: a pipe would run it in a subshell and

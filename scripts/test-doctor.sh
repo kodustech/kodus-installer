@@ -144,6 +144,16 @@ if printf '%s' "$out" | LC_ALL=C grep -q "$(printf '\033')"; then
 else
     pass=$((pass + 1)); echo "ok   api escape bytes are stripped from report and --verbose log"
 fi
+# UTF-8-encoded C1 controls (U+009B CSI, U+009D OSC) are dropped; real UTF-8 stays.
+out=$(run DOCTOR_TEST_VERBOSE=1 'STUB_APP_TSV=#version\t2.4.0\nfail\tllm.completion\t\tcafé \xc2\x9b2J \xc2\x9d52;c;ZXZpbA==\x07end\tImpact\tFix\n')
+if printf '%s' "$out" | LC_ALL=C grep -q "$(printf '\302[\200-\237]')"; then
+    fail=$((fail + 1)); echo "FAIL C1 controls reached the output"
+elif printf '%s' "$out" | grep -q "café 2J 52;c;ZXZpbA==end"; then
+    pass=$((pass + 1)); echo "ok   C1 controls are dropped, UTF-8 text is kept"
+else
+    fail=$((fail + 1)); echo "FAIL C1 test line missing from the report"
+fi
+
 # Failing client: its output becomes the '?' title; escapes must not survive there either.
 out=$(run STUB_APP_RC=7 'STUB_APP_FAIL_TEXT=boom \033]52;c;ZXZpbA==\a\033[2Jend')
 if printf '%s' "$out" | LC_ALL=C grep -q "$(printf '\033')"; then
