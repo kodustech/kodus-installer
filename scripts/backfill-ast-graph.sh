@@ -41,6 +41,8 @@ if [ -z "$($DOCKER_COMPOSE ps -q "$SERVICE" 2>/dev/null)" ]; then
 fi
 
 echo -e "${YELLOW}Running AST graph backfill via ${SERVICE}...${NC}"
-$DOCKER_COMPOSE exec -T "$SERVICE" yarn ast:backfill:prod "$@"
+# node directly, not `yarn ast:backfill:prod`: the images moved to pnpm and
+# ship no yarn, so the package-manager wrapper failed before running anything.
+$DOCKER_COMPOSE exec -T "$SERVICE" node dist/apps/ast-cli/main.js "$@"
 echo -e "${GREEN}Backfill enqueue done. Builds run in the background — tail logs with:${NC}"
 echo "  $DOCKER_COMPOSE logs -f worker | grep -i ast-graph"

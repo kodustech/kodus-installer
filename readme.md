@@ -154,7 +154,8 @@ checks. (On Helm, use `postgres.mode: external` / `mongodb.mode: external` /
 
 ## Troubleshooting
 
-Start with the doctor script to pinpoint common setup issues:
+Start with the doctor script: its first line says whether reviews are running,
+then it lists each problem with its impact and fix (`--verbose` for everything):
 
 - Docker Compose: `./scripts/doctor.sh`
 - Kubernetes / OpenShift: `./scripts/doctor-k8s.sh -n <namespace>`

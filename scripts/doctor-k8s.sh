@@ -20,20 +20,28 @@ set -uo pipefail
 GREEN='\033[0;32m'; YELLOW='\033[1;33m'; RED='\033[0;31m'; BLUE='\033[0;34m'; NC='\033[0m'
 PASS=0; WARN=0; FAIL=0
 
-ok()   { echo -e "  ${GREEN}✔${NC} $1"; PASS=$((PASS+1)); }
-warn() { echo -e "  ${YELLOW}!${NC} $1"; WARN=$((WARN+1)); }
-bad()  { echo -e "  ${RED}✘${NC} $1"; FAIL=$((FAIL+1)); }
+# shellcheck source=scripts/doctor-lib.sh
+. "$(cd "$(dirname "$0")" && pwd)/doctor-lib.sh"
+
+# Each check also records a result for the report (scripts/doctor-lib.sh);
+# the lines echoed here only reach the terminal with --verbose.
+ok()   { echo -e "  ${GREEN}✔${NC} $1"; PASS=$((PASS+1)); doctor_add ok infra "" "$1"; }
+warn() { echo -e "  ${YELLOW}!${NC} $1"; WARN=$((WARN+1)); doctor_add unknown infra "" "$1"; }
+# bad <what> [impact] [fix] — a check that knows its consequence and remedy passes them.
+bad()  { echo -e "  ${RED}✘${NC} $1"; FAIL=$((FAIL+1)); doctor_add fail infra "" "$1" "${2:-Kodus depends on this; reviews may not run until it is fixed.}" "${3:-}"; }
 section() { echo -e "\n${BLUE}== $1 ==${NC}"; }
 
 RELEASE="kodus"
 NAMESPACE=""
 PROFILE="prod"
+# shellcheck disable=SC2034 # DOCTOR_VERBOSE is read by doctor-lib.sh
 while [ $# -gt 0 ]; do
   case "$1" in
     -n|--namespace) NAMESPACE="$2"; shift 2 ;;
     -r|--release)   RELEASE="$2"; shift 2 ;;
     --profile)      PROFILE="$2"; shift 2 ;;
-    -h|--help) echo "Usage: $0 [-n namespace] [-r release] [--profile prod|dev]"; exit 0 ;;
+    -v|--verbose)   DOCTOR_VERBOSE=true; shift ;;
+    -h|--help) echo "Usage: $0 [-n namespace] [-r release] [--profile prod|dev] [--verbose]"; exit 0 ;;
     *) echo "Unknown arg: $1"; exit 1 ;;
   esac
 done
@@ -41,6 +49,13 @@ case "$PROFILE" in
   prod|dev) ;;
   *) echo "Unknown profile: $PROFILE (expected prod or dev)"; exit 1 ;;
 esac
+
+# A fresh dev/CI install has no Git provider or model connected, so the review
+# checks are expected to report ✘ there: show them, keep them out of the exit code.
+# shellcheck disable=SC2034 # read by doctor-lib.sh
+[ "$PROFILE" = "dev" ] && DOCTOR_SOFT_APP_FAILS=true
+
+doctor_capture_start
 
 # Production-readiness finding: a real problem for a deployment meant to serve
 # traffic, expected on a local trial. Fails under --profile prod, warns under dev.
@@ -244,7 +259,9 @@ else
   while IFS=$'\t' read -r name healthy allowed; do
     [ -z "$name" ] && continue
     if [ "${allowed:-0}" = "0" ]; then
-      bad "pdb $name allows 0 disruptions (healthy=$healthy) — drain will hang on its pods"
+      bad "pdb $name allows 0 disruptions (healthy=$healthy) — drain will hang on its pods" \
+        "Pods of this service can never be evicted: node drains, cluster upgrades and autoscaler compaction hang." \
+        "Raise the service's replicas above 1 (helm upgrade ... --set services.<name>.replicas=2), or drop the PDB."
       echo "      raise the service's replicas above 1, or drop the PDB:"
       echo "      helm upgrade ... --set services.<name>.replicas=2"
     else
@@ -298,7 +315,9 @@ else
   elif [ $alarm_rc -ne 0 ] || [ -z "$alarm_clean" ]; then
     warn "couldn't read RabbitMQ alarms: ${alarm_out}"
   else
-    bad "RabbitMQ resource ALARM active — publishers blocked; webhook & review jobs won't enqueue"
+    bad "RabbitMQ resource ALARM active — publishers blocked; webhook & review jobs won't enqueue" \
+      "Webhooks and review jobs stop being enqueued while every pod still reports Running." \
+      "Likely disk_free_limit relative to the node's RAM on a small PVC: upgrade to a current chart (it sets total_memory_available_override_value). Inspect: $K exec $RMQ_POD -c rabbitmq -- rabbitmqctl status | grep -A3 Alarms"
     echo "     alarms: $alarm_clean"
     echo "     Likely disk_free_limit relative to host RAM on a small PVC (bundled mode sets"
     echo "     total_memory_available_override_value to fix this — check you're on a current chart)."
@@ -310,6 +329,7 @@ fi
 # Printed last and deliberately plain — no colour, no check marks — so it can be
 # pasted straight into an issue. It is read from the ConfigMap the chart writes,
 # not reconstructed here, so it cannot drift from what is actually installed.
+FINGERPRINT=$(
 section "Deployment fingerprint (paste this into a support ticket)"
 # Plain text/template — range and $k/$v only. `hasPrefix` looks like it belongs
 # here but is a sprig function; kubectl's templates are the standard library, so
@@ -325,12 +345,32 @@ if [ -n "$FP" ]; then
 else
   warn "no fingerprint annotations — this release predates them; upgrade the chart"
 fi
+)
 
-# --- Summary ---
-section "Summary"
-echo -e "  ${GREEN}${PASS} ok${NC}   ${YELLOW}${WARN} warn${NC}   ${RED}${FAIL} fail${NC}"
-if [ "$FAIL" -gt 0 ]; then
+# --- Message queue job time limit ---
+section "RabbitMQ consumer_timeout"
+if $K get pod "$RMQ_POD" >/dev/null 2>&1; then
+  doctor_check_consumer_timeout "$($K exec "$RMQ_POD" -c rabbitmq -- rabbitmqctl eval 'application:get_env(rabbit, consumer_timeout).' 2>/dev/null)"
+else
+  doctor_add unknown broker.consumer_timeout "" \
+    "Could not check the message queue's job time limit (external RabbitMQ)." \
+    "" "Make sure consumer_timeout is at least 7200000 (2 hours) on your broker."
+fi
+
+# --- Reviews (checks run by the API itself, kodus-ai #1987) ---
+section "Reviews"
+if $K get deploy "${RELEASE}-api" >/dev/null 2>&1; then
+  doctor_run_app_checks "$K exec deploy/${RELEASE}-api --"
+else
+  doctor_add fail reviews.api "" "The api deployment (${RELEASE}-api) was not found." \
+    "Nothing can be reviewed, and the review checks cannot run." \
+    "Check the release name (-r) and namespace (-n), or 'helm status $RELEASE'."
+fi
+
+doctor_render
+[ -n "$FINGERPRINT" ] && { echo; echo -e "$FINGERPRINT"; }
+
+if doctor_has_fail; then
   echo -e "${RED}Some checks failed.${NC} Inspect with:  $K get pods,events --sort-by=.lastTimestamp | tail"
   exit 1
 fi
-echo -e "${GREEN}Kodus looks healthy.${NC}"

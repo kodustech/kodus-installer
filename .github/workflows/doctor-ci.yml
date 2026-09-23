@@ -1,0 +1,34 @@
+name: Doctor scripts CI
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/doctor.sh'
+      - 'scripts/doctor-k8s.sh'
+      - 'scripts/doctor-lib.sh'
+      - 'scripts/test-doctor.sh'
+      - '.github/workflows/doctor-ci.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/doctor.sh'
+      - 'scripts/doctor-k8s.sh'
+      - 'scripts/doctor-lib.sh'
+      - 'scripts/test-doctor.sh'
+
+permissions:
+  contents: read
+
+jobs:
+  doctor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: shellcheck
+        run: shellcheck -S warning scripts/doctor.sh scripts/doctor-k8s.sh scripts/doctor-lib.sh scripts/test-doctor.sh
+
+      # doctor.sh against a stubbed docker: verdict first, problems worst
+      # first, exit codes, and the legacy checks still failing the run.
+      - name: Report scenarios
+        run: ./scripts/test-doctor.sh --show
