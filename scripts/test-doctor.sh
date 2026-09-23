@@ -74,7 +74,7 @@ case "$1" in
           *) exit 0 ;;
         esac ;;
       api)
-        [ -n "${STUB_APP_RC:-}" ] && [ "$STUB_APP_RC" != "0" ] && { echo "client error"; exit "$STUB_APP_RC"; }
+        [ -n "${STUB_APP_RC:-}" ] && [ "$STUB_APP_RC" != "0" ] && { printf '%b\n' "${STUB_APP_FAIL_TEXT:-client error}"; exit "$STUB_APP_RC"; }
         printf '%b' "${STUB_APP_TSV:-}" ;;
     esac
     exit 0 ;;
@@ -143,6 +143,15 @@ if printf '%s' "$out" | LC_ALL=C grep -q "$(printf '\033')"; then
     fail=$((fail + 1)); echo "FAIL escape bytes from the api reached the --verbose output"
 else
     pass=$((pass + 1)); echo "ok   api escape bytes are stripped from report and --verbose log"
+fi
+# Failing client: its output becomes the '?' title; escapes must not survive there either.
+out=$(run STUB_APP_RC=7 'STUB_APP_FAIL_TEXT=boom \033]52;c;ZXZpbA==\a\033[2Jend')
+if printf '%s' "$out" | LC_ALL=C grep -q "$(printf '\033')"; then
+    fail=$((fail + 1)); echo "FAIL escape bytes from a failing api call reached the report"
+elif printf '%s' "$out" | grep -q "The review checks did not run: .*boom"; then
+    pass=$((pass + 1)); echo "ok   failing api call: its text is shown without escape bytes"
+else
+    fail=$((fail + 1)); echo "FAIL failing api call text missing from the report"
 fi
 
 EXTRA_NEEDLES=("✘ The api service is not running.")

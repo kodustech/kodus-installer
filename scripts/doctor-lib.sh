@@ -26,7 +26,9 @@ DOCTOR_APP_VERSION=""
 # Checks whose ✘ does not fail the exit code (doctor-k8s.sh --profile dev).
 DOCTOR_SOFT_APP_FAILS=false
 
-_doctor_oneline() { printf '%s' "$1" | tr '\t\r\n' '   '; }
+# One line, no control bytes: every record goes through here before the
+# renderer prints it to a terminal.
+_doctor_oneline() { printf '%s' "$1" | tr '\t\r\n' '   ' | tr -d '\000-\010\013-\037\177'; }
 
 # doctor_add <status> <check> <scope> <title> [impact] [fix]
 doctor_add() {
@@ -91,11 +93,12 @@ doctor_run_app_checks() {
     out=$($exec_prefix sh -c \
         'test -f scripts/doctor/doctor-client.mjs || exit 42; node scripts/doctor/doctor-client.mjs --format tsv' 2>&1)
     rc=$?
-    # Kept for --verbose, which prints the detail log. Same control-byte
-    # filter as the report (tab and newline kept), so provider text cannot
-    # carry terminal escapes into the operator's screen or a support thread.
-    printf '\n== Review checks (api output) ==\n%s\n' \
-        "$(printf '%s' "$out" | tr -d '\000-\010\013-\037\177')" >> "$DOCTOR_DETAIL"
+    # Filtered once, here, so every consumer is covered (the --verbose log,
+    # the TSV parser, the error title below): provider text cannot carry
+    # terminal escapes into the operator's screen or a support thread.
+    # Tab and newline are kept, so the TSV shape is untouched.
+    out=$(printf '%s' "$out" | tr -d '\000-\010\013-\037\177')
+    printf '\n== Review checks (api output) ==\n%s\n' "$out" >> "$DOCTOR_DETAIL"
     if [ $rc -eq 0 ]; then
         # Here-string, not a pipe: a pipe would run it in a subshell and
         # lose DOCTOR_APP_VERSION.
