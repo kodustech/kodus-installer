@@ -54,6 +54,7 @@ case "$1" in
   ps)
     svc="${3:-}"
     [ "$svc" = "api" ] && [ "${STUB_API_DOWN:-}" = "1" ] && exit 0
+    [ "$svc" = "rabbitmq" ] && [ "${STUB_RABBIT_DOWN:-}" = "1" ] && exit 0
     echo "id-$svc"; exit 0 ;;
   exec)
     svc="$3"; shift 3
@@ -105,6 +106,9 @@ check() {
     for needle in "${EXTRA_NEEDLES[@]}"; do
         printf '%s' "$out" | grep -qF -- "$needle" || { ok=false; echo "    missing: $needle"; }
     done
+    for needle in ${ABSENT_NEEDLES[@]+"${ABSENT_NEEDLES[@]}"}; do
+        printf '%s' "$out" | grep -qF -- "$needle" && { ok=false; echo "    unexpected: $needle"; }
+    done
     if $SHOW; then
         echo "=== $name"; printf '%s\n' "$out" | sed 's/^/    | /'
     fi
@@ -115,8 +119,10 @@ check() {
         printf '%s\n' "$out" | sed 's/^/    | /' | head -40
     fi
     EXTRA_NEEDLES=()
+    ABSENT_NEEDLES=()
 }
 EXTRA_NEEDLES=()
+ABSENT_NEEDLES=()
 
 EXTRA_NEEDLES=("(Kodus 2.4.0)" "check(s) passed")
 check "healthy install: verdict OK, exit 0" 0 "Reviews: OK" STUB_APP_TSV="$APP_OK"
@@ -172,6 +178,25 @@ check "legacy infra check still fails the run" 1 "Reviews: NOT RUNNING" STUB_APP
 
 EXTRA_NEEDLES=("✘ .env has missing or invalid variables.")
 check "env schema failure is reported" 1 "Reviews: NOT RUNNING" STUB_APP_TSV="$APP_OK" STUB_VALIDATE_ENV_RC=1
+
+# A tunnel or reverse proxy in front of the webhooks service is a valid setup:
+# a webhook host other than WEB_HOSTNAME_API cannot be verified from here, it is
+# not a failure, and it is one cause, so one line (#2021).
+cp "$WORK/install/.env" "$WORK/env.orig"
+cat >> "$WORK/install/.env" <<'EOF'
+API_GITHUB_CODE_MANAGEMENT_WEBHOOK=https://hooks.tunnel.example/github/webhook
+API_GITLAB_CODE_MANAGEMENT_WEBHOOK=https://hooks.tunnel.example/gitlab/webhook
+EOF
+EXTRA_NEEDLES=("? Git webhook URLs point to hooks.tunnel.example, not WEB_HOSTNAME_API (api.example.com): GitHub, GitLab." "Fix:")
+ABSENT_NEEDLES=("✘ API_GITHUB_CODE_MANAGEMENT_WEBHOOK" "host must match WEB_HOSTNAME_API")
+check "webhook behind a tunnel: one ? line, verdict stays OK" 0 "Reviews: OK" STUB_APP_TSV="$APP_OK"
+cp "$WORK/env.orig" "$WORK/install/.env"
+
+# A stopped bundled broker is one cause: the api reports it, the service line
+# says so, and nothing else repeats it or calls the bundled broker external (#2021).
+EXTRA_NEEDLES=("Service rabbitmq is not running.")
+ABSENT_NEEDLES=("Skipping RabbitMQ check" "(external RabbitMQ)")
+check "bundled RabbitMQ stopped: no repeated or mislabelled lines" 0 "Reviews: OK" STUB_APP_TSV="$APP_OK" STUB_RABBIT_DOWN=1
 
 # Problems before the passing summary, worst first.
 out=$(run STUB_APP_TSV="$APP_FAIL" "STUB_CONSUMER_TIMEOUT={ok,1800000}")

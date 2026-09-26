@@ -109,7 +109,15 @@ validate_webhook_url() {
     if [ -z "$host" ]; then
         err "${var_name} (${label}) must include a valid host."
     elif [ -n "$expected_host" ] && [ "$host" != "$expected_host" ]; then
-        err "${var_name} (${label}) host must match WEB_HOSTNAME_API (${expected_host})."
+        # A tunnel or reverse proxy in front of the webhooks service is a valid
+        # setup, so a different host is unverifiable here, not a failure. The
+        # mismatches are reported together in report_webhook_host_mismatch.
+        echo -e "${YELLOW}WARN${NC} ${var_name} (${label}) host ${host} differs from WEB_HOSTNAME_API (${expected_host})."
+        webhook_mismatch_labels+=("$label")
+        case " ${webhook_mismatch_hosts[*]-} " in
+            *" $host "*) ;;
+            *) webhook_mismatch_hosts+=("$host") ;;
+        esac
     fi
 
     local path
@@ -305,11 +313,22 @@ if [ "$env_loaded" = true ]; then
             err "WEB_HOSTNAME_API is required when configuring Git webhooks."
         else
             expected_host=$(normalize_host "$WEB_HOSTNAME_API")
+            webhook_mismatch_labels=()
+            webhook_mismatch_hosts=()
             validate_webhook_url "GitHub" "API_GITHUB_CODE_MANAGEMENT_WEBHOOK" "$API_GITHUB_CODE_MANAGEMENT_WEBHOOK" "/github/webhook" "$expected_host"
             validate_webhook_url "GitLab" "API_GITLAB_CODE_MANAGEMENT_WEBHOOK" "$API_GITLAB_CODE_MANAGEMENT_WEBHOOK" "/gitlab/webhook" "$expected_host"
             validate_webhook_url "Bitbucket" "GLOBAL_BITBUCKET_CODE_MANAGEMENT_WEBHOOK" "$GLOBAL_BITBUCKET_CODE_MANAGEMENT_WEBHOOK" "/bitbucket/webhook" "$expected_host"
             validate_webhook_url "Azure Repos" "GLOBAL_AZURE_REPOS_CODE_MANAGEMENT_WEBHOOK" "$GLOBAL_AZURE_REPOS_CODE_MANAGEMENT_WEBHOOK" "/azdevops/webhook|/azure-repos/webhook" "$expected_host"
             validate_webhook_url "Forgejo" "API_FORGEJO_CODE_MANAGEMENT_WEBHOOK" "$API_FORGEJO_CODE_MANAGEMENT_WEBHOOK" "/forgejo/webhook" "$expected_host"
+            if [ ${#webhook_mismatch_labels[@]} -gt 0 ]; then
+                mismatch_hosts=$(IFS=,; echo "${webhook_mismatch_hosts[*]}" | sed 's/,/, /g')
+                mismatch_labels=$(IFS=,; echo "${webhook_mismatch_labels[*]}" | sed 's/,/, /g')
+                warnings=$((warnings + 1))
+                doctor_add unknown infra "" \
+                    "Git webhook URLs point to ${mismatch_hosts}, not WEB_HOSTNAME_API (${expected_host}): ${mismatch_labels}." \
+                    "" \
+                    "Nothing to do if your Git provider reaches that host (a tunnel or reverse proxy in front of the webhooks service). Otherwise use https://${expected_host}/<provider>/webhook."
+            fi
         fi
     fi
 
@@ -471,7 +490,9 @@ fi
 rabbit_id=$($DOCKER_COMPOSE ps -q rabbitmq 2>/dev/null)
 if [ "$use_local_rabbitmq" = "true" ]; then
     if [ -z "$rabbit_id" ]; then
-        warn "Skipping RabbitMQ check (container not running)."
+        # The service status section already reported it; saying it again
+        # turns one stopped broker into several lines (#2021).
+        echo -e "${YELLOW}NOTE${NC} Skipping RabbitMQ check (container not running)."
     else
         if $DOCKER_COMPOSE exec -T rabbitmq rabbitmq-diagnostics -q check_running &> /dev/null; then
             ok "RabbitMQ is running."
@@ -605,6 +626,9 @@ section "Message queue job time limit"
 
 if [ "$use_local_rabbitmq" = "true" ] && [ -n "$rabbit_id" ]; then
     doctor_check_consumer_timeout "$($DOCKER_COMPOSE exec -T rabbitmq rabbitmqctl eval 'application:get_env(rabbit, consumer_timeout).' 2>/dev/null)"
+elif [ "$use_local_rabbitmq" = "true" ]; then
+    # Bundled broker, stopped: already reported, and not "external" (#2021).
+    echo -e "${YELLOW}NOTE${NC} Skipping the job time limit check (RabbitMQ container not running)."
 else
     doctor_add unknown broker.consumer_timeout "" \
         "Could not check the message queue's job time limit (external RabbitMQ)." \
