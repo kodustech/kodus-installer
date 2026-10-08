@@ -54,6 +54,10 @@ global:
     API_E2B_KEY: ""
     API_MCP_MANAGER_JWT_SECRET: ""
     API_MCP_MANAGER_ENCRYPTION_SECRET: ""
+    # GitHub App credentials (API_GITHUB_APP_ID and GLOBAL_GITHUB_CLIENT_ID are
+    # non-secret and go in config). PEM newlines may be literal or \n-escaped.
+    API_GITHUB_CLIENT_SECRET: ""
+    API_GITHUB_PRIVATE_KEY: ""
 
   # --- Non-sensitive config (rendered into the ConfigMap) ---
   # {{ .Release.Name }} refs are resolved via `tpl` in configmap.yaml.
