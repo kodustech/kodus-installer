@@ -173,6 +173,11 @@ if $K get secret "${RELEASE}-secrets" >/dev/null 2>&1; then
   # API_CRYPTO_KEY must decode to 64 hex chars (32 bytes) or the app crash-loops.
   CK=$($K get secret "${RELEASE}-secrets" -o jsonpath='{.data.API_CRYPTO_KEY}' 2>/dev/null | base64 -d 2>/dev/null)
   if echo "$CK" | grep -qE '^[0-9a-f]{64}$'; then ok "app secrets present; API_CRYPTO_KEY is valid 32-byte hex"; else bad "API_CRYPTO_KEY is not 32-byte hex (app will crash: 'must be 32 bytes in hexadecimal')"; fi
+  # The mcp-manager verifies the signature of the access token the web forwards,
+  # so an empty API_JWT_SECRET makes every MCP request 401 while the /health
+  # probe still passes. The chart always generates it, so empty means a broken setup.
+  JS=$($K get secret "${RELEASE}-secrets" -o jsonpath='{.data.API_JWT_SECRET}' 2>/dev/null | base64 -d 2>/dev/null)
+  if [ -n "$JS" ]; then ok "API_JWT_SECRET present (MCP auth can verify tokens)"; else bad "API_JWT_SECRET is empty — MCP requests will 401 (the mcp-manager verifies the forwarded access token's signature)"; fi
 else
   warn "secret ${RELEASE}-secrets not found (using existingSecret/externalSecrets?)"
 fi

@@ -289,6 +289,11 @@ if [ "$env_loaded" = true ]; then
         mcp_required_vars=(
             API_KODUS_SERVICE_MCP_MANAGER
             API_KODUS_MCP_SERVER_URL
+            # The mcp-manager verifies the signature of the access token the
+            # web forwards, so an empty secret makes every MCP request 401 while
+            # the unauthenticated /health probe still passes — a silent break
+            # the health check can't see. The installer always generates this.
+            API_JWT_SECRET
         )
         for var in "${mcp_required_vars[@]}"; do
             if [ -z "${!var}" ]; then
