@@ -177,7 +177,7 @@ if $K get secret "${RELEASE}-secrets" >/dev/null 2>&1; then
   # so an empty API_JWT_SECRET makes every MCP request 401 while the /health
   # probe still passes. The chart always generates it, so empty means a broken setup.
   JS=$($K get secret "${RELEASE}-secrets" -o jsonpath='{.data.API_JWT_SECRET}' 2>/dev/null | base64 -d 2>/dev/null)
-  if [ -n "$JS" ]; then ok "API_JWT_SECRET present (MCP auth can verify tokens)"; else bad "API_JWT_SECRET is empty — MCP requests will 401 (the mcp-manager verifies the forwarded access token's signature)"; fi
+  if [ -n "$JS" ]; then ok "API_JWT_SECRET present (MCP auth can verify tokens)"; else bad "API_JWT_SECRET is empty — MCP requests will 401 (the mcp-manager verifies the forwarded access token's signature). Fix: set API_JWT_SECRET in the secret (or in your values) and run helm upgrade"; fi
 else
   warn "secret ${RELEASE}-secrets not found (using existingSecret/externalSecrets?)"
 fi
