@@ -147,12 +147,22 @@ only when you intend to wipe all data.
 ## Verify the deployment
 
 ```bash
-./scripts/doctor.sh            # health of every service + config sanity
+./scripts/doctor.sh            # are reviews running? then every problem, worst first
+./scripts/doctor.sh --verbose  # also every passing check and the full log
 ./scripts/validate-env.sh      # .env vs schema; diffs against what containers loaded
 ```
 
-`doctor.sh` is the first thing to run when something looks off — it pinpoints
-missing/invalid config, unhealthy containers, and common webhook mistakes.
+`doctor.sh` is the first thing to run when something looks off. Its first line
+is the verdict (`Reviews: NOT RUNNING`, `RUNNING, DEGRADED` or `OK`), followed by
+each problem with what you lose and the one thing to do:
+
+- ✘ reviews do not run, ! reviews run degraded, ? could not verify,
+  i optional feature off, - skipped on purpose by your settings.
+
+Besides the containers and config, it asks the api to check what only the app
+can see: the worker taking jobs, a real call to your model, the Git token and
+webhook on every selected repository, seats, the code graph. It changes nothing
+and prints no secret, so the output can be pasted into a support thread.
 
 ## Ports
 

@@ -20,16 +20,26 @@ section() {
 
 ok() {
     echo -e "${GREEN}OK${NC} $1"
+    doctor_add ok infra "" "$1"
 }
 
 warn() {
     echo -e "${YELLOW}WARN${NC} $1"
     warnings=$((warnings + 1))
+    doctor_add unknown infra "" "$1"
 }
 
+# A check that was skipped on purpose (external DB, missing local tool).
+note() {
+    echo -e "${YELLOW}NOTE${NC} $1"
+    doctor_add info infra "" "$1"
+}
+
+# err <what> [impact] [fix]
 err() {
     echo -e "${RED}ERROR${NC} $1"
     errors=$((errors + 1))
+    doctor_add fail infra "" "$1" "${2:-Kodus depends on this; reviews may not run until it is fixed.}" "${3:-}"
 }
 
 normalize_bool() {
@@ -99,7 +109,15 @@ validate_webhook_url() {
     if [ -z "$host" ]; then
         err "${var_name} (${label}) must include a valid host."
     elif [ -n "$expected_host" ] && [ "$host" != "$expected_host" ]; then
-        err "${var_name} (${label}) host must match WEB_HOSTNAME_API (${expected_host})."
+        # A tunnel or reverse proxy in front of the webhooks service is a valid
+        # setup, so a different host is unverifiable here, not a failure. The
+        # mismatches are reported together in report_webhook_host_mismatch.
+        echo -e "${YELLOW}WARN${NC} ${var_name} (${label}) host ${host} differs from WEB_HOSTNAME_API (${expected_host})."
+        webhook_mismatch_labels+=("$label")
+        case " ${webhook_mismatch_hosts[*]-} " in
+            *" $host "*) ;;
+            *) webhook_mismatch_hosts+=("$host") ;;
+        esac
     fi
 
     local path
@@ -118,10 +136,28 @@ validate_webhook_url() {
 }
 
 DOCTOR_SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=scripts/doctor-lib.sh
+. "$DOCTOR_SCRIPT_DIR/doctor-lib.sh"
+
+for arg in "$@"; do
+    case "$arg" in
+        -v|--verbose) DOCTOR_VERBOSE=true ;;
+        -h|--help)
+            echo "Usage: $0 [--verbose]"
+            echo "Prints whether reviews run, then every problem worst first."
+            exit 0
+            ;;
+    esac
+done
+
+doctor_capture_start
 
 if [ -x "$DOCTOR_SCRIPT_DIR/validate-env.sh" ]; then
     if ! "$DOCTOR_SCRIPT_DIR/validate-env.sh"; then
         errors=$((errors + 1))
+        doctor_add fail env.schema "" ".env has missing or invalid variables." \
+            "Services may fail to start or behave unexpectedly." \
+            "Run ./scripts/validate-env.sh to see which variables to fix."
     fi
 fi
 
@@ -277,11 +313,22 @@ if [ "$env_loaded" = true ]; then
             err "WEB_HOSTNAME_API is required when configuring Git webhooks."
         else
             expected_host=$(normalize_host "$WEB_HOSTNAME_API")
+            webhook_mismatch_labels=()
+            webhook_mismatch_hosts=()
             validate_webhook_url "GitHub" "API_GITHUB_CODE_MANAGEMENT_WEBHOOK" "$API_GITHUB_CODE_MANAGEMENT_WEBHOOK" "/github/webhook" "$expected_host"
             validate_webhook_url "GitLab" "API_GITLAB_CODE_MANAGEMENT_WEBHOOK" "$API_GITLAB_CODE_MANAGEMENT_WEBHOOK" "/gitlab/webhook" "$expected_host"
             validate_webhook_url "Bitbucket" "GLOBAL_BITBUCKET_CODE_MANAGEMENT_WEBHOOK" "$GLOBAL_BITBUCKET_CODE_MANAGEMENT_WEBHOOK" "/bitbucket/webhook" "$expected_host"
             validate_webhook_url "Azure Repos" "GLOBAL_AZURE_REPOS_CODE_MANAGEMENT_WEBHOOK" "$GLOBAL_AZURE_REPOS_CODE_MANAGEMENT_WEBHOOK" "/azdevops/webhook|/azure-repos/webhook" "$expected_host"
             validate_webhook_url "Forgejo" "API_FORGEJO_CODE_MANAGEMENT_WEBHOOK" "$API_FORGEJO_CODE_MANAGEMENT_WEBHOOK" "/forgejo/webhook" "$expected_host"
+            if [ ${#webhook_mismatch_labels[@]} -gt 0 ]; then
+                mismatch_hosts=$(IFS=,; echo "${webhook_mismatch_hosts[*]}" | sed 's/,/, /g')
+                mismatch_labels=$(IFS=,; echo "${webhook_mismatch_labels[*]}" | sed 's/,/, /g')
+                warnings=$((warnings + 1))
+                doctor_add unknown infra "" \
+                    "Git webhook URLs point to ${mismatch_hosts}, not WEB_HOSTNAME_API (${expected_host}): ${mismatch_labels}." \
+                    "" \
+                    "Nothing to do if your Git provider reaches that host (a tunnel or reverse proxy in front of the webhooks service). Otherwise use https://${expected_host}/<provider>/webhook."
+            fi
         fi
     fi
 
@@ -312,11 +359,11 @@ if [ "$env_loaded" = true ]; then
     fi
 
     if [ "$use_local_db" != "true" ]; then
-        warn "USE_LOCAL_DB=false: skipping local DB container checks."
+        note "USE_LOCAL_DB=false: skipping local DB container checks."
     fi
 
     if [ "$use_local_rabbitmq" != "true" ]; then
-        warn "USE_LOCAL_RABBITMQ=false: skipping local RabbitMQ container checks."
+        note "USE_LOCAL_RABBITMQ=false: skipping local RabbitMQ container checks."
     fi
 fi
 
@@ -431,7 +478,7 @@ else
             err "External Postgres is not accepting connections."
         fi
     else
-        warn "pg_isready not found; skipping external Postgres check."
+        note "pg_isready not found; skipping external Postgres check."
     fi
 
     if command -v mongosh &> /dev/null; then
@@ -441,14 +488,16 @@ else
             err "External MongoDB is not accepting connections."
         fi
     else
-        warn "mongosh not found; skipping external MongoDB check."
+        note "mongosh not found; skipping external MongoDB check."
     fi
 fi
 
 rabbit_id=$($DOCKER_COMPOSE ps -q rabbitmq 2>/dev/null)
 if [ "$use_local_rabbitmq" = "true" ]; then
     if [ -z "$rabbit_id" ]; then
-        warn "Skipping RabbitMQ check (container not running)."
+        # The service status section already reported it; saying it again
+        # turns one stopped broker into several lines (#2021).
+        echo -e "${YELLOW}NOTE${NC} Skipping RabbitMQ check (container not running)."
     else
         if $DOCKER_COMPOSE exec -T rabbitmq rabbitmq-diagnostics -q check_running &> /dev/null; then
             ok "RabbitMQ is running."
@@ -474,7 +523,7 @@ else
             err "External RabbitMQ is not reachable at ${rabbit_host}:${rabbit_port}."
         fi
     else
-        warn "nc not found; skipping external RabbitMQ check."
+        note "nc not found; skipping external RabbitMQ check."
     fi
 fi
 
@@ -545,7 +594,7 @@ fi
 section "Database structure checks"
 
 if [ "$use_local_db" != "true" ]; then
-    warn "Skipping schema and seed checks (USE_LOCAL_DB=false)."
+    note "Skipping schema and seed checks (USE_LOCAL_DB=false)."
 elif [ -z "$postgres_id" ]; then
     warn "Skipping schema and seed checks (Postgres not running)."
 else
@@ -578,15 +627,32 @@ else
     fi
 fi
 
-section "Summary"
+section "Message queue job time limit"
 
-if [ "$errors" -gt 0 ]; then
-    echo -e "${RED}Doctor found ${errors} error(s) and ${warnings} warning(s).${NC}"
+if [ "$use_local_rabbitmq" = "true" ] && [ -n "$rabbit_id" ]; then
+    doctor_check_consumer_timeout "$($DOCKER_COMPOSE exec -T rabbitmq rabbitmqctl eval 'application:get_env(rabbit, consumer_timeout).' 2>/dev/null)"
+elif [ "$use_local_rabbitmq" = "true" ]; then
+    # Bundled broker, stopped: already reported, and not "external" (#2021).
+    echo -e "${YELLOW}NOTE${NC} Skipping the job time limit check (RabbitMQ container not running)."
+else
+    doctor_add unknown broker.consumer_timeout "" \
+        "Could not check the message queue's job time limit (external RabbitMQ)." \
+        "" "Make sure consumer_timeout is at least 7200000 (2 hours) on your broker."
+fi
+
+section "Reviews"
+
+if [ -z "$($DOCKER_COMPOSE ps -q api 2>/dev/null)" ]; then
+    doctor_add fail reviews.api "" "The api service is not running." \
+        "Nothing can be reviewed, and the review checks cannot run." \
+        "Start it with '$DOCKER_COMPOSE up -d api' and check '$DOCKER_COMPOSE logs api'."
+else
+    doctor_run_app_checks "$DOCKER_COMPOSE exec -T api"
+fi
+
+doctor_render
+
+if doctor_has_fail; then
     exit 1
 fi
-
-if [ "$warnings" -gt 0 ]; then
-    echo -e "${YELLOW}Doctor found ${warnings} warning(s).${NC}"
-else
-    echo -e "${GREEN}All checks passed.${NC}"
-fi
+exit 0
