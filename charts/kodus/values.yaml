@@ -34,6 +34,10 @@ global:
     store: ""                         # SecretStore / ClusterSecretStore name
     storeKind: SecretStore
     refreshInterval: "1h"
+    # Also fetch kodus/API_GITHUB_CLIENT_SECRET and kodus/API_GITHUB_PRIVATE_KEY
+    # (GitHub App auth). Off by default: External Secrets fails the whole sync
+    # when any listed key is missing from the store.
+    githubApp: false
   # Option 3 (dev only): inline secrets. Ignored when existingSecret or
   # externalSecrets is set. Empty required keys are auto-generated (stable across
   # upgrade) with the correct format: API_CRYPTO_KEY / CODE_MANAGEMENT_SECRET are
@@ -54,6 +58,10 @@ global:
     API_E2B_KEY: ""
     API_MCP_MANAGER_JWT_SECRET: ""
     API_MCP_MANAGER_ENCRYPTION_SECRET: ""
+    # GitHub App credentials (API_GITHUB_APP_ID and GLOBAL_GITHUB_CLIENT_ID are
+    # non-secret and go in config). PEM newlines may be literal or \n-escaped.
+    API_GITHUB_CLIENT_SECRET: ""
+    API_GITHUB_PRIVATE_KEY: ""
 
   # --- Non-sensitive config (rendered into the ConfigMap) ---
   # {{ .Release.Name }} refs are resolved via `tpl` in configmap.yaml.

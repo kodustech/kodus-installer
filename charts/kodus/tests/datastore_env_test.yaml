@@ -206,6 +206,26 @@ tests:
                 name: kodus-secrets
                 key: API_OPEN_AI_API_KEY
                 optional: true
+      # GitHub App auth needs both; #56 meant to add them but its squash merge
+      # carried only the version bumps.
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: API_GITHUB_PRIVATE_KEY
+            valueFrom:
+              secretKeyRef:
+                name: kodus-secrets
+                key: API_GITHUB_PRIVATE_KEY
+                optional: true
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: API_GITHUB_CLIENT_SECRET
+            valueFrom:
+              secretKeyRef:
+                name: kodus-secrets
+                key: API_GITHUB_CLIENT_SECRET
+                optional: true
 
   - it: sources every app secret from global.existingSecret when set
     set:
