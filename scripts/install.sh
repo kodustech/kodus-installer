@@ -385,6 +385,31 @@ docker network create shared-network 2>/dev/null || true
 docker network create monitoring-network 2>/dev/null || true
 docker network create kodus-backend-services 2>/dev/null || true
 
+# kernel_at_least <kernel-release> <major> <minor>: true when the release
+# (e.g. "7.0.0-1014-aws", "6.19.2") is at or above major.minor.
+kernel_at_least() {
+    local major minor
+    major=$(echo "$1" | cut -d. -f1)
+    minor=$(echo "$1" | cut -d. -f2 | grep -oE '^[0-9]+')
+    [[ "$major" =~ ^[0-9]+$ && "$minor" =~ ^[0-9]+$ ]] || return 1
+    [ "$major" -gt "$2" ] || { [ "$major" -eq "$2" ] && [ "$minor" -ge "$3" ]; }
+}
+
+# No MongoDB 8.3 release starts on Linux kernels 6.19+ (SERVER-121912), and the
+# compose default is 8.3 (see docker-compose.yml). On such a kernel pin 8.2.11
+# once, in .env, so every later `docker compose up` keeps it. An operator who
+# set KODUS_MONGO_IMAGE themselves is left alone. The kernel that matters is
+# the Docker daemon's, which on Docker Desktop is its VM, not the host's.
+if [ "$use_local_db" = "true" ] && [ -z "${KODUS_MONGO_IMAGE:-}" ]; then
+    docker_kernel=$(docker info --format '{{.KernelVersion}}' 2>/dev/null)
+    if kernel_at_least "$docker_kernel" 6 19; then
+        export KODUS_MONGO_IMAGE="docker.io/mongo:8.2.11"
+        [ -n "$(tail -c1 .env)" ] && echo >> .env
+        echo "KODUS_MONGO_IMAGE=$KODUS_MONGO_IMAGE" >> .env
+        echo -e "${YELLOW}Docker kernel $docker_kernel is 6.19+: MongoDB 8.3 cannot start there, using $KODUS_MONGO_IMAGE (saved to .env).${NC}"
+    fi
+fi
+
 # Subir os containers
 echo -e "${YELLOW}Starting containers...${NC}"
 services=(kodus-web api worker webhooks)

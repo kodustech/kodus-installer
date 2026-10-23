@@ -142,6 +142,19 @@ else
   for s in $STS;     do check_rollout statefulset "$s"; done
 fi
 
+# No MongoDB 8.3 release starts on Linux kernels 6.19+ (SERVER-121912), and the
+# chart's bundled default is 8.3. The pod only crash-loops, so name the cause.
+MONGO_IMG=$($K get statefulset "${RELEASE}-mongodb" -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null)
+if echo "$MONGO_IMG" | grep -qE ':8\.3(\.|$)'; then
+  NEW_KERNELS=$($K get nodes -o jsonpath='{range .items[*]}{.status.nodeInfo.kernelVersion}{"\n"}{end}' 2>/dev/null \
+    | awk -F. '$1+0 > 6 || ($1+0 == 6 && $2+0 >= 19)' | sort -u | tr '\n' ' ')
+  if [ -n "$NEW_KERNELS" ]; then
+    bad "bundled MongoDB $MONGO_IMG cannot start on node kernel(s) $NEW_KERNELS(SERVER-121912)" \
+      "Kodus has no database until MongoDB starts." \
+      "helm upgrade with --set mongodb.bundled.image=mongo:8.2.11"
+  fi
+fi
+
 # --- Pods ---
 section "Pod health"
 # A pod with a deletionTimestamp is on its way out, not broken. Run this straight

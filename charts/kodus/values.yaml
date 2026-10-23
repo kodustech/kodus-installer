@@ -567,10 +567,13 @@ postgres:
 mongodb:
   mode: bundled
   bundled:
-    # Pinned, not floating, same as docker-compose.yml: the releases `mongo:8`
-    # resolves to (8.0.21-8.0.29, 8.3.0-8.3.8) refuse to start on Linux kernels
-    # 6.19+ (SERVER-121912). Revisit when 8.0.30 / 8.3.9 publish.
-    image: mongo:8.2.11
+    # Pinned, never floating, same as docker-compose.yml. 8.3.13 is what
+    # `mongo:8` resolves to today, so a release that ran the floating tag keeps
+    # opening its data (8.2 cannot open files written by 8.3).
+    # No 8.3 release starts on nodes with Linux kernel 6.19+ (SERVER-121912).
+    # On such nodes set `mongo:8.2.11`; they never ran 8.3, so nothing is lost.
+    # scripts/doctor-k8s.sh flags the combination.
+    image: mongo:8.3.13
     database: kodus_db
     username: kodusdev              # root user
     password: ""                    # auto-generated when empty
