@@ -15,9 +15,11 @@ services:
       limits:   { cpu: 200m, memory: 256Mi }
   api:
     replicas: 1
+    # The API peaks at ~575Mi while booting (2.2.6, measured from the pod's
+    # cgroup). At 512Mi it was OOMKilled before listening, with no log line.
     resources:
-      requests: { cpu: 100m, memory: 256Mi }
-      limits:   { cpu: 500m, memory: 512Mi }
+      requests: { cpu: 100m, memory: 512Mi }
+      limits:   { cpu: 500m, memory: 1Gi }
   worker:
     replicas: 1
     resources:

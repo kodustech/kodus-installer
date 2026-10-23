@@ -142,6 +142,19 @@ else
   for s in $STS;     do check_rollout statefulset "$s"; done
 fi
 
+# No MongoDB 8.3 release starts on Linux kernels 6.19+ (SERVER-121912), and the
+# chart's bundled default is 8.3. The pod only crash-loops, so name the cause.
+MONGO_IMG=$($K get statefulset "${RELEASE}-mongodb" -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null)
+if echo "$MONGO_IMG" | grep -qE ':8\.3(\.|$)'; then
+  NEW_KERNELS=$($K get nodes -o jsonpath='{range .items[*]}{.status.nodeInfo.kernelVersion}{"\n"}{end}' 2>/dev/null \
+    | awk -F. '$1+0 > 6 || ($1+0 == 6 && $2+0 >= 19)' | sort -u | tr '\n' ' ')
+  if [ -n "$NEW_KERNELS" ]; then
+    bad "bundled MongoDB $MONGO_IMG cannot start on node kernel(s) $NEW_KERNELS(SERVER-121912)" \
+      "Kodus has no database until MongoDB starts." \
+      "helm upgrade with --set mongodb.bundled.image=mongo:8.2.11"
+  fi
+fi
+
 # --- Pods ---
 section "Pod health"
 # A pod with a deletionTimestamp is on its way out, not broken. Run this straight
@@ -188,6 +201,11 @@ if $K get secret "${RELEASE}-secrets" >/dev/null 2>&1; then
   # API_CRYPTO_KEY must decode to 64 hex chars (32 bytes) or the app crash-loops.
   CK=$($K get secret "${RELEASE}-secrets" -o jsonpath='{.data.API_CRYPTO_KEY}' 2>/dev/null | base64 -d 2>/dev/null)
   if echo "$CK" | grep -qE '^[0-9a-f]{64}$'; then ok "app secrets present; API_CRYPTO_KEY is valid 32-byte hex"; else bad "API_CRYPTO_KEY is not 32-byte hex (app will crash: 'must be 32 bytes in hexadecimal')"; fi
+  # The mcp-manager verifies the signature of the access token the web forwards,
+  # so an empty API_JWT_SECRET makes every MCP request 401 while the /health
+  # probe still passes. The chart always generates it, so empty means a broken setup.
+  JS=$($K get secret "${RELEASE}-secrets" -o jsonpath='{.data.API_JWT_SECRET}' 2>/dev/null | base64 -d 2>/dev/null)
+  if [ -n "$JS" ]; then ok "API_JWT_SECRET present (MCP auth can verify tokens)"; else bad "API_JWT_SECRET is empty — MCP requests will 401 (the mcp-manager verifies the forwarded access token's signature). Fix: set API_JWT_SECRET in the secret (or in your values) and run helm upgrade"; fi
 else
   warn "secret ${RELEASE}-secrets not found (using existingSecret/externalSecrets?)"
 fi

@@ -207,7 +207,7 @@ global:
 # Track a newer Kodus release without waiting for a chart release:
 #   --set imageTag=2.1.28          (or services.<name>.image.digest to pin by SHA)
 # Keep this value and Chart.yaml's appVersion in step when bumping.
-imageTag: "2.2.5"
+imageTag: "2.2.6"
 
 # How many old ReplicaSets each Deployment keeps for rollback. Lower than the k8s
 # default (10) so upgrades don't pile up ReplicaSets and exhaust a namespace's
@@ -571,7 +571,13 @@ postgres:
 mongodb:
   mode: bundled
   bundled:
-    image: mongo:8
+    # Pinned, never floating, same as docker-compose.yml. 8.3.13 is what
+    # `mongo:8` resolves to today, so a release that ran the floating tag keeps
+    # opening its data (8.2 cannot open files written by 8.3).
+    # No 8.3 release starts on nodes with Linux kernel 6.19+ (SERVER-121912).
+    # On such nodes set `mongo:8.2.11`; they never ran 8.3, so nothing is lost.
+    # scripts/doctor-k8s.sh flags the combination.
+    image: mongo:8.3.13
     database: kodus_db
     username: kodusdev              # root user
     password: ""                    # auto-generated when empty

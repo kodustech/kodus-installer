@@ -336,6 +336,11 @@ if [ "$env_loaded" = true ]; then
         mcp_required_vars=(
             API_KODUS_SERVICE_MCP_MANAGER
             API_KODUS_MCP_SERVER_URL
+            # The mcp-manager verifies the signature of the access token the
+            # web forwards, so an empty secret makes every MCP request 401 while
+            # the unauthenticated /health probe still passes — a silent break
+            # the health check can't see. The installer always generates this.
+            API_JWT_SECRET
         )
         for var in "${mcp_required_vars[@]}"; do
             if [ -z "${!var}" ]; then
@@ -457,9 +462,19 @@ if [ "$use_local_db" = "true" ]; then
 
     mongo_id=$($DOCKER_COMPOSE ps -q db_kodus_mongodb 2>/dev/null)
     if [ -z "$mongo_id" ]; then
-        warn "Skipping MongoDB check (container not running)."
+        # A mongod that refuses the kernel exits at once, so the container is
+        # simply "not running". Say why when that is the reason.
+        if docker logs db_kodus_mongodb 2>&1 | tail -20 | grep -q "SERVER-121912"; then
+            err "MongoDB cannot start on this kernel (SERVER-121912)." \
+                "Kodus has no database until MongoDB starts." \
+                "Set KODUS_MONGO_IMAGE=docker.io/mongo:8.2.11 in .env and run docker compose up -d db_kodus_mongodb."
+        else
+            warn "Skipping MongoDB check (container not running)."
+        fi
     else
-        if $DOCKER_COMPOSE exec -T db_kodus_mongodb sh -c 'mongosh --quiet "mongodb://$MONGO_INITDB_ROOT_USERNAME:$MONGO_INITDB_ROOT_PASSWORD@localhost:27017/admin" --eval "db.runCommand({ ping: 1 }).ok" | grep -q 1' &> /dev/null; then
+        # Credentials as quoted flags, not in a URI: a password with @ : / %
+        # would break the URI and report a healthy MongoDB as down.
+        if $DOCKER_COMPOSE exec -T db_kodus_mongodb sh -c 'mongosh --quiet --host 127.0.0.1 -u "$MONGO_INITDB_ROOT_USERNAME" -p "$MONGO_INITDB_ROOT_PASSWORD" --authenticationDatabase admin --eval "db.runCommand({ ping: 1 }).ok" | grep -q 1' &> /dev/null; then
             ok "MongoDB is accepting connections."
         else
             err "MongoDB is not accepting connections."

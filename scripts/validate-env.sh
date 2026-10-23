@@ -142,10 +142,15 @@ get_type() {
     eval "printf '%s' \"\${$var-}\""
 }
 
+# Read only by this repo's docker-compose.yml / scripts, never by kodus-ai, so
+# they are not in the schema synced from kodus-ai. scripts/install.sh writes
+# KODUS_MONGO_IMAGE itself on Linux kernels 6.19+.
+INSTALLER_ONLY_VARS="IMAGE_TAG KODUS_MONGO_IMAGE"
+
 is_in_schema() {
     local target=$1
     local v
-    for v in $SCHEMA_NAMES; do
+    for v in $SCHEMA_NAMES $INSTALLER_ONLY_VARS; do
         [ "$v" = "$target" ] && return 0
     done
     return 1
