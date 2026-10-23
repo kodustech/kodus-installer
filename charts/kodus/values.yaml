@@ -567,7 +567,10 @@ postgres:
 mongodb:
   mode: bundled
   bundled:
-    image: mongo:8
+    # Pinned, not floating, same as docker-compose.yml: the releases `mongo:8`
+    # resolves to (8.0.21-8.0.29, 8.3.0-8.3.8) refuse to start on Linux kernels
+    # 6.19+ (SERVER-121912). Revisit when 8.0.30 / 8.3.9 publish.
+    image: mongo:8.2.11
     database: kodus_db
     username: kodusdev              # root user
     password: ""                    # auto-generated when empty
