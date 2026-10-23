@@ -234,20 +234,15 @@ services:
       start_period: 30s
 
   db_kodus_mongodb:
-    # Pinned, not floating. `mongo:8` resolves to a release that refuses to
-    # start on Linux kernels 6.19+: MongoDB 8.0.21-8.0.29 and 8.3.0-8.3.8 exit
-    # during startup with `MongoDB cannot start: Linux kernel versions 6.19 and
-    # newer has a known incompatibility` (SERVER-121912 - tcmalloc violates the
-    # rseq ABI). A floating tag is how a stack that worked one week stopped
-    # booting the next without a single line changing here.
+    # Pinned, never floating: `mongo:8` moved under existing installs and is how
+    # a stack that worked one week stopped booting the next.
     #
-    # 8.2.11 is outside that range and verified to start and stay up on kernel
-    # 7.0.14. Revisit when 8.0.30 / 8.3.9 publish, which carry the real fix.
-    #
-    # An installation already running 8.3 with its feature compatibility
-    # version raised to 8.3 will not open its data files under this pin and
-    # must set that version back before upgrading.
-    image: docker.io/mongo:8.2.11
+    # 8.3.13 is what `mongo:8` resolves to today, so an install that ran the
+    # floating tag keeps opening its data (a file written by 8.3 cannot be opened
+    # by 8.2). But no 8.3 release starts on Linux kernels 6.19+ (SERVER-121912);
+    # there `scripts/install.sh` sets KODUS_MONGO_IMAGE to 8.2.11, which does.
+    # Such hosts never ran 8.3, so they have no 8.3 data to lose.
+    image: ${KODUS_MONGO_IMAGE:-docker.io/mongo:8.3.13}
     container_name: db_kodus_mongodb
     ports:
       - "27017"
