@@ -18,6 +18,8 @@
 #                rabbitmq-plugins enable rabbitmq_delayed_message_exchange
 #                rabbitmqctl add_vhost kodus-ai
 #                rabbitmqctl set_permissions -p kodus-ai <user> ".*" ".*" ".*"
+#              and set consumer_timeout = 7200000 in rabbitmq.conf (the 30 min
+#              default cuts off reviews that run longer).
 #              (The bundled image also creates a `kodus-ast` vhost for a separate
 #               AST service; this app only uses `kodus-ai`, so it's optional here.)
 #   MongoDB  : a database + user Kodus can read/write. No extensions needed.

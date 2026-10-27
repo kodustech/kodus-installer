@@ -614,7 +614,7 @@ rabbitmq:
   bundled:
     # Pre-built Kodus image: delayed_message_exchange plugin + kodus-ai/kodus-ast
     # vhosts baked in. Runs init-definitions.sh on boot (same as docker-compose).
-    image: ghcr.io/kodustech/kodus-rabbitmq:4.2.2-kodus
+    image: ghcr.io/kodustech/kodus-rabbitmq:4.2.2-kodus.1
     username: kodus
     password: ""                    # auto-generated when empty
     storage:
@@ -629,12 +629,14 @@ rabbitmq:
     #   1. Enable the plugin:  rabbitmq-plugins enable rabbitmq_delayed_message_exchange
     #   2. Create the vhosts:  rabbitmqctl add_vhost kodus-ai && rabbitmqctl add_vhost kodus-ast
     #      then grant your user permissions on both (".*" ".*" ".*").
+    #   3. Raise the ack timeout:  consumer_timeout = 7200000 in rabbitmq.conf
+    #      (default 30 min; a review can run 1h45 and is cut off below that).
     # The URI's vhost must be kodus-ai (see below).
     uri: ""                         # amqps://user:pass@host:5671/kodus-ai
     existingSecret: ""
     uriKey: uri
   operator:
-    image: ghcr.io/kodustech/kodus-rabbitmq:4.2.2-kodus
+    image: ghcr.io/kodustech/kodus-rabbitmq:4.2.2-kodus.1
     replicas: 1
     storage:
       size: 8Gi

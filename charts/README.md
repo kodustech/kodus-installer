@@ -271,6 +271,8 @@ vanilla install does NOT have them, and Kodus fails confusingly without them):
   rabbitmqctl set_permissions -p kodus-ast <user> ".*" ".*" ".*"
   ```
   The URI vhost must be `kodus-ai`: `amqps://user:pass@host:5671/kodus-ai`.
+  Set `consumer_timeout = 7200000` in `rabbitmq.conf`: the 30-minute default
+  cuts off reviews that run longer (up to 1h45).
 - **MongoDB** — a DB + user with read/write. No extensions needed, but the app
   authenticates against the **`admin`** authSource: create the user in `admin`
   (with a role over your DB), not only inside `kodus_db`, or auth fails at runtime
@@ -350,7 +352,7 @@ ghcr.io/kodustech/kodus-ai-api
 ghcr.io/kodustech/kodus-ai-worker
 ghcr.io/kodustech/kodus-ai-webhook
 ghcr.io/kodustech/kodus-mcp-manager       # only if mcp-manager.enabled
-ghcr.io/kodustech/kodus-rabbitmq:4.2.2-kodus
+ghcr.io/kodustech/kodus-rabbitmq:4.2.2-kodus.1
 pgvector/pgvector:pg16                     # bundled Postgres
 mongo:8                                    # bundled Mongo
 busybox:1.37.0                             # wait-for-deps init

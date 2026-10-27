@@ -367,8 +367,11 @@ fi
 
 # --- Message queue job time limit ---
 section "RabbitMQ consumer_timeout"
-if $K get pod "$RMQ_POD" >/dev/null 2>&1; then
-  doctor_check_consumer_timeout "$($K exec "$RMQ_POD" -c rabbitmq -- rabbitmqctl eval 'application:get_env(rabbit, consumer_timeout).' 2>/dev/null)"
+# The operator names its pods <cluster>-server-N; both modes run the Kodus image.
+TIMEOUT_POD="$RMQ_POD"
+$K get pod "$TIMEOUT_POD" >/dev/null 2>&1 || TIMEOUT_POD="${RELEASE}-rabbitmq-server-0"
+if $K get pod "$TIMEOUT_POD" >/dev/null 2>&1; then
+  doctor_check_consumer_timeout "$($K exec "$TIMEOUT_POD" -c rabbitmq -- rabbitmqctl eval 'application:get_env(rabbit, consumer_timeout).' 2>/dev/null)"
 else
   doctor_add unknown broker.consumer_timeout "" \
     "Could not check the message queue's job time limit (external RabbitMQ)." \
