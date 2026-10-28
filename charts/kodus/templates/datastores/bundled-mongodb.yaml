@@ -53,6 +53,10 @@ spec:
           ports:
             - name: mongo
               containerPort: 27017
+          {{- with $b.extraEnvFrom }}
+          envFrom:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           env:
             - name: MONGO_INITDB_ROOT_USERNAME
               value: {{ $b.username | quote }}
@@ -63,6 +67,9 @@ spec:
                   key: password
             - name: MONGO_INITDB_DATABASE
               value: {{ $b.database | quote }}
+            {{- with $b.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:

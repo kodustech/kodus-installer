@@ -765,3 +765,77 @@ A few defaults worth setting explicitly for a hardened production install:
   images are hardened by their maintainers.
 - Secrets should come from `existingSecret`/`externalSecrets`, never inline, in
   production (see [Secrets](#secrets)).
+
+## Additional container environment
+
+All services, migrations and bundled datastores support `extraEnv` (a Kubernetes
+EnvVar list) and `extraEnvFrom` (an EnvFromSource list). Both default to empty.
+
+```yaml
+services:
+  worker:
+    extraEnv:
+      - name: CUSTOM_FEATURE
+        value: "true"
+      - name: LANGFUSE_SECRET_KEY
+        valueFrom:
+          secretKeyRef:
+            name: kodus-langfuse
+            key: secretKey
+    extraEnvFrom:
+      - configMapRef:
+          name: worker-settings
+      - secretRef:
+          name: worker-secrets
+        prefix: CUSTOM_
+mongodb:
+  bundled:
+    extraEnv:
+      - name: GLIBC_TUNABLES
+        value: "glibc.pthread.rseq=1"
+```
+
+The lists apply to main containers, not init containers or Helm test pods.
+External database containers are managed elsewhere; operator-managed containers
+must be configured through the operator. Secret and ConfigMap references must
+exist in the release namespace, for example via External Secrets.
+
+Existing services.<name>.env and chart-generated environment remain intact.
+Additional entries are appended; avoid duplicating names from chart defaults or
+existing env maps. Kubernetes gives explicit env precedence over envFrom. For
+collisions across envFrom sources, the last source wins. Values are literal YAML,
+without Helm tpl evaluation. Quote string values such as "true" and "5432".
+Changes to referenced Secrets/ConfigMaps require a rollout to reload environment.
+
+## EmptyDir size limits
+
+Configure all chart-created emptyDir volumes with a global default or by volume
+name. Component overrides are available under services.<name>.emptyDir and
+migrations.emptyDir. Bundled datastores use PVCs and have no emptyDir volumes.
+
+~~~yaml
+emptyDir:
+  defaultSizeLimit: "" # preserve existing volume defaults
+  sizeLimits: {}
+services:
+  worker:
+    emptyDir:
+      sizeLimits:
+        tmp: 2Gi
+  web:
+    emptyDir:
+      sizeLimits:
+        writable-0: 512Mi
+migrations:
+  emptyDir:
+    sizeLimits:
+      tmp: 1Gi
+~~~
+
+Precedence: component sizeLimits[name], global sizeLimits[name], global
+defaultSizeLimit, then the existing volume default. Without overrides, tmp stays
+100Mi and writable paths use writablePathsSizeLimit (256Mi by default).
+The writable-N name corresponds to the zero-based index in writablePaths; update
+limits when reordering that list. These settings size existing volumes, without
+creating new ones. Limits do not reserve node disk space and remain subject to
+available node storage and Pod ephemeral-storage limits.

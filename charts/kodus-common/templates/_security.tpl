@@ -50,8 +50,20 @@ required to be writable.
   mountPath: /tmp
 {{- end }}
 
+{{/* Resolve a volume limit: component name > global name > global default > legacy default. */}}
+{{- define "kodus-common.emptyDirSizeLimit" -}}
+{{- $global := .root.Values.emptyDir | default dict -}}
+{{- $local := (.config | default dict).emptyDir | default dict -}}
+{{- $globalLimits := $global.sizeLimits | default dict -}}
+{{- $localLimits := $local.sizeLimits | default dict -}}
+{{- index $localLimits .name | default (index $globalLimits .name) | default $global.defaultSizeLimit | default .fallback -}}
+{{- end }}
+
+{{/* Accept the original root context as well as {root, config} for per-component limits. */}}
 {{- define "kodus-common.tmpVolume" -}}
+{{- $root := .root | default . -}}
+{{- $config := .config | default dict -}}
 - name: tmp
   emptyDir:
-    sizeLimit: 100Mi
+    sizeLimit: {{ include "kodus-common.emptyDirSizeLimit" (dict "root" $root "config" $config "name" "tmp" "fallback" "100Mi") | quote }}
 {{- end }}

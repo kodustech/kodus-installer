@@ -1,0 +1,312 @@
+suite: Additional container environment
+templates:
+  - templates/deployment.yaml
+  - templates/configmap.yaml
+  - templates/secrets.yaml
+  - templates/migration-job.yaml
+  - templates/datastores/bundled-postgres.yaml
+  - templates/datastores/bundled-mongodb.yaml
+  - templates/datastores/bundled-rabbitmq.yaml
+release:
+  name: kodus
+tests:
+  - it: supports env values and references in services.api
+    set:
+      services.api.extraEnv: [{"name":"EXTRA_LITERAL","value":"{{ literal }}"},{"name":"EXTRA_SECRET","valueFrom":{"secretKeyRef":{"name":"custom-secret","key":"token"}}},{"name":"EXTRA_FIELD","valueFrom":{"fieldRef":{"fieldPath":"metadata.name"}}}]
+      services.api.extraEnvFrom: [{"configMapRef":{"name":"custom-config"}},{"prefix":"CUSTOM_","secretRef":{"name":"custom-secret","optional":true}}]
+    documentSelector:
+      path: metadata.name
+      value: kodus-api
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {"name":"EXTRA_LITERAL","value":"{{ literal }}"}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {"name":"EXTRA_SECRET","valueFrom":{"secretKeyRef":{"name":"custom-secret","key":"token"}}}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {"name":"EXTRA_FIELD","valueFrom":{"fieldRef":{"fieldPath":"metadata.name"}}}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {"name":"API_PG_DB_HOST","value":"kodus-postgres"}
+      - contains:
+          path: spec.template.spec.containers[0].envFrom
+          content: {"configMapRef":{"name":"custom-config"}}
+      - contains:
+          path: spec.template.spec.containers[0].envFrom
+          content: {"prefix":"CUSTOM_","secretRef":{"name":"custom-secret","optional":true}}
+      - contains:
+          path: spec.template.spec.containers[0].envFrom
+          content: {configMapRef: {name: kodus-config}}
+  - it: supports env values and references in services.web
+    set:
+      services.web.extraEnv: [{"name":"EXTRA_LITERAL","value":"{{ literal }}"},{"name":"EXTRA_SECRET","valueFrom":{"secretKeyRef":{"name":"custom-secret","key":"token"}}},{"name":"EXTRA_FIELD","valueFrom":{"fieldRef":{"fieldPath":"metadata.name"}}}]
+      services.web.extraEnvFrom: [{"configMapRef":{"name":"custom-config"}},{"prefix":"CUSTOM_","secretRef":{"name":"custom-secret","optional":true}}]
+    documentSelector:
+      path: metadata.name
+      value: kodus-web
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {"name":"EXTRA_LITERAL","value":"{{ literal }}"}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {"name":"EXTRA_SECRET","valueFrom":{"secretKeyRef":{"name":"custom-secret","key":"token"}}}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {"name":"EXTRA_FIELD","valueFrom":{"fieldRef":{"fieldPath":"metadata.name"}}}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {"name":"API_PG_DB_HOST","value":"kodus-postgres"}
+      - contains:
+          path: spec.template.spec.containers[0].envFrom
+          content: {"configMapRef":{"name":"custom-config"}}
+      - contains:
+          path: spec.template.spec.containers[0].envFrom
+          content: {"prefix":"CUSTOM_","secretRef":{"name":"custom-secret","optional":true}}
+      - contains:
+          path: spec.template.spec.containers[0].envFrom
+          content: {configMapRef: {name: kodus-config}}
+  - it: supports env values and references in services.worker
+    set:
+      services.worker.extraEnv: [{"name":"EXTRA_LITERAL","value":"{{ literal }}"},{"name":"EXTRA_SECRET","valueFrom":{"secretKeyRef":{"name":"custom-secret","key":"token"}}},{"name":"EXTRA_FIELD","valueFrom":{"fieldRef":{"fieldPath":"metadata.name"}}}]
+      services.worker.extraEnvFrom: [{"configMapRef":{"name":"custom-config"}},{"prefix":"CUSTOM_","secretRef":{"name":"custom-secret","optional":true}}]
+    documentSelector:
+      path: metadata.name
+      value: kodus-worker
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {"name":"EXTRA_LITERAL","value":"{{ literal }}"}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {"name":"EXTRA_SECRET","valueFrom":{"secretKeyRef":{"name":"custom-secret","key":"token"}}}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {"name":"EXTRA_FIELD","valueFrom":{"fieldRef":{"fieldPath":"metadata.name"}}}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {"name":"API_PG_DB_HOST","value":"kodus-postgres"}
+      - contains:
+          path: spec.template.spec.containers[0].envFrom
+          content: {"configMapRef":{"name":"custom-config"}}
+      - contains:
+          path: spec.template.spec.containers[0].envFrom
+          content: {"prefix":"CUSTOM_","secretRef":{"name":"custom-secret","optional":true}}
+      - contains:
+          path: spec.template.spec.containers[0].envFrom
+          content: {configMapRef: {name: kodus-config}}
+  - it: supports env values and references in services.worker-analytics
+    set:
+      services.worker-analytics.extraEnv: [{"name":"EXTRA_LITERAL","value":"{{ literal }}"},{"name":"EXTRA_SECRET","valueFrom":{"secretKeyRef":{"name":"custom-secret","key":"token"}}},{"name":"EXTRA_FIELD","valueFrom":{"fieldRef":{"fieldPath":"metadata.name"}}}]
+      services.worker-analytics.extraEnvFrom: [{"configMapRef":{"name":"custom-config"}},{"prefix":"CUSTOM_","secretRef":{"name":"custom-secret","optional":true}}]
+    documentSelector:
+      path: metadata.name
+      value: kodus-worker-analytics
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {"name":"EXTRA_LITERAL","value":"{{ literal }}"}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {"name":"EXTRA_SECRET","valueFrom":{"secretKeyRef":{"name":"custom-secret","key":"token"}}}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {"name":"EXTRA_FIELD","valueFrom":{"fieldRef":{"fieldPath":"metadata.name"}}}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {"name":"API_PG_DB_HOST","value":"kodus-postgres"}
+      - contains:
+          path: spec.template.spec.containers[0].envFrom
+          content: {"configMapRef":{"name":"custom-config"}}
+      - contains:
+          path: spec.template.spec.containers[0].envFrom
+          content: {"prefix":"CUSTOM_","secretRef":{"name":"custom-secret","optional":true}}
+      - contains:
+          path: spec.template.spec.containers[0].envFrom
+          content: {configMapRef: {name: kodus-config}}
+  - it: supports env values and references in services.webhooks
+    set:
+      services.webhooks.extraEnv: [{"name":"EXTRA_LITERAL","value":"{{ literal }}"},{"name":"EXTRA_SECRET","valueFrom":{"secretKeyRef":{"name":"custom-secret","key":"token"}}},{"name":"EXTRA_FIELD","valueFrom":{"fieldRef":{"fieldPath":"metadata.name"}}}]
+      services.webhooks.extraEnvFrom: [{"configMapRef":{"name":"custom-config"}},{"prefix":"CUSTOM_","secretRef":{"name":"custom-secret","optional":true}}]
+    documentSelector:
+      path: metadata.name
+      value: kodus-webhooks
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {"name":"EXTRA_LITERAL","value":"{{ literal }}"}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {"name":"EXTRA_SECRET","valueFrom":{"secretKeyRef":{"name":"custom-secret","key":"token"}}}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {"name":"EXTRA_FIELD","valueFrom":{"fieldRef":{"fieldPath":"metadata.name"}}}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {"name":"API_PG_DB_HOST","value":"kodus-postgres"}
+      - contains:
+          path: spec.template.spec.containers[0].envFrom
+          content: {"configMapRef":{"name":"custom-config"}}
+      - contains:
+          path: spec.template.spec.containers[0].envFrom
+          content: {"prefix":"CUSTOM_","secretRef":{"name":"custom-secret","optional":true}}
+      - contains:
+          path: spec.template.spec.containers[0].envFrom
+          content: {configMapRef: {name: kodus-config}}
+  - it: supports env values and references in services.mcp-manager
+    set:
+      services.mcp-manager.extraEnv: [{"name":"EXTRA_LITERAL","value":"{{ literal }}"},{"name":"EXTRA_SECRET","valueFrom":{"secretKeyRef":{"name":"custom-secret","key":"token"}}},{"name":"EXTRA_FIELD","valueFrom":{"fieldRef":{"fieldPath":"metadata.name"}}}]
+      services.mcp-manager.extraEnvFrom: [{"configMapRef":{"name":"custom-config"}},{"prefix":"CUSTOM_","secretRef":{"name":"custom-secret","optional":true}}]
+    documentSelector:
+      path: metadata.name
+      value: kodus-mcp-manager
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {"name":"EXTRA_LITERAL","value":"{{ literal }}"}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {"name":"EXTRA_SECRET","valueFrom":{"secretKeyRef":{"name":"custom-secret","key":"token"}}}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {"name":"EXTRA_FIELD","valueFrom":{"fieldRef":{"fieldPath":"metadata.name"}}}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {"name":"API_PG_DB_HOST","value":"kodus-postgres"}
+      - contains:
+          path: spec.template.spec.containers[0].envFrom
+          content: {"configMapRef":{"name":"custom-config"}}
+      - contains:
+          path: spec.template.spec.containers[0].envFrom
+          content: {"prefix":"CUSTOM_","secretRef":{"name":"custom-secret","optional":true}}
+      - contains:
+          path: spec.template.spec.containers[0].envFrom
+          content: {configMapRef: {name: kodus-config}}
+  - it: supports env values and references in migrations
+    set:
+      migrations.extraEnv: [{"name":"EXTRA_LITERAL","value":"{{ literal }}"},{"name":"EXTRA_SECRET","valueFrom":{"secretKeyRef":{"name":"custom-secret","key":"token"}}},{"name":"EXTRA_FIELD","valueFrom":{"fieldRef":{"fieldPath":"metadata.name"}}}]
+      migrations.extraEnvFrom: [{"configMapRef":{"name":"custom-config"}},{"prefix":"CUSTOM_","secretRef":{"name":"custom-secret","optional":true}}]
+    template: templates/migration-job.yaml
+    documentIndex: 0
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {"name":"EXTRA_LITERAL","value":"{{ literal }}"}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {"name":"EXTRA_SECRET","valueFrom":{"secretKeyRef":{"name":"custom-secret","key":"token"}}}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {"name":"EXTRA_FIELD","valueFrom":{"fieldRef":{"fieldPath":"metadata.name"}}}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {"name":"API_PG_DB_HOST","value":"kodus-postgres"}
+      - contains:
+          path: spec.template.spec.containers[0].envFrom
+          content: {"configMapRef":{"name":"custom-config"}}
+      - contains:
+          path: spec.template.spec.containers[0].envFrom
+          content: {"prefix":"CUSTOM_","secretRef":{"name":"custom-secret","optional":true}}
+      - contains:
+          path: spec.template.spec.containers[0].envFrom
+          content: {configMapRef: {name: kodus-config}}
+  - it: supports env values and references in postgres.bundled
+    set:
+      postgres.bundled.extraEnv: [{"name":"EXTRA_LITERAL","value":"{{ literal }}"},{"name":"EXTRA_SECRET","valueFrom":{"secretKeyRef":{"name":"custom-secret","key":"token"}}},{"name":"EXTRA_FIELD","valueFrom":{"fieldRef":{"fieldPath":"metadata.name"}}}]
+      postgres.bundled.extraEnvFrom: [{"configMapRef":{"name":"custom-config"}},{"prefix":"CUSTOM_","secretRef":{"name":"custom-secret","optional":true}}]
+    template: templates/datastores/bundled-postgres.yaml
+    documentIndex: 2
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {"name":"EXTRA_LITERAL","value":"{{ literal }}"}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {"name":"EXTRA_SECRET","valueFrom":{"secretKeyRef":{"name":"custom-secret","key":"token"}}}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {"name":"EXTRA_FIELD","valueFrom":{"fieldRef":{"fieldPath":"metadata.name"}}}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {"name":"POSTGRES_USER","value":"kodusdev"}
+      - contains:
+          path: spec.template.spec.containers[0].envFrom
+          content: {"configMapRef":{"name":"custom-config"}}
+      - contains:
+          path: spec.template.spec.containers[0].envFrom
+          content: {"prefix":"CUSTOM_","secretRef":{"name":"custom-secret","optional":true}}
+  - it: supports env values and references in mongodb.bundled
+    set:
+      mongodb.bundled.extraEnv: [{"name":"EXTRA_LITERAL","value":"{{ literal }}"},{"name":"EXTRA_SECRET","valueFrom":{"secretKeyRef":{"name":"custom-secret","key":"token"}}},{"name":"EXTRA_FIELD","valueFrom":{"fieldRef":{"fieldPath":"metadata.name"}}}]
+      mongodb.bundled.extraEnvFrom: [{"configMapRef":{"name":"custom-config"}},{"prefix":"CUSTOM_","secretRef":{"name":"custom-secret","optional":true}}]
+    template: templates/datastores/bundled-mongodb.yaml
+    documentIndex: 1
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {"name":"EXTRA_LITERAL","value":"{{ literal }}"}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {"name":"EXTRA_SECRET","valueFrom":{"secretKeyRef":{"name":"custom-secret","key":"token"}}}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {"name":"EXTRA_FIELD","valueFrom":{"fieldRef":{"fieldPath":"metadata.name"}}}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {"name":"MONGO_INITDB_ROOT_USERNAME","value":"kodusdev"}
+      - contains:
+          path: spec.template.spec.containers[0].envFrom
+          content: {"configMapRef":{"name":"custom-config"}}
+      - contains:
+          path: spec.template.spec.containers[0].envFrom
+          content: {"prefix":"CUSTOM_","secretRef":{"name":"custom-secret","optional":true}}
+  - it: supports env values and references in rabbitmq.bundled
+    set:
+      rabbitmq.bundled.extraEnv: [{"name":"EXTRA_LITERAL","value":"{{ literal }}"},{"name":"EXTRA_SECRET","valueFrom":{"secretKeyRef":{"name":"custom-secret","key":"token"}}},{"name":"EXTRA_FIELD","valueFrom":{"fieldRef":{"fieldPath":"metadata.name"}}}]
+      rabbitmq.bundled.extraEnvFrom: [{"configMapRef":{"name":"custom-config"}},{"prefix":"CUSTOM_","secretRef":{"name":"custom-secret","optional":true}}]
+    template: templates/datastores/bundled-rabbitmq.yaml
+    documentIndex: 2
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {"name":"EXTRA_LITERAL","value":"{{ literal }}"}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {"name":"EXTRA_SECRET","valueFrom":{"secretKeyRef":{"name":"custom-secret","key":"token"}}}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {"name":"EXTRA_FIELD","valueFrom":{"fieldRef":{"fieldPath":"metadata.name"}}}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {"name":"RABBITMQ_DEFAULT_USER","value":"kodus"}
+      - contains:
+          path: spec.template.spec.containers[0].envFrom
+          content: {"configMapRef":{"name":"custom-config"}}
+      - contains:
+          path: spec.template.spec.containers[0].envFrom
+          content: {"prefix":"CUSTOM_","secretRef":{"name":"custom-secret","optional":true}}
+  - it: preserves legacy env and scopes additions to the selected service
+    set:
+      services.api.env.LEGACY_SETTING: legacy
+      services.worker.extraEnv: [{name: WORKER_ONLY, value: enabled}]
+    documentSelector:
+      path: metadata.name
+      value: kodus-api
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: LEGACY_SETTING, value: legacy}
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content: {name: WORKER_ONLY, value: enabled}
+  - it: omits datastore envFrom when no sources are configured
+    template: templates/datastores/bundled-mongodb.yaml
+    documentIndex: 1
+    asserts:
+      - notExists:
+          path: spec.template.spec.containers[0].envFrom
+      - lengthEqual:
+          path: spec.template.spec.containers[0].env
+          count: 3

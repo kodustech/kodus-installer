@@ -234,8 +234,24 @@ imagePullSecrets: []
 waitForDeps:
   image: busybox:1.37.0
 
+# Limits for chart-created emptyDir volumes. Empty default preserves each volume's
+# legacy limit (tmp: 100Mi; writable paths: 256Mi or writablePathsSizeLimit).
+# Precedence: component sizeLimits[name] > global sizeLimits[name] >
+# defaultSizeLimit > legacy limit. Override per component under services.<name>.emptyDir
+# or migrations.emptyDir. Names: tmp and writable-<index> (index in writablePaths).
+emptyDir:
+  defaultSizeLimit: ""
+  sizeLimits: {}
+
+# Additional environment for chart-managed containers (services, migrations and bundled stores).
+# extraEnv: Kubernetes EnvVar list (value or valueFrom); extraEnvFrom: EnvFromSource list.
+# Secret/ConfigMap references must exist in the release namespace. These lists are
+# appended after chart defaults; avoid names already supplied by the chart or env.
+# Values are rendered literally, without Helm tpl evaluation.
 services:
   web:
+    extraEnv: []
+    extraEnvFrom: []
     enabled: true
     image:
       repository: ghcr.io/kodustech/kodus-ai-web
@@ -259,6 +275,8 @@ services:
       limits:   { cpu: 500m, memory: 512Mi }
 
   api:
+    extraEnv: []
+    extraEnvFrom: []
     enabled: true
     image:
       repository: ghcr.io/kodustech/kodus-ai-api
@@ -276,6 +294,8 @@ services:
       limits:   { cpu: "1", memory: 1536Mi }
 
   worker:
+    extraEnv: []
+    extraEnvFrom: []
     enabled: true
     image:
       repository: ghcr.io/kodustech/kodus-ai-worker
@@ -303,6 +323,8 @@ services:
   # the Enterprise features are unused — it just consumes its queues — so it ships
   # on to keep the stack complete. Set false to trim it from a minimal install.
   worker-analytics:
+    extraEnv: []
+    extraEnvFrom: []
     enabled: true
     image:
       repository: ghcr.io/kodustech/kodus-ai-worker
@@ -325,6 +347,8 @@ services:
       limits:   { cpu: "1", memory: 1Gi }
 
   webhooks:
+    extraEnv: []
+    extraEnvFrom: []
     enabled: true
     image:
       repository: ghcr.io/kodustech/kodus-ai-webhook
@@ -341,6 +365,8 @@ services:
       limits:   { cpu: 500m, memory: 768Mi }
 
   mcp-manager:
+    extraEnv: []
+    extraEnvFrom: []
     enabled: true
     image:
       repository: ghcr.io/kodustech/kodus-mcp-manager
@@ -357,6 +383,8 @@ services:
 # the release revision, TTL-cleaned). Not a Helm hook — a pre-install hook would
 # deadlock waiting for a bundled DB that Helm only creates after hooks finish.
 migrations:
+  extraEnv: []
+  extraEnvFrom: []
   enabled: true
   image:
     repository: ghcr.io/kodustech/kodus-ai-api
@@ -533,6 +561,8 @@ resourceQuota:
 postgres:
   mode: bundled                     # bundled | external | operator
   bundled:
+    extraEnv: []
+    extraEnvFrom: []
     image: pgvector/pgvector:pg16
     database: kodus_db
     username: kodusdev
@@ -575,6 +605,8 @@ postgres:
 mongodb:
   mode: bundled
   bundled:
+    extraEnv: []
+    extraEnvFrom: []
     # Pinned, never floating, same as docker-compose.yml. 8.3.13 is what
     # `mongo:8` resolves to today, so a release that ran the floating tag keeps
     # opening its data (8.2 cannot open files written by 8.3).
@@ -612,6 +644,8 @@ mongodb:
 rabbitmq:
   mode: bundled
   bundled:
+    extraEnv: []
+    extraEnvFrom: []
     # Pre-built Kodus image: delayed_message_exchange plugin + kodus-ai/kodus-ast
     # vhosts baked in. Runs init-definitions.sh on boot (same as docker-compose).
     image: ghcr.io/kodustech/kodus-rabbitmq:4.2.2-kodus.1
