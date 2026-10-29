@@ -122,7 +122,11 @@ echo -e "  ${GREEN}✔${NC} context: kind-$CLUSTER"
 # Mongo and the run says nothing about the change under test. The baseline gets
 # it too: no install on these kernels ever wrote 8.3 data.
 MONGO_ARGS=()
-NODE_KERNEL=$(kubectl get nodes -o jsonpath='{.items[0].status.nodeInfo.kernelVersion}' 2>/dev/null)
+# Control bytes stripped as in doctor-lib.sh, since the value is printed below.
+NODE_KERNEL=$(kubectl get nodes -o jsonpath='{.items[0].status.nodeInfo.kernelVersion}' 2>/dev/null \
+  | tr -d '\000-\010\013-\037\177' | LC_ALL=C awk '{ gsub(/\302[\200-\237]/, ""); print }')
+# Guessing 8.3 here would end in a 15-minute rollout timeout that never names the cause.
+[ -n "$NODE_KERNEL" ] || die "cannot read the kind node kernel version (kubectl get nodes)"
 if echo "$NODE_KERNEL" | awk -F. '{ exit !($1+0 > 6 || ($1+0 == 6 && $2+0 >= 19)) }'; then
   MONGO_ARGS=(--set mongodb.bundled.image=mongo:8.2.11)
   echo -e "  ${YELLOW}!${NC} node kernel $NODE_KERNEL is 6.19+: MongoDB 8.3 cannot start there, using mongo:8.2.11"
