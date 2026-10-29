@@ -115,6 +115,19 @@ kubectl cluster-info --context "kind-$CLUSTER" >/dev/null 2>&1 || die "cannot re
 kubectl config use-context "kind-$CLUSTER" >/dev/null 2>&1
 echo -e "  ${GREEN}✔${NC} context: kind-$CLUSTER"
 
+# No MongoDB 8.3 release starts on Linux kernels 6.19+ (SERVER-121912), and the
+# chart's bundled default is 8.3. kind nodes run on the Docker daemon's kernel, so
+# on such a kernel apply the override values.yaml documents, the same rule
+# install.sh applies for compose. Without it every install here crash-loops on
+# Mongo and the run says nothing about the change under test. The baseline gets
+# it too: no install on these kernels ever wrote 8.3 data.
+MONGO_ARGS=()
+NODE_KERNEL=$(kubectl get nodes -o jsonpath='{.items[0].status.nodeInfo.kernelVersion}' 2>/dev/null)
+if echo "$NODE_KERNEL" | awk -F. '{ exit !($1+0 > 6 || ($1+0 == 6 && $2+0 >= 19)) }'; then
+  MONGO_ARGS=(--set mongodb.bundled.image=mongo:8.2.11)
+  echo -e "  ${YELLOW}!${NC} node kernel $NODE_KERNEL is 6.19+: MongoDB 8.3 cannot start there, using mongo:8.2.11"
+fi
+
 # --- Install ---
 diagnose() {
   section "$1 — diagnostics"
@@ -133,7 +146,7 @@ deploy() {
   set -x
   helm upgrade --install "$RELEASE" "$1" \
     -f "$1/values.yaml" -f "$1/values-dev.yaml" \
-    --set imageTag="$TAG" \
+    --set imageTag="$TAG" ${MONGO_ARGS[@]+"${MONGO_ARGS[@]}"} \
     -n "$NS" --create-namespace \
     --wait --timeout "$TIMEOUT"
   rc=$?
@@ -176,7 +189,7 @@ if [ -n "$FROM_OCI" ]; then
   set -x
   helm upgrade --install "$RELEASE" "$PKG" \
     -f charts/kodus/values-dev.yaml \
-    --set imageTag="$TAG" \
+    --set imageTag="$TAG" ${MONGO_ARGS[@]+"${MONGO_ARGS[@]}"} \
     -n "$NS" --create-namespace \
     --wait --timeout "$TIMEOUT"
   rc=$?
