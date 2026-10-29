@@ -43,6 +43,9 @@ spec:
           envFrom:
             - configMapRef:
                 name: {{ include "kodus.fullname" . }}-config
+            {{- with .Values.migrations.extraEnvFrom }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
           env:
             - name: RUN_MIGRATIONS
               value: {{ .Values.migrations.env.RUN_MIGRATIONS | quote }}
@@ -51,11 +54,14 @@ spec:
             {{- include "kodus-common.dbEnv" . | nindent 12 }}
             {{- include "kodus-common.rabbitmqEnv" . | nindent 12 }}
             {{- include "kodus-common.appSecretsEnv" . | nindent 12 }}
+            {{- with .Values.migrations.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
           resources:
             requests: { cpu: 250m, memory: 512Mi }
             limits:   { cpu: "1", memory: 1Gi }
           volumeMounts:
             {{- include "kodus-common.tmpVolumeMount" . | nindent 12 }}
       volumes:
-        {{- include "kodus-common.tmpVolume" . | nindent 8 }}
+        {{- include "kodus-common.tmpVolume" (dict "root" . "config" .Values.migrations) | nindent 8 }}
 {{- end }}

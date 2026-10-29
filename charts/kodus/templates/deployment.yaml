@@ -73,6 +73,9 @@ spec:
           envFrom:
             - configMapRef:
                 name: {{ include "kodus.fullname" $ }}-config
+            {{- with $svc.extraEnvFrom }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
           env:
             {{- include "kodus-common.dbEnv" $ | nindent 12 }}
             {{- include "kodus-common.rabbitmqEnv" $ | nindent 12 }}
@@ -82,6 +85,9 @@ spec:
             - name: {{ $k }}
               value: {{ $v | quote }}
             {{- end }}
+            {{- end }}
+            {{- with $svc.extraEnv }}
+            {{- toYaml . | nindent 12 }}
             {{- end }}
           {{- include "kodus-common.probes" (dict "svc" $svc) | nindent 10 }}
           resources:
@@ -93,14 +99,14 @@ spec:
               mountPath: {{ $path | quote }}
             {{- end }}
       volumes:
-        {{- include "kodus-common.tmpVolume" $ | nindent 8 }}
+        {{- include "kodus-common.tmpVolume" (dict "root" $ "config" $svc) | nindent 8 }}
         {{- /* Per-service scratch dirs for frameworks that insist on writing inside
                their own tree despite readOnlyRootFilesystem. emptyDir (not a PVC) is
                deliberate: these hold derived caches, per-pod and safe to lose. */ -}}
         {{- range $i, $path := ($svc.writablePaths | default list) }}
         - name: writable-{{ $i }}
           emptyDir:
-            sizeLimit: {{ $svc.writablePathsSizeLimit | default "256Mi" }}
+            sizeLimit: {{ include "kodus-common.emptyDirSizeLimit" (dict "root" $ "config" $svc "name" (printf "writable-%d" $i) "fallback" ($svc.writablePathsSizeLimit | default "256Mi")) | quote }}
         {{- end }}
 {{- end }}
 {{- end }}

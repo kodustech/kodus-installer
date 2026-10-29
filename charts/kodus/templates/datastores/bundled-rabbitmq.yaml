@@ -105,6 +105,10 @@ spec:
           ports:
             - name: amqp
               containerPort: 5672
+          {{- with $b.extraEnvFrom }}
+          envFrom:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           env:
             - name: RABBITMQ_DEFAULT_USER
               value: {{ $b.username | quote }}
@@ -115,6 +119,9 @@ spec:
                   key: password
             - name: RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS
               value: "-rabbit heartbeat 60"
+            {{- with $b.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:

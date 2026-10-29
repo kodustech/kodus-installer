@@ -3,9 +3,110 @@
   "title": "Kodus Helm values",
   "type": "object",
   "definitions": {
+    "emptyDir": {
+      "type": "object",
+      "properties": {
+        "defaultSizeLimit": {
+          "type": "string"
+        },
+        "sizeLimits": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "extraEnvironment": {
+      "type": "object",
+      "properties": {
+        "extraEnv": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "name"
+            ],
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1
+              },
+              "value": {
+                "type": "string"
+              },
+              "valueFrom": {
+                "type": "object"
+              }
+            },
+            "not": {
+              "required": [
+                "value",
+                "valueFrom"
+              ]
+            }
+          }
+        },
+        "extraEnvFrom": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "prefix": {
+                "type": "string"
+              },
+              "secretRef": {
+                "type": "object",
+                "required": [
+                  "name"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "optional": {
+                    "type": "boolean"
+                  }
+                }
+              },
+              "configMapRef": {
+                "type": "object",
+                "required": [
+                  "name"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "optional": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            },
+            "oneOf": [
+              {
+                "required": [
+                  "secretRef"
+                ]
+              },
+              {
+                "required": [
+                  "configMapRef"
+                ]
+              }
+            ]
+          }
+        }
+      }
+    },
     "store": {
       "type": "object",
       "properties": {
+        "bundled": { "$ref": "#/definitions/extraEnvironment" },
         "mode": {
           "enum": ["bundled", "external", "operator"],
           "description": "bundled (StatefulSet run by this chart) | external (managed/your own) | operator (CNPG/RabbitMQ/Mongo operator)"
@@ -15,6 +116,7 @@
     }
   },
   "properties": {
+    "emptyDir": { "$ref": "#/definitions/emptyDir" },
     "platform": {
       "enum": ["kubernetes", "openshift"]
     },
@@ -49,10 +151,29 @@
     "postgres": { "$ref": "#/definitions/store" },
     "mongodb": { "$ref": "#/definitions/store" },
     "rabbitmq": { "$ref": "#/definitions/store" },
-    "services": { "type": "object" },
+    "services": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "allOf": [
+          {
+            "$ref": "#/definitions/extraEnvironment"
+          }
+        ],
+        "properties": {
+          "emptyDir": {
+            "$ref": "#/definitions/emptyDir"
+          }
+        }
+      }
+    },
     "migrations": {
       "type": "object",
-      "properties": { "enabled": { "type": "boolean" } }
+      "allOf": [{ "$ref": "#/definitions/extraEnvironment" }],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "emptyDir": { "$ref": "#/definitions/emptyDir" }
+      }
     },
     "ingress": {
       "type": "object",
