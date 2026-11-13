@@ -35,9 +35,9 @@ done
 
 cells=$(RUNTIME_INIT_MODE=connected-cells rt_compose run --rm -T runtime-init 2>/dev/null | tr -d '[:space:]' || true)
 if [ -n "$cells" ] && [ "$cells" != 0 ]; then
-    rt_ok "ok      $cells cell(s) connected"
+    rt_ok "ok      $cells cell(s) connected with a free slot"
 else
-    printf 'FAILED  no cell is connected to the hub (cell-host.sh status on the cell host; journalctl -u kodus-cell)\n'
+    printf 'FAILED  no cell is connected to the hub with a free slot; a cell that just connected reports its slots with its first heartbeat (cell-host.sh status on the cell host; journalctl -u kodus-cell)\n'
     fail=1
 fi
 [ "$fail" = 0 ] || exit 1

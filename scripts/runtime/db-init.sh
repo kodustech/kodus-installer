@@ -9,6 +9,8 @@
 #                             Exit 3 when either table is not there yet.
 #   RUNTIME_INIT_MODE=live-claims  prints the claims pending, bound or held
 #   RUNTIME_INIT_MODE=connected-cells  prints the cells connected to the hub
+#                             whose heartbeat reports a free slot (a cell
+#                             just connected refuses claims until then)
 #   RUNTIME_INIT_MODE=dump         pg_dump -Fc of RUNTIME_INIT_DB to stdout
 #   RUNTIME_INIT_MODE=restore      pg_restore of stdin into RUNTIME_INIT_DB
 #   RUNTIME_INIT_MODE=uninstall    drops the Runtime and OpenBao databases and roles
@@ -64,7 +66,8 @@ case "${RUNTIME_INIT_MODE:-roles}" in
         psql_q -d kodus_runtime -Atc "SELECT count(*) FROM runtime.runtime_claims WHERE state IN ('pending','bound','held')"
         ;;
     connected-cells)
-        psql_q -d kodus_runtime -Atc "SELECT count(*) FROM runtime.runtime_cells WHERE status = 'connected'"
+        psql_q -d kodus_runtime -Atc "SELECT count(*) FROM runtime.runtime_cells c WHERE c.status = 'connected'
+            AND EXISTS (SELECT 1 FROM runtime.runtime_cell_sessions s WHERE s.cell_id = c.cell_id AND s.free_slots > 0)"
         ;;
     dump)
         pg_dump -Fc -d "$(runtime_db)"

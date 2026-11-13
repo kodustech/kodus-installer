@@ -27,7 +27,9 @@ done
 
 rt_compose rm -sf runtime-worker runtime-hub runtime-openbao runtime-init
 # The product without the overlay: no Runtime env, no OpenBao files.
-docker compose --project-directory "$RT_ROOT" -f "$RT_ROOT/docker-compose.yml" up -d --force-recreate api worker
+# (KODUS_RUNTIME_TEST_NO_PRODUCT: install.sh's test hook, no product to recreate.)
+[ "${KODUS_RUNTIME_TEST_NO_PRODUCT:-0}" = 1 ] ||
+    docker compose --project-directory "$RT_ROOT" -f "$RT_ROOT/docker-compose.yml" up -d --force-recreate api worker
 rt_ok "Runtime services removed; the API and the worker run without the Runtime."
 
 if [ "$PURGE" = 1 ]; then

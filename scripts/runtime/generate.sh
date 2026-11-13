@@ -92,6 +92,18 @@ EVIDENCE_BIND=$(keep RUNTIME_EVIDENCE_BIND "$SET_EVIDENCE_BIND" 0.0.0.0)
 SANDBOX=$(keep RUNTIME_SANDBOX_PROVIDER "$SET_SANDBOX" unset)
 case "$SANDBOX" in runtime | unset) ;; *) rt_die "--sandbox-provider must be runtime or unset" ;; esac
 case "$EVIDENCE_URL" in http://* | https://*) ;; *) rt_die "--evidence-url must be an http(s) URL" ;; esac
+# The runtime-worker refuses any other upload URL at start (kodus-ai
+# libs/runtime/protocol/messages.ts UploadGrantSchema): https to a DNS name,
+# or plain http to localhost or a one-label name; never an IP literal, so a
+# grant cannot point a cell at a metadata address.
+ev_host=${EVIDENCE_URL#*://}
+ev_host=${ev_host%%/*}
+ev_host=${ev_host%:*}
+case "$EVIDENCE_URL" in
+    https://*) printf '%s' "$ev_host" | grep -Eq '^[0-9.]+$|:' && ev_ok=0 || ev_ok=1 ;;
+    http://*) printf '%s' "$ev_host" | grep -Eq '^(localhost|127\.0\.0\.1|[A-Za-z0-9-]+)$' && ev_ok=1 || ev_ok=0 ;;
+esac
+[ "$ev_ok" = 1 ] || rt_die "--evidence-url $EVIDENCE_URL: the runtime-worker takes https://<DNS name> or http://<one-label name> only, never an IP (cells upload there). With --hub-host an IP, pass --evidence-url https://<name behind your TLS proxy>"
 case "$GIT_API" in https://*) ;; *) rt_die "--git-api must be an https URL" ;; esac
 cat >"$SETTINGS" <<EOF
 RUNTIME_HUB_HOST=$HUB_HOST

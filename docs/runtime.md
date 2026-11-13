@@ -142,7 +142,9 @@ sudo scripts/runtime/install.sh --cell-profile docker-gvisor --hub-host runtime.
 - `--openbao-host`: where cell hosts reach OpenBao (default: the hub host); goes in OpenBao's certificate. Set
   `--openbao-bind` to the interface that address is on (default `127.0.0.1`: only this host). For a cell on the Kodus
   host itself use the Docker bridge address, e.g. `--openbao-host 172.17.0.1 --openbao-bind 172.17.0.1`.
-- `--evidence-url`: the public URL of the evidence server (default `http://<hub-host>:3420`).
+- `--evidence-url`: the public URL of the evidence server (default `http://<hub-host>:3420`). Cells upload there, and the
+  runtime-worker takes only `https://<DNS name>` or `http://<one-label name>`, never an IP: with `--hub-host` an IP,
+  pass `https://<name behind your TLS proxy>` (`generate.sh` refuses anything else).
 - `--git-api`: the Git API cells download tarballs from (default `https://api.github.com`; GitHub Enterprise:
   `https://<host>/api/v3`). It must be the same on every cell.
 - `--injector-org <organizationId>`: narrows the injector's OpenBao policy to one organization. Only before OpenBao's
@@ -236,6 +238,15 @@ refusal is in `journalctl -u kodus-cell-egress`.
 
 Then, in the product: the Runtime settings page lists the cell; `@kody runtime` on a test PR of a connected repository
 runs.
+
+### A whole install on a throwaway VM
+
+`scripts/runtime/test-local-install.sh --kodus-ai <kodus-ai checkout>` (macOS with OrbStack) creates an Ubuntu VM,
+runs `install.sh` and `cell-host.sh install` there with no hand-written flag, waits for the cell to register and
+connect, runs `smoke.sh` (a code sandbox claim under runsc), uninstalls both halves and deletes the VM (`--keep`
+leaves it). Until the Runtime images are published, the hub and the runtime-worker run from the checkout's source,
+the cell from binaries built from it, and the token is recorded as the runtime-worker records the API's (the product
+API is not started: `KODUS_RUNTIME_TEST_NO_PRODUCT`).
 
 ## Upgrade
 
@@ -332,7 +343,8 @@ the chart runs cells:
 
 RabbitMQ user `kodus_runtime` on the product vhost (set by `install.sh` on the bundled broker; on an external broker,
 create it with these): configure `^(workflow\.jobs\.runtime_(run|control)\.queue|amq\.gen-.*)$`, write
-`^(workflow\.exchange|workflow\.exchange\.runtime_run_retry|workflow\.jobs\.runtime_(run|control)\.queue|amq\.gen-.*)$`,
+`^(workflow\.exchange|workflow\.exchange\.runtime_run_retry|workflow\.exchange\.dlx|workflow\.jobs\.runtime_(run|control)\.queue|amq\.gen-.*)$`
+(the dead-letter exchange: RabbitMQ checks write access to it whenever the worker declares its queues),
 read `^(workflow\.exchange|workflow\.jobs\.runtime_(run|control)\.queue|amq\.gen-.*)$`, and on `workflow.exchange` the
 topic permissions write `^workflow\.jobs\.created\.RUNTIME_PUBLISH$`, read `^workflow\.jobs\.(\*|created)\.RUNTIME_(RUN|CONTROL)$`.
 

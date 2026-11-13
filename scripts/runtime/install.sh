@@ -13,6 +13,10 @@
 #                     (default: IMAGE_TAG of .env; `unreleased` for local builds)
 #   --check           resolve and validate only; start nothing
 #   every option of scripts/runtime/generate.sh (--hub-host, --openbao-host, ...)
+#
+# Test hook (never on a real install): KODUS_RUNTIME_TEST_NO_PRODUCT=1 leaves
+# the product's api and worker out (and so their read grants), for
+# scripts/runtime/test-local-install.sh, which has no product images.
 set -euo pipefail
 # shellcheck source=lib.sh
 . "$(dirname "$0")/lib.sh"
@@ -122,7 +126,9 @@ MQ_URI=$(rt_env_get "$ENV_FILE" API_RABBITMQ_URI)
 VHOST=$(rt_url_part "$MQ_URI" path)
 MQ_PW=$(rt_env_get "$RT_STATE/secrets.env" RUNTIME_MQ_PASSWORD)
 Q='workflow\.jobs\.runtime_(run|control)\.queue'
-D='workflow\.exchange\.runtime_run_retry'
+# The retry exchange, and the dead-letter exchange its queues name: RabbitMQ
+# checks write access to a queue's x-dead-letter-exchange at every declare.
+D='workflow\.exchange\.runtime_run_retry|workflow\.exchange\.dlx'
 if [ "${use_local_mq:-true}" = false ]; then
     rt_warn "external RabbitMQ: create user kodus_runtime on vhost '$VHOST' with the password RUNTIME_MQ_PASSWORD of $RT_STATE/secrets.env and the permissions in docs/runtime.md (RabbitMQ), then re-run."
 else
@@ -144,18 +150,22 @@ rt_info "OpenBao..."
 rt_compose up -d --wait runtime-openbao
 rt_info "Runtime hub (applies the Runtime migrations)..."
 rt_compose up -d --wait runtime-hub
-rt_info "API and worker with the Runtime env (the API applies the product migrations)..."
-rt_compose up -d --force-recreate api worker
+if [ "${KODUS_RUNTIME_TEST_NO_PRODUCT:-0}" = 1 ]; then
+    rt_warn "test only (KODUS_RUNTIME_TEST_NO_PRODUCT): the product's api and worker are not started, nor their read grants"
+else
+    rt_info "API and worker with the Runtime env (the API applies the product migrations)..."
+    rt_compose up -d --force-recreate api worker
 
-rt_info "Read grants (waits for the Runtime and product tables)..."
-for i in $(seq 1 60); do
-    rc=0
-    RUNTIME_INIT_MODE=grants rt_compose run --rm runtime-init || rc=$?
-    [ "$rc" = 0 ] && break
-    [ "$rc" = 3 ] || rt_die "runtime-init grants failed (exit $rc)"
-    [ "$i" = 60 ] && rt_die "the tables did not appear in 10 minutes: check scripts/runtime/compose.sh logs api runtime-hub"
-    sleep 10
-done
+    rt_info "Read grants (waits for the Runtime and product tables)..."
+    for i in $(seq 1 60); do
+        rc=0
+        RUNTIME_INIT_MODE=grants rt_compose run --rm runtime-init || rc=$?
+        [ "$rc" = 0 ] && break
+        [ "$rc" = 3 ] || rt_die "runtime-init grants failed (exit $rc)"
+        [ "$i" = 60 ] && rt_die "the tables did not appear in 10 minutes: check scripts/runtime/compose.sh logs api runtime-hub"
+        sleep 10
+    done
+fi
 
 rt_info "Runtime worker..."
 rt_compose up -d --wait runtime-worker
