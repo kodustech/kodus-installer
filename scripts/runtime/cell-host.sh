@@ -72,6 +72,11 @@ LOCAL_BIN="$PREFIX/usr/local/bin"
 UNIT_NAMES="kodus-cell-injector.service kodus-cell-egress.service kodus-cell.service kodus-cell.target kodus-cell-reaper.service kodus-cell-reaper.timer"
 EGRESS_NAME=kodus-cell-egress
 INJECTOR_NAME=kodus-cell-injector
+# The internal network the egress reaches the injector on, with fixed
+# addresses: outside the claims' pool (10.213.0.0/16) and this host's other
+# networks (kodus-ai apps/runtime-cell/scripts/dev-gvisor-cell.sh).
+ENFORCERS_NAME=kodus-cell-enforcers
+DEFAULT_ENFORCERS_SUBNET=10.214.0.0/29 DEFAULT_EGRESS_ENFORCER_IP=10.214.0.2 DEFAULT_INJECTOR_ENFORCER_IP=10.214.0.3
 GVISOR_BASE=https://storage.googleapis.com/gvisor/releases/release
 DEFAULT_EGRESS_ALLOW=registry-1.docker.io,auth.docker.io,production.cloudfront.docker.com,registry.npmjs.org,deb.debian.org,security.debian.org,archive.ubuntu.com,security.ubuntu.com,ports.ubuntu.com,dl-cdn.alpinelinux.org
 
@@ -79,6 +84,7 @@ COMMAND=${1:-}
 [ $# -gt 0 ] && shift
 PROFILE='' BUNDLE='' TOKEN_FILE='' RELEASE='' CELL_IMAGE_ARG='' CELL_BIN_DIR='' WORKDIR_R=/var/lib/kodus-cell
 EGRESS_ALLOW='' UPSTREAM_DNS='' SANDBOX_POOL='' GVISOR_ARCHIVE='' REINSTALL_RUNSC=0
+ENFORCERS_SUBNET='' EGRESS_ENFORCER_IP='' INJECTOR_ENFORCER_IP=''
 DRY_RUN=0 HUB_URL='' HUB_CA='' OUT='' PURGE=0 REMOVE_RUNSC=0 THIN_POOL='' RUNTIME_CLASS=gvisor MIN_FREE_GB=20
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -117,7 +123,13 @@ settings_defaults() {
         [ -n "$UPSTREAM_DNS" ] || UPSTREAM_DNS=$(rt_env_get "$ETC/cell.env" UPSTREAM_DNS)
         [ -n "$SANDBOX_POOL" ] || SANDBOX_POOL=$(rt_env_get "$ETC/cell.env" KODUS_CELL_SANDBOX_POOL)
         [ -n "$RELEASE" ] || RELEASE=$(rt_env_get "$ETC/cell.env" KODUS_CELL_RELEASE)
+        [ -n "$ENFORCERS_SUBNET" ] || ENFORCERS_SUBNET=$(rt_env_get "$ETC/cell.env" ENFORCERS_SUBNET)
+        [ -n "$EGRESS_ENFORCER_IP" ] || EGRESS_ENFORCER_IP=$(rt_env_get "$ETC/cell.env" EGRESS_ENFORCER_IP)
+        [ -n "$INJECTOR_ENFORCER_IP" ] || INJECTOR_ENFORCER_IP=$(rt_env_get "$ETC/cell.env" INJECTOR_ENFORCER_IP)
     fi
+    ENFORCERS_SUBNET=${ENFORCERS_SUBNET:-$DEFAULT_ENFORCERS_SUBNET}
+    EGRESS_ENFORCER_IP=${EGRESS_ENFORCER_IP:-$DEFAULT_EGRESS_ENFORCER_IP}
+    INJECTOR_ENFORCER_IP=${INJECTOR_ENFORCER_IP:-$DEFAULT_INJECTOR_ENFORCER_IP}
     EGRESS_ALLOW=${EGRESS_ALLOW:-$DEFAULT_EGRESS_ALLOW}
     UPSTREAM_DNS=${UPSTREAM_DNS:-1.1.1.1:53}
     SANDBOX_POOL=${SANDBOX_POOL:-0}
@@ -615,6 +627,9 @@ KODUS_CELL_SANDBOX_POOL=$SANDBOX_POOL
 HOLDER_IMAGE=$HOLDER_IMAGE
 UPSTREAM_DNS=$UPSTREAM_DNS
 MIRROR_CACHE_GB=20
+ENFORCERS_SUBNET=$ENFORCERS_SUBNET
+EGRESS_ENFORCER_IP=$EGRESS_ENFORCER_IP
+INJECTOR_ENFORCER_IP=$INJECTOR_ENFORCER_IP
 EGRESS_ARGS=
 INJECTOR_DOCKER_ARGS=
 INJECTOR_ARGS="$injector_args"
@@ -839,6 +854,7 @@ cmd_uninstall() {
     cell=$(rt_env_get "$ETC/cell.env" CELL_ID)
     run "$SYSTEMCTL" disable --now kodus-cell-reaper.timer kodus-cell.target kodus-cell.service kodus-cell-egress.service kodus-cell-injector.service || true
     run "$DOCKER" rm -f "$EGRESS_NAME" "$INJECTOR_NAME" || true
+    run "$DOCKER" network rm "$ENFORCERS_NAME" || true
     if [ -n "$cell" ] && [ "$DRY_RUN" = 0 ]; then
         # Whatever the agent left: its machines and networks carry its label.
         "$DOCKER" ps -aq --filter "label=kodus.cell=$cell" | xargs -r "$DOCKER" rm -f -v >/dev/null 2>&1 || true

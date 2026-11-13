@@ -5,6 +5,10 @@
 # resolver handed each claim, which a separate resolver process cannot share
 # (cmd/egress/main.go), so there is no separate resolver unit. The registry
 # and Go module mirror serve builds on :8080 with their cache on this host.
+# It sends a credentialed host (an org secret's) to the injector on the cell's
+# internal enforcers network (-injector-addr), from its own fixed address
+# there, which is the one the injector trusts. The container is created,
+# joined to that network, then started.
 # Installed by scripts/runtime/cell-host.sh; @DOCKER@ is the host's docker.
 [Unit]
 Description=Kody Runtime cell egress proxy and resolver
@@ -17,15 +21,19 @@ PartOf=kodus-cell.target
 [Service]
 EnvironmentFile=/etc/kodus/cell/cell.env
 ExecStartPre=-@DOCKER@ rm -f kodus-cell-egress
-ExecStart=@DOCKER@ run --rm --name kodus-cell-egress --label kodus.cell.component=egress \
+# Made by whichever of the injector and the egress starts first; an existing one is kept.
+ExecStartPre=-@DOCKER@ network create --internal --subnet ${ENFORCERS_SUBNET} kodus-cell-enforcers
+ExecStartPre=@DOCKER@ create --rm --name kodus-cell-egress --label kodus.cell.component=egress \
   -p 127.0.0.1:9443:9443 \
   -v /etc/kodus/cell/egress:/etc/kodus/egress:ro \
   -v /opt/kodus-cell/current/bin/egress:/usr/local/bin/kodus-egress:ro \
   -v /var/lib/kodus-cell/mirror-cache:/var/cache/kodus-mirror \
   ${HOLDER_IMAGE} \
   /usr/local/bin/kodus-egress -listen-tls :443 -listen-http :80 -dns-listen :53 -control :9443 \
-  -mirror-listen :8080 -upstream-dns ${UPSTREAM_DNS} -transparent=false \
+  -mirror-listen :8080 -upstream-dns ${UPSTREAM_DNS} -transparent=false -injector-addr ${INJECTOR_ENFORCER_IP}:8443 \
   -mirror-cache-dir /var/cache/kodus-mirror -mirror-cache-max-gb ${MIRROR_CACHE_GB} -agent-cn ${CELL_ID} $EGRESS_ARGS
+ExecStartPre=@DOCKER@ network connect --ip ${EGRESS_ENFORCER_IP} kodus-cell-enforcers kodus-cell-egress
+ExecStart=@DOCKER@ start -a kodus-cell-egress
 ExecStop=@DOCKER@ stop -t 10 kodus-cell-egress
 Restart=on-failure
 RestartSec=5

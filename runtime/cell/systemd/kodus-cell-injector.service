@@ -2,8 +2,11 @@
 # claim's TLS to a credentialed host with the cell's injector CA, swaps an org
 # secret's placeholder for the value it reads from OpenBao, and goes on over
 # its own verified TLS. Runs in the holder image with the binary of the
-# installed cell release mounted read-only, on Docker's default bridge, its
-# control port on this host's loopback only.
+# installed cell release mounted read-only, on Docker's default bridge (its
+# way out, its control port on this host's loopback only) and on the cell's
+# internal enforcers network, where it listens at a fixed address and takes
+# PROXY v1 from the egress's address only. The container is created, joined
+# to that network, then started, so the address exists before it binds it.
 # Installed by scripts/runtime/cell-host.sh; @DOCKER@ is the host's docker.
 [Unit]
 Description=Kody Runtime cell credential injector
@@ -16,12 +19,17 @@ PartOf=kodus-cell.target
 [Service]
 EnvironmentFile=/etc/kodus/cell/cell.env
 ExecStartPre=-@DOCKER@ rm -f kodus-cell-injector
-ExecStart=@DOCKER@ run --rm --name kodus-cell-injector --label kodus.cell.component=injector \
+# Made by whichever of the injector and the egress starts first; an existing one is kept.
+ExecStartPre=-@DOCKER@ network create --internal --subnet ${ENFORCERS_SUBNET} kodus-cell-enforcers
+ExecStartPre=@DOCKER@ create --rm --name kodus-cell-injector --label kodus.cell.component=injector \
   -p 127.0.0.1:9445:9445 \
   -v /etc/kodus/cell/injector:/etc/kodus/injector:ro \
   -v /opt/kodus-cell/current/bin/injector:/usr/local/bin/kodus-injector:ro \
   $INJECTOR_DOCKER_ARGS ${HOLDER_IMAGE} \
-  /usr/local/bin/kodus-injector -listen :8443 -control :9445 -agent-cn ${CELL_ID} $INJECTOR_ARGS
+  /usr/local/bin/kodus-injector -listen ${INJECTOR_ENFORCER_IP}:8443 -trusted-proxies ${EGRESS_ENFORCER_IP} \
+  -control :9445 -agent-cn ${CELL_ID} $INJECTOR_ARGS
+ExecStartPre=@DOCKER@ network connect --ip ${INJECTOR_ENFORCER_IP} kodus-cell-enforcers kodus-cell-injector
+ExecStart=@DOCKER@ start -a kodus-cell-injector
 ExecStop=@DOCKER@ stop -t 10 kodus-cell-injector
 Restart=on-failure
 RestartSec=5

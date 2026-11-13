@@ -120,7 +120,7 @@ echo "== what install wrote"
 for u in kodus-cell-injector.service kodus-cell-egress.service kodus-cell.service kodus-cell.target kodus-cell-reaper.service kodus-cell-reaper.timer; do
     t "unit $u" test -s /etc/systemd/system/$u
 done
-t "units name the real docker path" sh -c '! grep -l @DOCKER@ /etc/systemd/system/kodus-cell-*.service && grep -q "ExecStart=/usr/bin/docker run" /etc/systemd/system/kodus-cell-egress.service'
+t "units name the real docker path" sh -c '! grep -l @DOCKER@ /etc/systemd/system/kodus-cell-*.service && grep -q "ExecStart=/usr/bin/docker start -a" /etc/systemd/system/kodus-cell-egress.service'
 t "reaper runs the binary the release ships (not /usr/local/bin/kodus-reaper)" has "ExecStart=/opt/kodus-cell/current/bin/reaper -once" /etc/systemd/system/kodus-cell-reaper.service
 t "reaper binary exists at that path" test -x /opt/kodus-cell/current/bin/reaper
 printf '[Unit]\nDescription=stub\n[Service]\nExecStart=/bin/true\n' >/etc/systemd/system/docker.service
@@ -133,6 +133,9 @@ t "injector holds the OpenBao AppRole, 0600" sh -c '[ "$(stat -c %a /etc/kodus/c
 t "private keys are 0600" sh -c '! find /etc/kodus/cell -name "*.key*" ! -perm 600 | grep -q .'
 t "cell.env names OpenBao for the injector" has "-openbao-addr https://10.20.30.40:8200" /etc/kodus/cell/cell.env
 t "cell.env pins the sandbox and builder images by digest" sh -c 'grep -q "gvisor-sandbox-image example.invalid/kodus-runtime-sandbox@sha256:" /etc/kodus/cell/cell.env && grep -q "gvisor-builder-image example.invalid/kodus-runtime-builder@sha256:" /etc/kodus/cell/cell.env'
+t "cell.env names the enforcers network the egress reaches the injector on" sh -c 'grep -qx ENFORCERS_SUBNET=10.214.0.0/29 /etc/kodus/cell/cell.env && grep -qx EGRESS_ENFORCER_IP=10.214.0.2 /etc/kodus/cell/cell.env && grep -qx INJECTOR_ENFORCER_IP=10.214.0.3 /etc/kodus/cell/cell.env'
+t "the injector listens on that network and trusts the egress's address only" sh -c 'U=/etc/systemd/system/kodus-cell-injector.service; grep -qF -- "-listen \${INJECTOR_ENFORCER_IP}:8443 -trusted-proxies \${EGRESS_ENFORCER_IP}" $U && grep -qF "network connect --ip \${INJECTOR_ENFORCER_IP} kodus-cell-enforcers kodus-cell-injector" $U && grep -q "ExecStart=/usr/bin/docker start -a kodus-cell-injector" $U'
+t "the egress sends credentialed hosts to the injector there" sh -c 'U=/etc/systemd/system/kodus-cell-egress.service; grep -qF -- "-injector-addr \${INJECTOR_ENFORCER_IP}:8443" $U && grep -qF "network connect --ip \${EGRESS_ENFORCER_IP} kodus-cell-enforcers kodus-cell-egress" $U'
 t "reaper env" sh -c 'grep -qx CELL_ID=cell-dry-run /etc/kodus/cell-reaper.env && grep -qx EGRESS=kodus-cell-egress /etc/kodus/cell-reaper.env'
 
 if [ -d /cellbin ]; then
@@ -157,11 +160,11 @@ if [ -d /cellbin ]; then
     t "cell: refuses to start without runsc, and says so" grep -qi runsc /tmp/cell.log
     # shellcheck disable=SC2086
     /opt/kodus-cell/current/bin/egress -listen-tls :443 -listen-http :80 -dns-listen :53 -control :9443 \
-        -mirror-listen :8080 -upstream-dns "$UPSTREAM_DNS" -transparent=false \
+        -mirror-listen :8080 -upstream-dns "$UPSTREAM_DNS" -transparent=false -injector-addr 127.0.0.1:8443 \
         -mirror-cache-dir /var/cache/kodus-mirror -mirror-cache-max-gb "$MIRROR_CACHE_GB" -agent-cn "$CELL_ID" $EGRESS_ARGS >/tmp/egress.log 2>&1 &
     EG=$!
     # shellcheck disable=SC2086
-    /opt/kodus-cell/current/bin/injector -listen :8443 -control :9445 -agent-cn "$CELL_ID" $INJECTOR_ARGS >/tmp/injector.log 2>&1 &
+    /opt/kodus-cell/current/bin/injector -listen 127.0.0.1:8443 -trusted-proxies 127.0.0.1 -control :9445 -agent-cn "$CELL_ID" $INJECTOR_ARGS >/tmp/injector.log 2>&1 &
     IN=$!
     sleep 3
     t "egress: starts with the unit's arguments" kill -0 $EG
@@ -188,6 +191,7 @@ t "each release keeps the settings it ran with" sh -c 'test -s "$(readlink /opt/
 echo "== backup and uninstall"
 t "backup writes the identity and config" sh -c "$CH backup --out /tmp/cell-backup.tgz && tar -tzf /tmp/cell-backup.tgz | grep -q etc/kodus/cell/identity/issuer.pem"
 t "uninstall --purge --dry-run lists what it removes" sh -c "$CH uninstall --purge --dry-run | grep -q '\[dry-run\] rm -rf /etc/kodus/cell /opt/kodus-cell /var/lib/kodus-cell'"
+t "uninstall removes the enforcers network (dry run)" sh -c "$CH uninstall --dry-run | grep -q '\[dry-run\] docker network rm kodus-cell-enforcers'"
 t "nothing removed by the dry run" test -s /etc/kodus/cell/cell.yaml
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
