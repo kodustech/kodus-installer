@@ -130,6 +130,10 @@ docker compose pull
 Pull the latest installer too (`git pull`) so `docker-compose.yml`,
 `scripts/schema-vars.sh`, and `.env.example` stay in sync with the release.
 
+With the Kody Runtime installed, `./scripts/install.sh` keeps its env on the API
+and the worker; upgrade the Runtime itself with `scripts/runtime/upgrade.sh`
+([docs/runtime.md](runtime.md#upgrade)).
+
 ## Data & backups
 
 Persistent data lives in named Docker volumes — back these up:
@@ -143,6 +147,11 @@ Persistent data lives in named Docker volumes — back these up:
 
 `docker compose down` stops the stack **without** deleting these volumes; add `-v`
 only when you intend to wipe all data.
+
+The Kody Runtime keeps its own databases (`kodus_runtime`, `kodus_openbao`) in
+`pgdata`, its generated secrets in `runtime/state/`, and OpenBao's unseal key
+apart from both: back them up with `scripts/runtime/backup.sh`
+([docs/runtime.md](runtime.md#backup-and-restore)).
 
 ## Verify the deployment
 
