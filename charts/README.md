@@ -13,6 +13,9 @@ README, then come back for the cluster deployment.
 - `kodus/` — the deployable chart (Kubernetes **and** OpenShift, via `platform`).
 - `kodus-common/` — a Helm *library* chart (shared helpers/templates). Not
   installed directly.
+- `kodus-runtime/` — the Kody Runtime: its control plane and cells that run code
+  sandboxes on a gVisor or Kata RuntimeClass. Installed apart from `kodus/` (it
+  needs a cluster admin); see [docs/runtime.md](../docs/runtime.md#kubernetes).
 
 ## Requirements
 
