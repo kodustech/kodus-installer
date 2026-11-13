@@ -1,0 +1,35 @@
+# Every image and kit the Kody Runtime runs, by digest, per release.
+#
+# Tab-separated, '#' comments. Columns:
+#   release    a `product` (control plane) or `cell_release` value of
+#              compatibility.tsv; `any` for pins that do not move with a release
+#   component  hub | worker | openbao | cell | builder | sandbox | browser |
+#              holder | helper | registry | microvm-kit
+#   reference  registry/repository@sha256:<digest>, or `-` when no digest exists
+#   status     published (pullable from the registry named) | unpublished
+#              (the digest is known or not, but no registry holds it yet)
+#
+# scripts/runtime/lib.sh refuses an unpublished component unless the operator
+# names a local build with KODUS_RUNTIME_<COMPONENT>_IMAGE (docs/runtime.md,
+# "Images that do not exist yet"). Third-party images are upstream and
+# unmodified: OpenBao (MPL-2.0, its own service), distribution registry,
+# Alpine and BusyBox (run by the cell as separate containers).
+#
+# builder: the digest is the reproducible build the cell pins
+# (apps/runtime-cell/cmd/cell/config.go defaultBuilderImage); the first cell
+# release pushes it to GHCR, so until then no registry has it.
+# holder: which image serves as the docker-gvisor holder is not decided
+# upstream (cell-distribution.md item 4); the dev cell runs alpine:3.20.
+# microvm-kit: only for the firecracker backend (phase P2); not built.
+#release	component	reference	status
+unreleased	hub	-	unpublished
+unreleased	worker	-	unpublished
+unreleased	cell	-	unpublished
+unreleased	builder	ghcr.io/kodustech/kodus-runtime-builder@sha256:f4c8f1e1e94d6ab48d181cd4e07e50b667c0e7aef510bae930546454510a63b1	unpublished
+unreleased	sandbox	-	unpublished
+unreleased	browser	-	unpublished
+unreleased	microvm-kit	-	unpublished
+any	openbao	docker.io/openbao/openbao:2.7.2@sha256:5046911075e137e154ce49ab051502f4ec7cf367d484ae4a4dce665d9b90561f	published
+any	registry	docker.io/library/registry:3@sha256:82f6ff4a7f982960c8aa51617fea3aabc485df6e55cce80d22deb1de36f1bc3c	published
+any	holder	docker.io/library/alpine:3.20@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc	published
+any	helper	docker.io/library/busybox:1.36@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662	published

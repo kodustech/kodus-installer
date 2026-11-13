@@ -1,0 +1,32 @@
+# Kody Runtime compatibility: which cell release fits which product release.
+#
+# The hub and the runtime-worker are built from the product's own tree and
+# release with it, so a product release names its hub's protocol version. A
+# cell and a hub negotiate on every connection (kodus-ai libs/runtime/protocol):
+# both decode their current version and the one before it, and the hub refuses
+# a hello that does not list its version. The rule this table encodes: a cell
+# release fits a product release when the cell's protocols include the hub's.
+#
+# A shared protocol version is necessary, not sufficient: a hub decodes hello
+# strictly, and a hub older than kodus-ai 0e6f8490c refuses the hello
+# `capabilities` field a newer cell sends (kodus-ai docs/runtime/deploy-2026-11-12.md,
+# "Hub before cells"). So each row names a cell release proven with that hub,
+# and an upgrade moves the hub first, then the cells (scripts/runtime/upgrade.sh).
+#
+# scripts/runtime/lib.sh reads it (tab-separated, '#' comments). The release
+# workflows of kodus-ai append a row per release; the digests of each row are
+# in images.lock. Columns:
+#   product        product release (IMAGE_TAG), or `unreleased` for local builds
+#   hub_protocol   the protocol version the hub of that release speaks
+#   cell_release   a cell release tag that fits it (runtime-cell/vX.Y.Z)
+#   cell_protocols the versions that cell decodes, comma-separated
+#   backends       isolation backends that cell can run (gvisor, firecracker)
+#   source         where the row was read
+#
+# No product release carries the Runtime yet and no cell release has run
+# (kodus-ai docs/runtime/cell-distribution.md), so the only row is the
+# development tree: protocol 1 (libs/runtime/protocol/envelope.ts
+# PROTOCOL_VERSION, apps/runtime-cell/internal/protocol/types_gen.go
+# ProtocolVersion), backend gvisor (firecracker is refused until phase P2).
+#product	hub_protocol	cell_release	cell_protocols	backends	source
+unreleased	1	unreleased	1	gvisor	kodus-ai@149810842 kody-runtime/base

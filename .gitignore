@@ -11,3 +11,6 @@ charts/*/charts/
 .playwright-mcp/
 kodus-*.png
 *.tar.gz
+
+# Kody Runtime: generated secrets, keys and settings (scripts/runtime/generate.sh)
+runtime/state/

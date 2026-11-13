@@ -379,6 +379,14 @@ wait_for_postgres() {
     done
 }
 
+# Kody Runtime, once scripts/runtime/install.sh set it up: the API and the
+# worker keep its env across product upgrades (docs/runtime.md). Its own
+# services sit behind the `runtime` profile and are left as they are here.
+if [ -f runtime/state/compose.env ] && [ "$DOCKER_COMPOSE" = "docker compose" ]; then
+    DOCKER_COMPOSE="docker compose --env-file .env --env-file runtime/state/compose.env -f docker-compose.yml -f docker-compose.runtime.yml"
+    echo -e "${YELLOW}Kody Runtime is installed: the API and the worker keep its env (scripts/runtime/compose.sh manages its services).${NC}"
+fi
+
 # Criar networks Docker necessárias
 echo -e "${YELLOW}Creating Docker networks...${NC}"
 docker network create shared-network 2>/dev/null || true

@@ -1,0 +1,199 @@
+# Kody Runtime control plane, layered over docker-compose.yml (docs/runtime.md).
+# Never used on its own and never by scripts/install.sh: an install without
+# the Runtime is unchanged. scripts/runtime/compose.sh runs both files with the
+# `runtime` profile and the settings scripts/runtime/install.sh generated:
+#
+#   runtime-openbao  the org secrets' store: upstream OpenBao, unmodified
+#                    (MPL-2.0, its own service), storage in the Postgres Kodus
+#                    already runs (database kodus_openbao), static unseal key
+#   runtime-hub      the cells' endpoint: mTLS WebSocket on 3410, internal
+#                    listener for the worker on 3411 (compose network only)
+#   runtime-worker   Runs, setups and sandboxes (DBOS); the evidence server on
+#                    3420; the sandbox and env-session listener on 3430
+#                    (compose network only)
+#   runtime-init     one-shot: the Runtime's Postgres roles, databases and grants
+#
+# Every value that is a secret is in a generated file under
+# ${KODUS_RUNTIME_STATE:-./runtime/state} (0600, gitignored, never committed).
+# Images are by digest; compose.env names them (scripts/runtime/lib.sh rt_image).
+
+x-runtime-logging: &runtime-logging
+  options:
+    max-size: "200m"
+    max-file: "10"
+
+services:
+  # The product reaches the Runtime: its read-only database role, the sealing
+  # key it shares with the runtime-worker, the sandbox listener and OpenBao
+  # (write-only AppRole). Appended to the services of docker-compose.yml.
+  api:
+    env_file:
+      - path: ${KODUS_RUNTIME_STATE:-./runtime/state}/product-api.env
+    volumes:
+      - ${KODUS_RUNTIME_STATE:-./runtime/state}/openbao/ca.pem:/runtime/openbao/ca.pem:ro
+      - ${KODUS_RUNTIME_STATE:-./runtime/state}/openbao/server/api-role-id:/runtime/openbao/api-role-id:ro
+      - ${KODUS_RUNTIME_STATE:-./runtime/state}/openbao/server/api-secret-id:/runtime/openbao/api-secret-id:ro
+
+  worker:
+    env_file:
+      - path: ${KODUS_RUNTIME_STATE:-./runtime/state}/product-worker.env
+
+  runtime-init:
+    # psql only; the same image the bundled Postgres runs.
+    image: ${KODUS_RUNTIME_PSQL_IMAGE:-docker.io/pgvector/pgvector:pg16}
+    container_name: kodus-runtime-init
+    profiles:
+      - runtime
+    restart: "no"
+    env_file:
+      - .env
+      - path: ${KODUS_RUNTIME_STATE:-./runtime/state}/init.env
+    environment:
+      # roles | grants (scripts/runtime/db-init.sh)
+      - RUNTIME_INIT_MODE=${RUNTIME_INIT_MODE:-roles}
+    entrypoint: ["bash", "/runtime/db-init.sh"]
+    volumes:
+      - ./scripts/runtime/db-init.sh:/runtime/db-init.sh:ro
+      - ./runtime/sql:/runtime/sql:ro
+      # Owned by uid 1000 here, the runtime-worker's user.
+      - runtime-evidence:/data/runtime-evidence
+    networks:
+      - kodus-backend-services
+
+  runtime-openbao:
+    image: ${KODUS_RUNTIME_OPENBAO_IMAGE:?run scripts/runtime/install.sh, which pins the images}
+    container_name: kodus-runtime-openbao
+    profiles:
+      - runtime
+    # The files scripts/runtime/generate.sh wrote are 0600, owned by uid 1000.
+    user: "1000:1000"
+    entrypoint: ["bao"]
+    command: ["server", "-config=/openbao/config"]
+    cap_add:
+      - IPC_LOCK
+    environment:
+      PGHOST: ${API_PG_DB_HOST:-db_kodus_postgres}
+      PGPORT: ${API_PG_DB_PORT:-5432}
+      PGDATABASE: kodus_openbao
+      PGUSER: openbao
+      PGSSLMODE: ${RUNTIME_OPENBAO_PGSSLMODE:-disable}
+      PGPASSFILE: /openbao/secrets/pgpass
+    volumes:
+      - ./runtime/openbao/config:/openbao/config:ro
+      - ${KODUS_RUNTIME_STATE:-./runtime/state}/openbao/policies:/openbao/policies:ro
+      - ${KODUS_RUNTIME_STATE:-./runtime/state}/openbao/server:/openbao/secrets:ro
+    ports:
+      # Cell hosts reach it here (the injector's -openbao-addr). 127.0.0.1 by
+      # default: set RUNTIME_OPENBAO_BIND to the address cell hosts use.
+      - "${RUNTIME_OPENBAO_BIND:-127.0.0.1}:${RUNTIME_OPENBAO_PORT:-8200}:8200"
+    healthcheck:
+      # 200 only when active and unsealed.
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "--no-check-certificate", "https://127.0.0.1:8200/v1/sys/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 24
+    networks:
+      - kodus-backend-services
+    restart: unless-stopped
+    logging: *runtime-logging
+
+  runtime-hub:
+    image: ${KODUS_RUNTIME_HUB_IMAGE:?run scripts/runtime/install.sh, which pins the images}
+    container_name: kodus-runtime-hub
+    profiles:
+      - runtime
+    init: true
+    user: "1000:1000"
+    env_file:
+      - path: ${KODUS_RUNTIME_STATE:-./runtime/state}/hub.env
+    environment:
+      RUNTIME_REPLICA_ID: hub-1
+      RUNTIME_REPLICA_URL: https://runtime-hub:3411
+      RUNTIME_HUB_URL: https://runtime-hub:3411
+      RUNTIME_HUB_PORT: "3410"
+      RUNTIME_HUB_INTERNAL_PORT: "3411"
+      RUNTIME_METRICS_PORT: "9464"
+      RUNTIME_STREAM_STORE: postgres
+      # The Runtime CA signs the hub's certificate and every enrolled cell's;
+      # the worker's certificate comes from a CA of its own (refused otherwise
+      # in the production image).
+      RUNTIME_TLS_CA: /runtime/pki/ca.pem
+      RUNTIME_TLS_CA_KEY: /runtime/pki/ca.key
+      RUNTIME_TLS_CERT: /runtime/pki/hub.pem
+      RUNTIME_TLS_KEY: /runtime/pki/hub.key
+      RUNTIME_TLS_WORKER_CA: /runtime/pki/worker-ca.pem
+      RUNTIME_WORKER_ALLOWED_CNS: runtime-worker
+    volumes:
+      - ${KODUS_RUNTIME_STATE:-./runtime/state}/pki/ca.pem:/runtime/pki/ca.pem:ro
+      - ${KODUS_RUNTIME_STATE:-./runtime/state}/pki/ca.key:/runtime/pki/ca.key:ro
+      - ${KODUS_RUNTIME_STATE:-./runtime/state}/pki/hub.pem:/runtime/pki/hub.pem:ro
+      - ${KODUS_RUNTIME_STATE:-./runtime/state}/pki/hub.key:/runtime/pki/hub.key:ro
+      - ${KODUS_RUNTIME_STATE:-./runtime/state}/pki/worker-ca.pem:/runtime/pki/worker-ca.pem:ro
+    ports:
+      # Cells dial wss://<RUNTIME_HUB_HOST>:3410/cells and register on
+      # https://<RUNTIME_HUB_HOST>:3410/cells/register (mTLS after enrollment).
+      - "${RUNTIME_HUB_BIND:-0.0.0.0}:${RUNTIME_HUB_PORT:-3410}:3410"
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('https').get({host:'127.0.0.1',port:3410,path:'/health',servername:'runtime-hub',ca:require('fs').readFileSync('/runtime/pki/ca.pem')},r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    networks:
+      - shared-network
+      - kodus-backend-services
+    restart: unless-stopped
+    logging: *runtime-logging
+
+  runtime-worker:
+    image: ${KODUS_RUNTIME_WORKER_IMAGE:?run scripts/runtime/install.sh, which pins the images}
+    container_name: kodus-runtime-worker
+    profiles:
+      - runtime
+    init: true
+    user: "1000:1000"
+    env_file:
+      - path: ${KODUS_RUNTIME_STATE:-./runtime/state}/runtime-worker.env
+    environment:
+      # Immutable per image: DBOS resumes only workflows of the same release.
+      RUNTIME_RELEASE_VERSION: ${KODUS_RUNTIME_RELEASE_VERSION:?run scripts/runtime/install.sh}
+      RUNTIME_ENV_DRIVER: hub
+      RUNTIME_HUB_URL: https://runtime-hub:3411
+      RUNTIME_METRICS_PORT: "9465"
+      RUNTIME_STREAM_STORE: postgres
+      RUNTIME_TLS_CA: /runtime/pki/ca.pem
+      RUNTIME_WORKER_TLS_CERT: /runtime/pki/worker.pem
+      RUNTIME_WORKER_TLS_KEY: /runtime/pki/worker.key
+      # The product LLM gateway (org BYOK); the model calls run in the product.
+      RUNTIME_LLM_GATEWAY_URL: http://api:3001
+      # Must equal every cell's -git-api.
+      RUNTIME_GIT_PROVIDER: ${RUNTIME_GIT_PROVIDER:-github}
+      RUNTIME_GIT_API_BASE: ${RUNTIME_GIT_API_BASE:-https://api.github.com}
+      RUNTIME_EVIDENCE_STORE: file
+      RUNTIME_EVIDENCE_DIR: /data/runtime-evidence
+      RUNTIME_EVIDENCE_PORT: "3420"
+      # Where cells PUT a round's screenshots, videos and logs.
+      RUNTIME_EVIDENCE_UPLOAD_URL: ${RUNTIME_EVIDENCE_PUBLIC_URL:?run scripts/runtime/install.sh}
+      RUNTIME_ENV_SESSION_PORT: "3430"
+    volumes:
+      - ${KODUS_RUNTIME_STATE:-./runtime/state}/pki/ca.pem:/runtime/pki/ca.pem:ro
+      - ${KODUS_RUNTIME_STATE:-./runtime/state}/pki/worker.pem:/runtime/pki/worker.pem:ro
+      - ${KODUS_RUNTIME_STATE:-./runtime/state}/pki/worker.key:/runtime/pki/worker.key:ro
+      - runtime-evidence:/data/runtime-evidence
+      # scripts/runtime/smoke.sh runs it here, with the worker's sealing key.
+      - ./scripts/runtime/smoke-sandbox.js:/runtime/smoke-sandbox.js:ro
+    ports:
+      # Browsers fetch signed evidence URLs and cells upload to it.
+      - "${RUNTIME_EVIDENCE_BIND:-0.0.0.0}:${RUNTIME_EVIDENCE_PORT:-3420}:3420"
+    depends_on:
+      runtime-hub:
+        condition: service_healthy
+    networks:
+      - shared-network
+      - kodus-backend-services
+    restart: unless-stopped
+    logging: *runtime-logging
+
+volumes:
+  runtime-evidence:
+    name: kodus-runtime-evidence
