@@ -77,6 +77,10 @@ INJECTOR_NAME=kodus-cell-injector
 # networks (kodus-ai apps/runtime-cell/scripts/dev-gvisor-cell.sh).
 ENFORCERS_NAME=kodus-cell-enforcers
 DEFAULT_ENFORCERS_SUBNET=10.214.0.0/29 DEFAULT_EGRESS_ENFORCER_IP=10.214.0.2 DEFAULT_INJECTOR_ENFORCER_IP=10.214.0.3
+# The public roots the cell bundles with the injector's CA for the machines of
+# a claim with org secrets: the host's own trust store (kodus-ai
+# apps/runtime-cell/internal/machinetrust SystemRootFiles).
+SYSTEM_ROOT_FILES="/etc/ssl/certs/ca-certificates.crt /etc/pki/tls/certs/ca-bundle.crt /etc/ssl/ca-bundle.pem /etc/pki/tls/cacert.pem /etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem /etc/ssl/cert.pem"
 GVISOR_BASE=https://storage.googleapis.com/gvisor/releases/release
 DEFAULT_EGRESS_ALLOW=registry-1.docker.io,auth.docker.io,production.cloudfront.docker.com,registry.npmjs.org,deb.debian.org,security.debian.org,archive.ubuntu.com,security.ubuntu.com,ports.ubuntu.com,dl-cdn.alpinelinux.org
 
@@ -201,6 +205,17 @@ check_common_linux() {
     else
         miss "systemd is not running ($SYSTEMD_RUN is absent): the cell, egress, injector and reaper run as systemd units"
     fi
+}
+
+check_trust_roots() {
+    local f
+    for f in $SYSTEM_ROOT_FILES; do
+        if grep -q 'BEGIN CERTIFICATE' "$PREFIX$f" 2>/dev/null; then
+            ok "public roots for claims with secrets: $f"
+            return 0
+        fi
+    done
+    miss "no system CA bundle ($SYSTEM_ROOT_FILES): install ca-certificates; the cell bundles it with the injector's CA for the machines of a claim with org secrets"
 }
 
 check_tools() {
@@ -366,6 +381,7 @@ run_checks() { # run_checks PROFILE [skip-runsc]
                 ver_ge "$KERNEL_VERSION" 4.14.77 || miss "kernel $KERNEL_VERSION is older than gVisor's minimum, 4.14.77"
                 ver_ge "$KERNEL_VERSION" 5.10 || warn "kernel $KERNEL_VERSION: 5.10 or later recommended"
                 check_tools curl openssl tar bzip2 sha512sum
+                check_trust_roots
                 check_docker && [ "${2:-}" != skip-runsc ] && check_runsc
                 check_cgroup_v2 optional
                 check_disk_gvisor
@@ -633,7 +649,7 @@ INJECTOR_ENFORCER_IP=$INJECTOR_ENFORCER_IP
 EGRESS_ARGS=
 INJECTOR_DOCKER_ARGS=
 INJECTOR_ARGS="$injector_args"
-CELL_ARGS="-isolation-backend gvisor -egress-control egress=https://127.0.0.1:9443,resolver=https://127.0.0.1:9443,injector=https://127.0.0.1:9445 -policy-key $ETC_R/policy.key.pem -egress-allow $EGRESS_ALLOW -gvisor-egress-container $EGRESS_NAME -gvisor-holder-image $HOLDER_IMAGE -gvisor-builder-image $BUILDER_IMAGE -gvisor-helper-image $HELPER_IMAGE -gvisor-registry-image $REGISTRY_IMAGE -gvisor-observer-image $OBSERVER_IMAGE -gvisor-observer-tls-dir $ETC_R/observer-server -observer-server-name kodus-observer -gvisor-mirror-goproxy http://mirror.cell.internal:8080/go,off -gvisor-mirror-registry mirror.cell.internal:8080 $sandbox_args $browser_args"
+CELL_ARGS="-isolation-backend gvisor -egress-control egress=https://127.0.0.1:9443,resolver=https://127.0.0.1:9443,injector=https://127.0.0.1:9445 -policy-key $ETC_R/policy.key.pem -egress-allow $EGRESS_ALLOW -cell-ca-cert $ETC_R/injector/cell-ca.pem -gvisor-egress-container $EGRESS_NAME -gvisor-holder-image $HOLDER_IMAGE -gvisor-builder-image $BUILDER_IMAGE -gvisor-helper-image $HELPER_IMAGE -gvisor-registry-image $REGISTRY_IMAGE -gvisor-observer-image $OBSERVER_IMAGE -gvisor-observer-tls-dir $ETC_R/observer-server -observer-server-name kodus-observer -gvisor-mirror-goproxy http://mirror.cell.internal:8080/go,off -gvisor-mirror-registry mirror.cell.internal:8080 $sandbox_args $browser_args"
 EOF
     cat >"$REAPER_ENV" <<EOF
 # Written by kodus-installer scripts/runtime/cell-host.sh; read by kodus-cell-reaper.service.

@@ -136,6 +136,9 @@ t "cell.env pins the sandbox and builder images by digest" sh -c 'grep -q "gviso
 t "cell.env names the enforcers network the egress reaches the injector on" sh -c 'grep -qx ENFORCERS_SUBNET=10.214.0.0/29 /etc/kodus/cell/cell.env && grep -qx EGRESS_ENFORCER_IP=10.214.0.2 /etc/kodus/cell/cell.env && grep -qx INJECTOR_ENFORCER_IP=10.214.0.3 /etc/kodus/cell/cell.env'
 t "the injector listens on that network and trusts the egress's address only" sh -c 'U=/etc/systemd/system/kodus-cell-injector.service; grep -qF -- "-listen \${INJECTOR_ENFORCER_IP}:8443 -trusted-proxies \${EGRESS_ENFORCER_IP}" $U && grep -qF "network connect --ip \${INJECTOR_ENFORCER_IP} kodus-cell-enforcers kodus-cell-injector" $U && grep -q "ExecStart=/usr/bin/docker start -a kodus-cell-injector" $U'
 t "the egress sends credentialed hosts to the injector there" sh -c 'U=/etc/systemd/system/kodus-cell-egress.service; grep -qF -- "-injector-addr \${INJECTOR_ENFORCER_IP}:8443" $U && grep -qF "network connect --ip \${EGRESS_ENFORCER_IP} kodus-cell-enforcers kodus-cell-egress" $U'
+t "cell.env gives the cell the injector's CA for claims with secrets" has "-cell-ca-cert /etc/kodus/cell/injector/cell-ca.pem" /etc/kodus/cell/cell.env
+t "that file is the CA certificate alone" sh -c 'openssl x509 -in /etc/kodus/cell/injector/cell-ca.pem -noout -ext basicConstraints | grep -q "CA:TRUE" && ! grep -q PRIVATE /etc/kodus/cell/injector/cell-ca.pem'
+t "the host check finds the public roots the cell bundles" has "public roots for claims with secrets: /etc/ssl/certs/ca-certificates.crt" /tmp/install.log
 t "reaper env" sh -c 'grep -qx CELL_ID=cell-dry-run /etc/kodus/cell-reaper.env && grep -qx EGRESS=kodus-cell-egress /etc/kodus/cell-reaper.env'
 
 if [ -d /cellbin ]; then
@@ -158,6 +161,7 @@ if [ -d /cellbin ]; then
     sed 's/^/      | /' /tmp/cell.log | tail -8
     t "cell: every flag and config key is known" sh -c '! grep -qiE "flag provided but not defined|unknown field|field .* not found" /tmp/cell.log'
     t "cell: refuses to start without runsc, and says so" grep -qi runsc /tmp/cell.log
+    t "cell: bundles the host's public roots with the injector's CA" bash -c 'grep -q machine_trust.ready /tmp/cell.log && [ "$(grep -c "BEGIN CERTIFICATE" /var/lib/kodus-cell/work/trust/ca-bundle.pem)" -gt 1 ] && cmp -s <(openssl x509 -in /var/lib/kodus-cell/work/trust/cell-ca.pem) <(openssl x509 -in /etc/kodus/cell/injector/cell-ca.pem)'
     # shellcheck disable=SC2086
     /opt/kodus-cell/current/bin/egress -listen-tls :443 -listen-http :80 -dns-listen :53 -control :9443 \
         -mirror-listen :8080 -upstream-dns "$UPSTREAM_DNS" -transparent=false -injector-addr 127.0.0.1:8443 \
