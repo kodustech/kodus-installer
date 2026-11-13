@@ -143,8 +143,8 @@ sudo scripts/runtime/install.sh --cell-profile docker-gvisor --hub-host runtime.
   `--openbao-bind` to the interface that address is on (default `127.0.0.1`: only this host). For a cell on the Kodus
   host itself use the Docker bridge address, e.g. `--openbao-host 172.17.0.1 --openbao-bind 172.17.0.1`.
 - `--evidence-url`: the public URL of the evidence server (default `http://<hub-host>:3420`). Cells upload there, and the
-  runtime-worker takes only `https://<DNS name>` or `http://<one-label name>`, never an IP: with `--hub-host` an IP,
-  pass `https://<name behind your TLS proxy>` (`generate.sh` refuses anything else).
+  runtime-worker takes only `https://<DNS name>` or `http://<one-label name>`, never an IP: unless `--hub-host` is a
+  one-label name, pass `https://<name behind your TLS proxy>` (`generate.sh` refuses anything else).
 - `--git-api`: the Git API cells download tarballs from (default `https://api.github.com`; GitHub Enterprise:
   `https://<host>/api/v3`). It must be the same on every cell.
 - `--injector-org <organizationId>`: narrows the injector's OpenBao policy to one organization. Only before OpenBao's

@@ -55,7 +55,7 @@ t "product, analytics profile: config -q" "${base[@]}" --profile analytics confi
 
 for p in docker-gvisor docker-firecracker kubernetes; do
     t "install.sh --check --cell-profile $p" ./scripts/runtime/install.sh --check --cell-profile "$p" --release unreleased \
-        --hub-host runtime.example.internal --openbao-host 10.20.30.40
+        --hub-host runtime.example.internal --openbao-host 10.20.30.40 --evidence-url https://runtime-evidence.example.internal
     t "runtime ($p): config -q" ./scripts/runtime/compose.sh config -q
     t "runtime ($p) + analytics: config -q" ./scripts/runtime/compose.sh --profile analytics config -q
     t "runtime ($p): compose.env names the profile" grep -qx "KODUS_RUNTIME_CELL_PROFILE=$p" runtime/state/compose.env

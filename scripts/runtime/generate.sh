@@ -21,7 +21,8 @@
 # Usage: scripts/runtime/generate.sh --hub-host <name or IP cells reach> [options]
 #   --openbao-host <name or IP>   where cell hosts reach OpenBao (default: hub host)
 #   --evidence-url <url>          public URL of the evidence server
-#                                 (default http://<hub-host>:3420)
+#                                 (default http://<hub-host>:3420, valid only for
+#                                 a one-label hub host: else https://<name>)
 #   --git-api <url>               the Git API cells download from (default https://api.github.com)
 #   --hub-bind / --openbao-bind / --evidence-bind <address>
 #   --injector-org <organizationId>  narrow the injector's policy to one org
@@ -103,7 +104,7 @@ case "$EVIDENCE_URL" in
     https://*) printf '%s' "$ev_host" | grep -Eq '^[0-9.]+$|:' && ev_ok=0 || ev_ok=1 ;;
     http://*) printf '%s' "$ev_host" | grep -Eq '^(localhost|127\.0\.0\.1|[A-Za-z0-9-]+)$' && ev_ok=1 || ev_ok=0 ;;
 esac
-[ "$ev_ok" = 1 ] || rt_die "--evidence-url $EVIDENCE_URL: the runtime-worker takes https://<DNS name> or http://<one-label name> only, never an IP (cells upload there). With --hub-host an IP, pass --evidence-url https://<name behind your TLS proxy>"
+[ "$ev_ok" = 1 ] || rt_die "--evidence-url $EVIDENCE_URL: the runtime-worker takes https://<DNS name> or http://<one-label name> only, never an IP (cells upload there). The default, http://<hub-host>:3420, works only for a one-label hub host: pass --evidence-url https://<name behind your TLS proxy>"
 case "$GIT_API" in https://*) ;; *) rt_die "--git-api must be an https URL" ;; esac
 cat >"$SETTINGS" <<EOF
 RUNTIME_HUB_HOST=$HUB_HOST
