@@ -126,30 +126,34 @@ template has no cluster, so it renders fresh values.
 {{- $p := lookup "v1" "Secret" $ns (printf "%s-pki" (include "kr.fullname" .)) -}}
 {{- if $p -}}
 {{- range $k, $v := $p.data -}}{{- $_ := set $pki $k ($v | b64dec) -}}{{- end -}}
-{{- else -}}
+{{- end -}}
+{{- /* Each group is made whole when any of its files is missing or not PEM (a first install, or an upgrade from a chart that kept fewer). */ -}}
+{{- if not (and (contains "-----BEGIN" (index $pki "ca.pem" | default "")) (contains "-----BEGIN" (index $pki "ca.key" | default "")) (contains "-----BEGIN" (index $pki "hub.pem" | default "")) (contains "-----BEGIN" (index $pki "hub.key" | default ""))) -}}
 {{- $hubNames := list (include "kr.hub" .) (printf "%s.%s" (include "kr.hub" .) $ns) (printf "%s.%s.svc" (include "kr.hub" .) $ns) (printf "%s.%s.svc.cluster.local" (include "kr.hub" .) $ns) (include "kr.hubInternal" .) (printf "%s.%s.svc" (include "kr.hubInternal" .) $ns) "runtime-hub" "localhost" -}}
 {{- $hubNames = concat $hubNames .Values.controlPlane.hub.externalHosts -}}
 {{- $caKey := genPrivateKey "ecdsa" -}}
 {{- $ca := genCAWithKey "Kody Runtime CA" 3650 $caKey -}}
 {{- $hubKey := genPrivateKey "ecdsa" -}}
 {{- $hub := genSignedCertWithKey "runtime-hub" (list "127.0.0.1") $hubNames 397 $ca $hubKey -}}
+{{- $_ := set $pki "ca.pem" $ca.Cert -}}
+{{- $_ := set $pki "ca.key" $ca.Key -}}
+{{- $_ := set $pki "hub.pem" $hub.Cert -}}
+{{- $_ := set $pki "hub.key" $hub.Key -}}
+{{- end -}}
+{{- if not (and (contains "-----BEGIN" (index $pki "worker-ca.pem" | default "")) (contains "-----BEGIN" (index $pki "worker-ca.key" | default ""))) -}}
+{{- /* The worker's own certificate needs OU=worker, which genSignedCert cannot write: its pod issues it at start (cell issue-cert). */ -}}
 {{- $wcaKey := genPrivateKey "ecdsa" -}}
 {{- $wca := genCAWithKey "Kody Runtime worker CA" 3650 $wcaKey -}}
-{{- $wKey := genPrivateKey "ecdsa" -}}
-{{- $w := genSignedCertWithKey "runtime-worker" nil nil 397 $wca $wKey -}}
+{{- $_ := set $pki "worker-ca.pem" $wca.Cert -}}
+{{- $_ := set $pki "worker-ca.key" $wca.Key -}}
+{{- end -}}
+{{- if not (and (contains "-----BEGIN" (index $pki "openbao-ca.pem" | default "")) (contains "-----BEGIN" (index $pki "openbao.pem" | default "")) (contains "-----BEGIN" (index $pki "openbao.key" | default ""))) -}}
 {{- $obNames := list (include "kr.openbao" .) (printf "%s.%s" (include "kr.openbao" .) $ns) (printf "%s.%s.svc" (include "kr.openbao" .) $ns) (printf "%s.%s.svc.cluster.local" (include "kr.openbao" .) $ns) "runtime-openbao" "localhost" -}}
 {{- $obNames = concat $obNames .Values.controlPlane.openbao.externalHosts -}}
 {{- $obcaKey := genPrivateKey "ecdsa" -}}
 {{- $obca := genCAWithKey "Kody Runtime OpenBao CA" 3650 $obcaKey -}}
 {{- $obKey := genPrivateKey "ecdsa" -}}
 {{- $ob := genSignedCertWithKey "runtime-openbao" (list "127.0.0.1") $obNames 397 $obca $obKey -}}
-{{- $_ := set $pki "ca.pem" $ca.Cert -}}
-{{- $_ := set $pki "ca.key" $ca.Key -}}
-{{- $_ := set $pki "hub.pem" $hub.Cert -}}
-{{- $_ := set $pki "hub.key" $hub.Key -}}
-{{- $_ := set $pki "worker-ca.pem" $wca.Cert -}}
-{{- $_ := set $pki "worker.pem" $w.Cert -}}
-{{- $_ := set $pki "worker.key" $w.Key -}}
 {{- $_ := set $pki "openbao-ca.pem" $obca.Cert -}}
 {{- $_ := set $pki "openbao.pem" $ob.Cert -}}
 {{- $_ := set $pki "openbao.key" $ob.Key -}}
@@ -185,7 +189,7 @@ template has no cluster, so it renders fresh values.
 - name: wait-for-postgres
   image: {{ include "kr.image" (dict "root" .root "name" "psql") }}
   imagePullPolicy: {{ .root.Values.images.pullPolicy }}
-  command: ["sh", "-c", "until psql \"$DATABASE_URL\" -Atqc 'select 1' >/dev/null 2>&1; do echo waiting for {{ .what }}; sleep 3; done"]
+  command: ["sh", "-c", "until psql \"$DATABASE_URL\" -Atqc 'select 1' >/dev/null 2>&1; do echo 'waiting for {{ .what }}'; sleep 3; done"]
   env:
     - name: DATABASE_URL
       valueFrom:

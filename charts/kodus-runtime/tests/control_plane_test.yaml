@@ -59,3 +59,14 @@ tests:
       - equal:
           path: spec.template.spec.containers[0].securityContext
           value: { allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, runAsNonRoot: true, capabilities: { drop: ["ALL"] } }
+  - it: issues the worker's certificate with OU=worker in its pod, the subject the hub's internal routes require
+    templates: [templates/control-plane/hub-worker.yaml]
+    documentIndex: 4
+    asserts:
+      - isKind: { of: Deployment }
+      - equal: { path: "spec.template.spec.initContainers[1].name", value: worker-cert }
+      - contains: { path: "spec.template.spec.initContainers[1].command", content: "-ou" }
+      - contains: { path: "spec.template.spec.initContainers[1].command", content: worker }
+      - contains:
+          path: "spec.template.spec.containers[0].env"
+          content: { name: RUNTIME_WORKER_TLS_CERT, value: /runtime/worker-tls/worker.pem }

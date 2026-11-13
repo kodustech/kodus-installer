@@ -19,6 +19,9 @@ spec:
     metadata:
       labels:
         {{- include "kr.selector" (dict "root" $ "component" "hub") | nindent 8 }}
+      annotations:
+        # A new CA or certificate (an upgrade that made a PKI group whole) restarts the pod.
+        checksum/pki: {{ printf "%s%s%s" (include "kr.pki" (dict "root" $ "key" "ca.pem")) (include "kr.pki" (dict "root" $ "key" "hub.pem")) (include "kr.pki" (dict "root" $ "key" "worker-ca.pem")) | sha256sum }}
     spec:
       automountServiceAccountToken: false
       enableServiceLinks: false
@@ -142,6 +145,8 @@ spec:
     metadata:
       labels:
         {{- include "kr.selector" (dict "root" $ "component" "worker") | nindent 8 }}
+      annotations:
+        checksum/pki: {{ printf "%s%s" (include "kr.pki" (dict "root" $ "key" "ca.pem")) (include "kr.pki" (dict "root" $ "key" "worker-ca.pem")) | sha256sum }}
     spec:
       automountServiceAccountToken: false
       enableServiceLinks: false
@@ -150,6 +155,21 @@ spec:
         {{- include "kr.podSecurity" (dict "uid" 1000) | nindent 8 }}
       initContainers:
         {{- include "kr.waitForDb" (dict "root" $ "key" "RUNTIME_DATABASE_URL" "what" "the kodus_runtime role (the db-roles Job)") | nindent 8 }}
+        # The hub admits a worker certificate of the worker CA with OU=worker
+        # and CN runtime-worker; Helm cannot write an OU, so it is issued here.
+        - name: worker-cert
+          image: {{ include "kr.image" (dict "root" $ "name" "cell") }}
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
+          command: ["/usr/local/bin/cell", "issue-cert", "-ca-cert", "/runtime/worker-ca/worker-ca.pem", "-ca-key", "/runtime/worker-ca/worker-ca.key",
+                    "-cn", "runtime-worker", "-ou", "worker", "-client", "-cert", "/runtime/worker-tls/worker.pem", "-key", "/runtime/worker-tls/worker.key"]
+          securityContext:
+            {{- include "kr.containerSecurity" . | nindent 12 }}
+          resources:
+            requests: { cpu: 10m, memory: 16Mi }
+            limits: { memory: 64Mi }
+          volumeMounts:
+            - { name: worker-ca, mountPath: /runtime/worker-ca, readOnly: true }
+            - { name: worker-tls, mountPath: /runtime/worker-tls }
       containers:
         - name: worker
           image: {{ include "kr.image" (dict "root" $ "name" "worker") }}
@@ -166,8 +186,8 @@ spec:
             - { name: RUNTIME_METRICS_PORT, value: "9465" }
             - { name: RUNTIME_STREAM_STORE, value: postgres }
             - { name: RUNTIME_TLS_CA, value: /runtime/pki/ca.pem }
-            - { name: RUNTIME_WORKER_TLS_CERT, value: /runtime/pki/worker.pem }
-            - { name: RUNTIME_WORKER_TLS_KEY, value: /runtime/pki/worker.key }
+            - { name: RUNTIME_WORKER_TLS_CERT, value: /runtime/worker-tls/worker.pem }
+            - { name: RUNTIME_WORKER_TLS_KEY, value: /runtime/worker-tls/worker.key }
             - { name: RUNTIME_LLM_GATEWAY_URL, value: {{ .Values.controlPlane.productApiUrl | quote }} }
             - { name: RUNTIME_GIT_PROVIDER, value: {{ .Values.controlPlane.gitProvider | quote }} }
             - { name: RUNTIME_GIT_API_BASE, value: {{ .Values.controlPlane.gitApiBase | quote }} }
@@ -192,6 +212,7 @@ spec:
             {{- toYaml .Values.controlPlane.worker.resources | nindent 12 }}
           volumeMounts:
             - { name: pki, mountPath: /runtime/pki, readOnly: true }
+            - { name: worker-tls, mountPath: /runtime/worker-tls, readOnly: true }
             - { name: evidence, mountPath: /data/runtime-evidence }
             - { name: tmp, mountPath: /tmp }
       volumes:
@@ -200,9 +221,16 @@ spec:
             secretName: {{ include "kr.fullname" . }}-pki
             defaultMode: 0440
             items:
-              {{- range $k := list "ca.pem" "worker.pem" "worker.key" }}
-              - { key: {{ $k }}, path: {{ $k }} }
-              {{- end }}
+              - { key: ca.pem, path: ca.pem }
+        - name: worker-ca
+          secret:
+            secretName: {{ include "kr.fullname" . }}-pki
+            defaultMode: 0440
+            items:
+              - { key: worker-ca.pem, path: worker-ca.pem }
+              - { key: worker-ca.key, path: worker-ca.key }
+        - name: worker-tls
+          emptyDir: { medium: Memory, sizeLimit: 1Mi }
         - name: evidence
           persistentVolumeClaim: { claimName: {{ include "kr.worker" . }}-evidence }
         - name: tmp
