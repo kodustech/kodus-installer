@@ -665,9 +665,13 @@ EOF
     case "$docker_path" in /*) ;; *) docker_path=/usr/bin/docker ;; esac
     mkdir -p "$UNITS"
     local u
+    # Each release keeps the units it ran with too: a rollback puts them back
+    # (the egress and the injector take flags an older release does not know).
+    mkdir -p "$PREFIX$REL_DIR/systemd"
     for u in $UNIT_NAMES; do
         sed "s|@DOCKER@|$docker_path|g" "$RT_DATA/cell/systemd/$u" >"$UNITS/$u"
         chmod 644 "$UNITS/$u"
+        cp "$UNITS/$u" "$PREFIX$REL_DIR/systemd/$u"
     done
 }
 
@@ -826,6 +830,15 @@ cmd_rollback() {
     ln -sfn "$cur" "$OPT/previous"
     # The images it ran with (observer, builder, sandbox) come back with it.
     [ -s "$PREFIX$prev/cell.env" ] && cp "$PREFIX$prev/cell.env" "$ETC/cell.env"
+    local u
+    if [ -d "$PREFIX$prev/systemd" ]; then
+        for u in $UNIT_NAMES; do
+            [ -s "$PREFIX$prev/systemd/$u" ] && cp "$PREFIX$prev/systemd/$u" "$UNITS/$u"
+        done
+        run "$SYSTEMCTL" daemon-reload
+    else
+        rt_warn "$prev kept no units: the current ones stay, and they pass flags (-injector-addr, -trusted-proxies, -cell-ca-cert) a release before them does not know."
+    fi
     run "$SYSTEMCTL" restart kodus-cell.target
     rt_ok "Cell restarted on $prev."
 }

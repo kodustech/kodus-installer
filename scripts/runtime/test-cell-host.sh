@@ -139,6 +139,7 @@ t "the egress sends credentialed hosts to the injector there" sh -c 'U=/etc/syst
 t "cell.env gives the cell the injector's CA for claims with secrets" has "-cell-ca-cert /etc/kodus/cell/injector/cell-ca.pem" /etc/kodus/cell/cell.env
 t "that file is the CA certificate alone" sh -c 'openssl x509 -in /etc/kodus/cell/injector/cell-ca.pem -noout -ext basicConstraints | grep -q "CA:TRUE" && ! grep -q PRIVATE /etc/kodus/cell/injector/cell-ca.pem'
 t "the host check finds the public roots the cell bundles" has "public roots for claims with secrets: /etc/ssl/certs/ca-certificates.crt" /tmp/install.log
+t "each release keeps the units it ran with" sh -c 'cmp "$(readlink /opt/kodus-cell/current)/systemd/kodus-cell-egress.service" /etc/systemd/system/kodus-cell-egress.service'
 t "reaper env" sh -c 'grep -qx CELL_ID=cell-dry-run /etc/kodus/cell-reaper.env && grep -qx EGRESS=kodus-cell-egress /etc/kodus/cell-reaper.env'
 
 if [ -d /cellbin ]; then
