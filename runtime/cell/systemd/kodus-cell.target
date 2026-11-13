@@ -1,0 +1,10 @@
+# The cell's units together: `systemctl restart kodus-cell.target` restarts
+# the injector, the egress and the agent in that order (the agent waits for
+# the egress's alert feed before it takes work).
+[Unit]
+Description=Kody Runtime cell (injector, egress, agent)
+Documentation=https://github.com/kodustech/kodus-installer/blob/main/docs/runtime.md
+Wants=kodus-cell-injector.service kodus-cell-egress.service kodus-cell.service
+
+[Install]
+WantedBy=multi-user.target

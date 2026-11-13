@@ -1,0 +1,30 @@
+# Kody Runtime cell: credential injector (cmd/injector). It terminates a
+# claim's TLS to a credentialed host with the cell's injector CA, swaps an org
+# secret's placeholder for the value it reads from OpenBao, and goes on over
+# its own verified TLS. Runs in the holder image with the binary of the
+# installed cell release mounted read-only, on Docker's default bridge, its
+# control port on this host's loopback only.
+# Installed by scripts/runtime/cell-host.sh; @DOCKER@ is the host's docker.
+[Unit]
+Description=Kody Runtime cell credential injector
+Documentation=https://github.com/kodustech/kodus-installer/blob/main/docs/runtime.md
+After=docker.service network-online.target
+Wants=network-online.target
+Requires=docker.service
+PartOf=kodus-cell.target
+
+[Service]
+EnvironmentFile=/etc/kodus/cell/cell.env
+ExecStartPre=-@DOCKER@ rm -f kodus-cell-injector
+ExecStart=@DOCKER@ run --rm --name kodus-cell-injector --label kodus.cell.component=injector \
+  -p 127.0.0.1:9445:9445 \
+  -v /etc/kodus/cell/injector:/etc/kodus/injector:ro \
+  -v /opt/kodus-cell/current/bin/injector:/usr/local/bin/kodus-injector:ro \
+  $INJECTOR_DOCKER_ARGS ${HOLDER_IMAGE} \
+  /usr/local/bin/kodus-injector -listen :8443 -control :9445 -agent-cn ${CELL_ID} $INJECTOR_ARGS
+ExecStop=@DOCKER@ stop -t 10 kodus-cell-injector
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=kodus-cell.target

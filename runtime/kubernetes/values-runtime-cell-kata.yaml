@@ -1,0 +1,20 @@
+# Values for kodus-ai apps/runtime-cell/deploy/chart/runtime-cell with a Kata
+# RuntimeClass. That chart is a skeleton: it renders the reaper CronJob, the
+# RuntimeClass, an admission policy and RBAC, and deploys no cell (the
+# k8s-sandbox driver is not selectable by cmd/cell yet). These values are for
+# when it does; until then a Kubernetes customer runs cells on a Docker host
+# (profile docker-gvisor). Images by digest only (runtime/images.lock).
+cellId: ""
+runtimeClass:
+  # Kata Containers; a managed class (AKS Pod Sandboxing) keeps its own name.
+  name: kata
+  handler: kata-qemu
+images:
+  cell: ""      # ghcr.io/kodustech/kodus-runtime-cell@sha256:<digest> (not published yet)
+  holder: "docker.io/library/alpine:3.20@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc"
+  observer: ""  # not decided upstream (cell-distribution.md item 4)
+namespaces:
+  cell: kodus-cell
+  egress: kodus-egress
+reaper:
+  schedule: "* * * * *"

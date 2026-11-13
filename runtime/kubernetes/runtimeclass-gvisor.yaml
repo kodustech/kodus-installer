@@ -1,0 +1,13 @@
+# RuntimeClass for Kody Runtime cells on gVisor (docs/runtime.md, "Kubernetes").
+# Apply only where the cluster has no such class yet: GKE Sandbox creates one
+# named gvisor itself. The nodes need runsc installed and registered with
+# containerd as the `runsc` handler (gVisor's containerd shim).
+# The node selector keeps cell pods on the pool that has runsc.
+apiVersion: node.k8s.io/v1
+kind: RuntimeClass
+metadata:
+  name: gvisor
+handler: runsc
+scheduling:
+  nodeSelector:
+    kodus.io/runtime-sandbox: gvisor

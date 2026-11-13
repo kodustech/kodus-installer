@@ -1,0 +1,34 @@
+# Kody Runtime cell: egress proxy and resolver (cmd/egress). Every claim's
+# only way out: the cell joins this container to each claim network
+# (-gvisor-egress-container kodus-cell-egress). The resolver runs in this
+# process (-dns-listen): the proxy then accepts exactly the addresses the
+# resolver handed each claim, which a separate resolver process cannot share
+# (cmd/egress/main.go), so there is no separate resolver unit. The registry
+# and Go module mirror serve builds on :8080 with their cache on this host.
+# Installed by scripts/runtime/cell-host.sh; @DOCKER@ is the host's docker.
+[Unit]
+Description=Kody Runtime cell egress proxy and resolver
+Documentation=https://github.com/kodustech/kodus-installer/blob/main/docs/runtime.md
+After=docker.service network-online.target kodus-cell-injector.service
+Wants=network-online.target
+Requires=docker.service
+PartOf=kodus-cell.target
+
+[Service]
+EnvironmentFile=/etc/kodus/cell/cell.env
+ExecStartPre=-@DOCKER@ rm -f kodus-cell-egress
+ExecStart=@DOCKER@ run --rm --name kodus-cell-egress --label kodus.cell.component=egress \
+  -p 127.0.0.1:9443:9443 \
+  -v /etc/kodus/cell/egress:/etc/kodus/egress:ro \
+  -v /opt/kodus-cell/current/bin/egress:/usr/local/bin/kodus-egress:ro \
+  -v /var/lib/kodus-cell/mirror-cache:/var/cache/kodus-mirror \
+  ${HOLDER_IMAGE} \
+  /usr/local/bin/kodus-egress -listen-tls :443 -listen-http :80 -dns-listen :53 -control :9443 \
+  -mirror-listen :8080 -upstream-dns ${UPSTREAM_DNS} -transparent=false \
+  -mirror-cache-dir /var/cache/kodus-mirror -mirror-cache-max-gb ${MIRROR_CACHE_GB} -agent-cn ${CELL_ID} $EGRESS_ARGS
+ExecStop=@DOCKER@ stop -t 10 kodus-cell-egress
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=kodus-cell.target

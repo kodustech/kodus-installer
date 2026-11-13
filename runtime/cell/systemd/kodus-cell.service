@@ -1,0 +1,30 @@
+# Kody Runtime cell agent (cmd/cell, driver docker-gvisor). Runs on the host
+# as root: it drives Docker and runsc, extracts tarballs in a network
+# namespace of their own and keeps BuildKit state. It dials the hub over mTLS
+# with the identity `cell register` wrote. Bound to the egress: claim networks
+# are joined to that container, and a new one holds none of them.
+# Installed by scripts/runtime/cell-host.sh.
+[Unit]
+Description=Kody Runtime cell agent
+Documentation=https://github.com/kodustech/kodus-installer/blob/main/docs/runtime.md
+After=docker.service network-online.target kodus-cell-injector.service kodus-cell-egress.service
+Wants=network-online.target
+Requires=docker.service kodus-cell-injector.service
+BindsTo=kodus-cell-egress.service
+PartOf=kodus-cell.target
+
+[Service]
+EnvironmentFile=/etc/kodus/cell/cell.env
+ExecStart=/opt/kodus-cell/current/bin/cell -config /etc/kodus/cell/cell.yaml $CELL_ARGS
+# The rootless builder (uid 1000) reads the checkouts the agent extracts.
+UMask=0022
+Restart=on-failure
+RestartSec=10
+# The agent releases its claims and removes their machines on SIGTERM; the
+# reaper timer removes whatever outlives it.
+KillMode=mixed
+TimeoutStopSec=120
+LimitNOFILE=1048576
+
+[Install]
+WantedBy=kodus-cell.target

@@ -1,0 +1,11 @@
+# gVisor (Apache-2.0) release the docker-gvisor cell host installs: runsc and
+# containerd-shim-runsc-v1 from the release archive, verified against the
+# SHA-512 pinned here before anything is unpacked. The published .sha512 next
+# to the archive is checked too, but it comes from the same origin, so the pin
+# is what proves the bytes. Bump the release, both digests and the date
+# together, never to a release younger than two weeks.
+#   https://storage.googleapis.com/gvisor/releases/release/<release>/<arch>/gvisor.tar.bz2
+# Columns: release, arch (uname -m), sha512 of gvisor.tar.bz2, published (UTC).
+#release	arch	sha512	published
+20261026.0	x86_64	26e4a327565f5da0f73261a6387e2c20f4695a232e330095a3111b70efd604fdf09d734e8cc8f714dbb5c5607ce8c87ea80b26df549d83a146f2efd5a1af448a	2026-10-28
+20261026.0	aarch64	da177d9bcfd9ac23899ecfedc6fd47358e9684a1f7e3f5f8ffb8bf7c0ca65f4c08730c0c503b9231b522db28b04c132a06d04d6719e0d8c04c9f82edaf03d8ae	2026-10-28

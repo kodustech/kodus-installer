@@ -1,0 +1,17 @@
+# RuntimeClass for Kody Runtime cells on Kata Containers (docs/runtime.md,
+# "Kubernetes"): each pod in its own lightweight VM, which needs KVM on the
+# nodes. The handler is the name Kata's installer registered with containerd
+# (kata-qemu, kata-clh or kata-fc for Firecracker). Managed offerings (AKS Pod
+# Sandboxing, for one) create their own class: use its name and skip this file.
+apiVersion: node.k8s.io/v1
+kind: RuntimeClass
+metadata:
+  name: kata
+handler: kata-qemu
+overhead:
+  podFixed:
+    memory: "160Mi"
+    cpu: "250m"
+scheduling:
+  nodeSelector:
+    kodus.io/runtime-sandbox: kata
