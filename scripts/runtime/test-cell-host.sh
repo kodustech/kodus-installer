@@ -90,7 +90,17 @@ t "no systemd is refused" sh -c "KODUS_CELL_SYSTEMD_RUN=/nonexistent $CH check -
 
 echo "== control-plane bundle"
 cp /tmp/cp/.env.example /tmp/cp/.env
-t "generate.sh as root" /tmp/cp/scripts/runtime/generate.sh --hub-host hub.example.internal --openbao-host 10.20.30.40
+# The runtime-worker refuses an evidence URL that is not https to a DNS name
+# or http to a one-label name (kodus-ai libs/runtime/protocol/messages.ts
+# UploadGrantSchema, checked at start by apps/runtime/src/shared/config.ts),
+# so generate.sh refuses it before anything is written.
+t "generate.sh refuses the default evidence URL for a dotted hub host" fails_with "works only for a one-label hub host" /tmp/cp/scripts/runtime/generate.sh --hub-host hub.example.internal --openbao-host 10.20.30.40
+t "generate.sh refuses an evidence URL to an IP address" fails_with "never an IP" /tmp/cp/scripts/runtime/generate.sh --hub-host hub.example.internal --openbao-host 10.20.30.40 --evidence-url https://10.20.30.41
+t "generate.sh refuses http to a dotted name" fails_with "http://<one-label name> only" /tmp/cp/scripts/runtime/generate.sh --hub-host hub.example.internal --openbao-host 10.20.30.40 --evidence-url http://evidence.example.internal:3420
+t "a refused evidence URL writes no state" test ! -e /tmp/cp/runtime/state/settings.env
+t "the default evidence URL holds for a one-label hub host" sh -c 'KODUS_RUNTIME_STATE=/tmp/state-one-label /tmp/cp/scripts/runtime/generate.sh --hub-host kodus-hub --openbao-host 10.20.30.40 >/dev/null && grep -qx RUNTIME_EVIDENCE_PUBLIC_URL=http://kodus-hub:3420 /tmp/state-one-label/settings.env'
+t "generate.sh as root" /tmp/cp/scripts/runtime/generate.sh --hub-host hub.example.internal --openbao-host 10.20.30.40 --evidence-url https://runtime-evidence.example.internal
+t "the evidence URL given is the one kept" grep -qx RUNTIME_EVIDENCE_PUBLIC_URL=https://runtime-evidence.example.internal /tmp/cp/runtime/state/settings.env
 t "state owned by uid 1000" sh -c '[ "$(stat -c %u /tmp/cp/runtime/state/secrets.env)" = 1000 ]'
 BUNDLE=/tmp/cp/runtime/state/cell-host
 
