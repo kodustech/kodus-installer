@@ -371,7 +371,6 @@ check_kubernetes() {
     else
         miss "RuntimeClass $RUNTIME_CLASS does not exist: a node pool with gVisor (handler runsc) or Kata, and runtime/kubernetes/runtimeclass-*.yaml"
     fi
-    miss "no cell runs on Kubernetes yet: kodus-ai deploy/chart/runtime-cell renders only the reaper, the RuntimeClass and RBAC, and cmd/cell cannot select the k8s-sandbox driver (cell-distribution.md item 5)"
 }
 
 run_checks() { # run_checks PROFILE [skip-runsc]
@@ -788,10 +787,15 @@ cmd_install() {
     [ -n "$BUNDLE" ] || rt_die "--bundle is required (runtime/state/cell-host/ of the control plane)"
     case "$PROFILE" in
         docker-gvisor) ;;
-        docker-firecracker | kubernetes)
+        docker-firecracker)
             run_checks "$PROFILE"
             report "$PROFILE" || exit 1
             rt_die "profile $PROFILE has no installer yet"
+            ;;
+        kubernetes)
+            run_checks "$PROFILE"
+            report "$PROFILE" || exit 1
+            rt_die "profile kubernetes installs with Helm, not on a host: helm install <release> charts/kodus-runtime (docs/runtime.md, Kubernetes)"
             ;;
         *) rt_die "--profile is required: docker-gvisor, docker-firecracker or kubernetes" ;;
     esac

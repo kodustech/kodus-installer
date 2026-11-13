@@ -83,7 +83,7 @@ t "docker-gvisor without runsc fails naming runsc" fails_with 'missing  runsc is
 t "docker-firecracker without /dev/kvm fails naming /dev/kvm" fails_with "missing  /dev/kvm is missing: the firecracker backend needs KVM" $CH check --profile docker-firecracker
 t "docker-firecracker names the unreleased backend" fails_with "has no firecracker backend (phase P2)" $CH check --profile docker-firecracker
 t "docker-firecracker names the unpublished microVM kit" fails_with "the microVM kit (firecracker + jailer" $CH check --profile docker-firecracker
-t "kubernetes names kubectl and the missing chart" fails_with "no cell runs on Kubernetes yet" $CH check --profile kubernetes
+t "kubernetes names kubectl" fails_with "kubectl is not installed" $CH check --profile kubernetes
 t "docker-gvisor with runsc registered passes the runsc check" sh -c "STUB_RUNTIMES='{\"runc\":{},\"runsc\":{\"path\":\"/usr/local/bin/runsc\"}}' $CH check --profile docker-gvisor | grep -q 'ok       runsc registered'"
 t "rootless Docker is refused" sh -c "cp /opt/stub/docker /opt/stub/docker-rootless && sed -i 's/name=cgroupns/name=rootless/' /opt/stub/docker-rootless && KODUS_CELL_DOCKER=/opt/stub/docker-rootless $CH check --profile docker-gvisor | grep -q 'Docker runs rootless'"
 t "no systemd is refused" sh -c "KODUS_CELL_SYSTEMD_RUN=/nonexistent $CH check --profile docker-gvisor | grep -q 'systemd is not running'"

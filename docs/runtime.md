@@ -87,7 +87,7 @@ starts and names every requirement that is missing.
 |---|---|---|---|
 | `docker-gvisor` | `cell-host.sh install` | Linux, rootful Docker with `runsc` registered (installed for you), systemd | Builder image |
 | `docker-firecracker` | checks only | `/dev/kvm`, cgroup v2, XFS with reflink or an LVM thin pool | microVM kit; the `firecracker` backend (phase P2: the cell refuses it today) |
-| `kubernetes` | checks only | A gVisor or Kata RuntimeClass (or a KVM node pool) | The chart does not run a cell yet; see [Kubernetes](#kubernetes) |
+| `kubernetes` | `helm install charts/kodus-runtime` | A gVisor or Kata RuntimeClass, a CNI that enforces NetworkPolicy | Code sandboxes only; see [Kubernetes](#kubernetes) |
 | any, air-gapped | `bundle-export.sh` / `bundle-import.sh` | A registry you run | One OCI layout with every image, same digests |
 
 OpenBao ships in every profile.
@@ -317,18 +317,57 @@ Runtime images must be published first; the bundle refuses an unpublished one.
 
 ## Kubernetes
 
-No cell runs on Kubernetes yet: `kodus-ai` `apps/runtime-cell/deploy/chart/runtime-cell` renders only the reaper
-CronJob, the RuntimeClass, an admission policy and RBAC, and `cmd/cell` cannot select the `k8s-sandbox` driver. A
-Kubernetes customer runs the control plane as usual and cells on a Docker host (`docker-gvisor`). What is ready for when
-the chart runs cells:
+`charts/kodus-runtime` installs the control plane, a cell, or both, on a cluster you run (design and trade-offs:
+kodus-ai `docs/runtime/kubernetes.md`). The cell runs **code sandboxes**; environment Runs (compose, observers,
+builds) do not run on a Kubernetes cell yet, so a Kubernetes customer who wants Runs keeps a `docker-gvisor` cell host.
 
-- `runtime/kubernetes/runtimeclass-gvisor.yaml` (handler `runsc`) and `runtimeclass-kata.yaml` (handler `kata-qemu`;
-  `kata-clh`, `kata-fc` for other hypervisors), each scheduled on a labelled node pool. Managed offerings create their
-  own class (GKE Sandbox: `gvisor`; AKS Pod Sandboxing has its own name): use that name and skip the file, and keep the
-  chart from creating a second one.
-- `runtime/kubernetes/values-runtime-cell-gvisor.yaml` and `values-runtime-cell-kata.yaml` for that chart (images by
-  digest only).
-- `cell-host.sh check --profile kubernetes [--runtime-class <name>]` checks `kubectl`, the cluster and the class.
+What the cluster needs:
+
+| Requirement | Why | Checked |
+|---|---|---|
+| Kubernetes 1.30 or later | ValidatingAdmissionPolicy (GA 1.30), native sidecars | `kubeVersion` in the chart |
+| An isolated RuntimeClass: gVisor (`runsc` and `containerd-shim-runsc-v1` registered with containerd, with `gvisor-bin/` next to `runsc`) or Kata | Every claim pod runs on it | `helm install` fails naming the class; the cell's preflight runs a probe pod on it and checks the kernel is gVisor's |
+| A CNI that enforces NetworkPolicy egress to every address, not only to pods (Calico, Cilium, the EKS agent; kind's default kindnet does not: a default-deny pod still reaches the internet and the API server) | Claim pods reach only the cell's proxy and resolver | The preflight's probe pod must fail to reach the API server |
+| A default StorageClass (or `cell.persistence.storageClass`) | The cell's identity and local PKI, the evidence store | |
+| Cluster admin for the install | Two namespaces, a ValidatingAdmissionPolicy, optionally the RuntimeClass | |
+
+Managed classes: GKE Sandbox makes `gvisor` itself; kata-deploy makes `kata-*` classes (set
+`cell.runtimeClass.name` and `cell.runtimeClass.kernelMustContain: ""`). `runtime/kubernetes/runtimeclass-*.yaml`, or
+`cell.runtimeClass.create: true`, make one where the nodes have the handler and the cluster has no class.
+
+What it installs:
+
+- **Control plane** (release namespace): hub, runtime-worker, OpenBao (upstream image, Postgres storage, static
+  unseal, self-init, `disable_mlock` because `IPC_LOCK` is not allowed under Pod Security restricted), the Postgres
+  roles Job (`runtime/sql`), the grants Job, the RabbitMQ user Job (management API). Passwords, keys and the P-256
+  PKI are generated once and kept across upgrades; `<release>-state` and `<release>-pki` stay after `helm uninstall`
+  unless `controlPlane.purgeDataOnUninstall` also drops the Runtime's databases.
+- **Cell** (`cell.namespace`, claim pods in `cell.sandboxNamespace`): both namespaces enforce Pod Security
+  `restricted`. The cell pod is a cell host: `cell register -if-unregistered` (the token Secret, spent once),
+  `cell local-pki`, then the egress proxy and resolver and the injector as native sidecars with their control ports
+  on the pod's loopback, then the agent, the only container with a service account token. Its Role: `pods` and
+  `pods/exec` in the sandbox namespace, nothing cluster-wide. The sandbox namespace has default-deny
+  NetworkPolicies (claims reach the cell's 53, 80 and 443 only), a ResourceQuota (the cell's aggregate size), a
+  LimitRange, and a ValidatingAdmissionPolicy (the RuntimeClass, no token, no ephemeral container). A reaper
+  CronJob with its own Role deletes this cell's pods past their ceiling.
+- **Product**: `charts/kodus` reads the Secret `<release>-product` with `services.api.extraEnvFrom` and
+  `services.worker.extraEnvFrom`, and mounts `<release>-product-files` at `/runtime/openbao` with
+  `services.api.extraVolumes` / `extraVolumeMounts`.
+
+```bash
+helm install kodus-runtime charts/kodus-runtime -n kodus \
+  --set images.hub=<registry>/kodus-runtime-hub@sha256:<digest> --set images.worker=<...> \
+  --set images.cell=<...> --set images.sandbox=<...> \
+  --set postgres.host=kodus-postgres --set postgres.admin.existingSecret=<secret with username/password> \
+  --set rabbitmq.host=kodus-rabbitmq --set rabbitmq.admin.existingSecret=<secret> \
+  --set controlPlane.releaseVersion=<release> --set cell.registration.token=<kcr_ token>
+kubectl -n kodus-runtime-cell logs deploy/kodus-runtime-cell -c cell | grep -E 'k8s.preflight|cell.start'
+```
+
+Images are by digest only; none is published yet ([Status](#status-images-that-do-not-exist-yet)).
+`scripts/runtime/test-chart.sh` runs the static checks; `scripts/runtime/test-kubernetes.sh --kodus-ai <checkout>`
+installs on a throwaway kind cluster with gVisor and proves registration, the preflight, a sandbox claim under
+`runsc`, the egress allow-list and that `helm uninstall` leaves nothing.
 
 ## Network and permissions reference
 

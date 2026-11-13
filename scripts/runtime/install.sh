@@ -64,7 +64,7 @@ case "$PROFILE" in
         rt_protocol_fits firecracker "$BACKENDS" ||
             rt_warn "docker-firecracker: cell release $CELL_RELEASE has no firecracker backend (phase P2). The control plane installs, but cell-host.sh refuses to start a cell of this profile." ;;
     kubernetes)
-        rt_warn "kubernetes: no cell runs on Kubernetes yet (kodus-ai deploy/chart/runtime-cell deploys no cell). The control plane installs; see docs/runtime.md, Kubernetes." ;;
+        rt_warn "kubernetes: the cell installs with Helm (charts/kodus-runtime, cell.enabled) against this control plane; see docs/runtime.md, Kubernetes." ;;
 esac
 
 HUB_IMAGE=$(rt_image "$RELEASE" hub)
