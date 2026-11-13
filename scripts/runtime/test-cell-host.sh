@@ -108,7 +108,8 @@ sed "s/^/      | /" /tmp/install.log | head -60
 t "gVisor archive verified against the pin" has "SHA-512 verified" /tmp/install.log
 t "runsc registered with Docker (dry run)" has "[dry-run] /usr/local/bin/runsc install --runtime runsc" /tmp/install.log
 t "Docker reloaded, not restarted (dry run)" has "[dry-run] systemctl reload docker" /tmp/install.log
-t "cell register with the token in the env, topology self_hosted" has "[dry-run] KODUS_CELL_REGISTRATION_TOKEN=<token> /opt/kodus-cell/current/bin/cell register -hub https://hub.example.internal:3410" /tmp/install.log
+t "cell register with the token in the env and the token's topology" has "[dry-run] KODUS_CELL_REGISTRATION_TOKEN=<token> /opt/kodus-cell/current/bin/cell register -hub https://hub.example.internal:3410 -ca /etc/kodus/cell/hub-ca.pem -out /etc/kodus/cell/identity" /tmp/install.log
+t "no --profile: the host's profile, docker-gvisor without KVM, and says why" sh -c "$CH install --bundle $BUNDLE ${BIN_ARGS[*]} --min-free-gb 1 --dry-run 2>&1 | grep -q 'Profile: docker-gvisor (no usable /dev/kvm)'"
 t "units enabled and started (dry run)" has "[dry-run] systemctl restart kodus-cell.target" /tmp/install.log
 t "runsc runs" sh -c '/usr/local/bin/runsc --version | grep -q "release-20261026.0"'
 t "containerd shim installed" test -x /usr/local/bin/containerd-shim-runsc-v1
@@ -125,8 +126,10 @@ t "reaper runs the binary the release ships (not /usr/local/bin/kodus-reaper)" h
 t "reaper binary exists at that path" test -x /opt/kodus-cell/current/bin/reaper
 printf '[Unit]\nDescription=stub\n[Service]\nExecStart=/bin/true\n' >/etc/systemd/system/docker.service
 t "systemd-analyze verify accepts the units" sh -c 'cd /etc/systemd/system && systemd-analyze verify kodus-cell.target kodus-cell.service kodus-cell-egress.service kodus-cell-injector.service kodus-cell-reaper.service kodus-cell-reaper.timer'
-t "cell.yaml names the hub and the trust bundle" sh -c 'grep -q "hubUrl: wss://hub.example.internal:3410/cells" /etc/kodus/cell/cell.yaml && grep -q "ca: /etc/kodus/cell/trust.pem" /etc/kodus/cell/cell.yaml'
-t "trust.pem holds the hub CA and the cell-local CA" sh -c '[ "$(grep -c "BEGIN CERTIFICATE" /etc/kodus/cell/trust.pem)" = 2 ]'
+t "cell.yaml: the hub verified with the hub CA, the enforcers with the cell-local CA" sh -c 'grep -q "hubUrl: wss://hub.example.internal:3410/cells" /etc/kodus/cell/cell.yaml && grep -qx "  ca: /etc/kodus/cell/identity/ca.pem" /etc/kodus/cell/cell.yaml && grep -qx "  localCa: /etc/kodus/cell/local-ca.pem" /etc/kodus/cell/cell.yaml'
+t "no single trust bundle of both CAs is written" test ! -e /etc/kodus/cell/trust.pem
+spki() { openssl x509 -in "$1" -noout -pubkey | openssl pkey -pubin -outform der | sha256sum | cut -d' ' -f1; }
+t "hub CA, cell-local CA and injector CA are three different keys" sh -c "[ \$(printf '%s\n' $(spki /etc/kodus/cell/identity/ca.pem) $(spki /etc/kodus/cell/local-ca.pem) $(spki /etc/kodus/cell/injector/cell-ca.pem) | sort -u | wc -l) = 3 ]"
 t "egress and injector trust the hub's issuer for the agent" sh -c 'cmp /etc/kodus/cell/egress/ca.pem /etc/kodus/cell/identity/issuer.pem && cmp /etc/kodus/cell/injector/ca.pem /etc/kodus/cell/identity/issuer.pem'
 t "egress certificate chains to the cell-local CA" openssl verify -CAfile /etc/kodus/cell/local-ca.pem /etc/kodus/cell/egress/cert.pem
 t "injector holds the OpenBao AppRole, 0600" sh -c '[ "$(stat -c %a /etc/kodus/cell/injector/openbao-injector-secret-id)" = 600 ]'
@@ -174,10 +177,11 @@ if [ -d /cellbin ]; then
     sleep 3
     t "egress: starts with the unit's arguments" kill -0 $EG
     t "injector: starts with the unit's arguments" kill -0 $IN
-    t "egress control port: TLS verifies with the cell's trust bundle" sh -c 'echo | openssl s_client -connect 127.0.0.1:9443 -servername kodus-egress -CAfile /etc/kodus/cell/trust.pem -verify_return_error 2>&1 | grep -q "Verify return code: 0"'
-    t "injector control port: TLS verifies with the cell's trust bundle" sh -c 'echo | openssl s_client -connect 127.0.0.1:9445 -servername kodus-injector -CAfile /etc/kodus/cell/trust.pem -verify_return_error 2>&1 | grep -q "Verify return code: 0"'
-    t "egress control port refuses a client without the agent's certificate" sh -c '! curl -fsS --max-time 5 --cacert /etc/kodus/cell/trust.pem https://127.0.0.1:9443/metrics >/dev/null 2>&1'
-    t "egress control port takes the agent's certificate" curl -fsS --max-time 5 --cacert /etc/kodus/cell/trust.pem --cert $I/cert.pem --key $I/key.pem https://127.0.0.1:9443/metrics
+    t "egress control port: TLS verifies with the cell-local CA" sh -c 'echo | openssl s_client -connect 127.0.0.1:9443 -servername kodus-egress -CAfile /etc/kodus/cell/local-ca.pem -verify_return_error 2>&1 | grep -q "Verify return code: 0"'
+    t "injector control port: TLS verifies with the cell-local CA" sh -c 'echo | openssl s_client -connect 127.0.0.1:9445 -servername kodus-injector -CAfile /etc/kodus/cell/local-ca.pem -verify_return_error 2>&1 | grep -q "Verify return code: 0"'
+    t "egress control port does not verify with the hub CA" sh -c '! curl -fsS --max-time 5 --cacert /etc/kodus/cell/identity/ca.pem --cert '"$I"'/cert.pem --key '"$I"'/key.pem https://127.0.0.1:9443/metrics >/dev/null 2>&1'
+    t "egress control port refuses a client without the agent's certificate" sh -c '! curl -fsS --max-time 5 --cacert /etc/kodus/cell/local-ca.pem https://127.0.0.1:9443/metrics >/dev/null 2>&1'
+    t "egress control port takes the agent's certificate" curl -fsS --max-time 5 --cacert /etc/kodus/cell/local-ca.pem --cert $I/cert.pem --key $I/key.pem https://127.0.0.1:9443/metrics
     kill $EG $IN 2>/dev/null || true
     t "injector: the OpenBao secret store is configured from the unit's flags" sh -c '! grep -q injector.secrets.unconfigured /tmp/injector.log' 
     sed 's/^/      | /' /tmp/egress.log | head -4

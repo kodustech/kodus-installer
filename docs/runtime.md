@@ -161,8 +161,13 @@ From then on `scripts/install.sh` keeps the Runtime env on the API and the worke
 
 ### 2. A registration token
 
-Single use, valid 15 minutes, bound to your organization and the topology `self_hosted`. The web app has no screen for
-it yet; as the org owner:
+Single use, valid 15 minutes, bound to your organization and to where the cell runs (`self_hosted`, the default on a
+self-hosted install). As the org owner, in Kodus: **Kody Runtime → Settings → Cells → Create registration token**. The
+token is shown once, next to the commands for the cell host; the commands never contain it (you paste it into a hidden
+prompt). The same page lists the tokens of the last 24 hours with their state and revokes a pending one: no cell can
+register with it afterwards, and a cell that already did is revoked as a cell (Environments page).
+
+From a script instead, as the org owner:
 
 ```bash
 scripts/runtime/cell-token.sh --api-url https://api.example.com --email owner@example.com --out token
@@ -176,15 +181,21 @@ Copy `runtime/state/cell-host/` from the Kodus host to the cell host privately: 
 credential (no CA key). Clone this repository there too, then:
 
 ```bash
-sudo scripts/runtime/cell-host.sh check --profile docker-gvisor --bundle ./cell-host     # optional: what is missing
-sudo scripts/runtime/cell-host.sh install --profile docker-gvisor --bundle ./cell-host --token-file token
+sudo scripts/runtime/cell-host.sh check --bundle ./cell-host     # optional: what is missing
+read -rs KODUS_CELL_REGISTRATION_TOKEN && export KODUS_CELL_REGISTRATION_TOKEN   # paste the token, Enter
+sudo -E scripts/runtime/cell-host.sh install --bundle ./cell-host           # or --token-file token
 ```
+
+No flag needs a value written by hand. `--profile` defaults to `auto`: `docker-gvisor`, the only profile with an
+installer (on a host with a usable `/dev/kvm` it says so: microVM cells take code sandboxes only today). The cell
+registers with the token's topology, and takes its claim ceiling from the host: a claim may ask up to the memory the
+cell may commit (MemTotal less 1 GB) and the host's CPUs; a claim that asks nothing gets 4 GB and 2 CPUs.
 
 `install` checks the host, installs gVisor's `runsc` and `containerd-shim-runsc-v1` from the pinned release after
 checking its SHA-512 (and the published one), registers `runsc` with Docker (`runsc install`, then a Docker reload, not
 a restart), copies the cell release's binaries out of the cell image into `/opt/kodus-cell/releases/<release>`,
-builds the observer image from them, enrolls the cell (`cell register -topology self_hosted`, token in the
-environment, never on the command line), creates the cell-local CA and the egress, injector and observer certificates,
+builds the observer image from them, enrolls the cell (`cell register`, token in the environment, never on the command
+line), creates the cell-local CA and the egress, injector and observer certificates,
 writes `/etc/kodus/cell/cell.yaml` and `cell.env`, and enables these units:
 
 | Unit | What |
@@ -317,7 +328,7 @@ the chart runs cells:
 | 3420 | runtime-worker evidence | cells (upload), browsers (signed URLs) | your proxy |
 | 3430 | runtime-worker sandbox/env sessions | API, worker (compose network) | HMAC-signed requests |
 | 8200 | runtime-openbao | API (compose network), cell injectors | OpenBao CA |
-| 9443, 9445, 9466 | cell egress, injector, agent metrics | the agent, on the cell host's loopback | cell-local CA |
+| 9443, 9445, 9466 | cell egress, injector, agent metrics | the agent, on the cell host's loopback | cell-local CA (the agent verifies them with it only, and the hub with the hub CA only) |
 
 RabbitMQ user `kodus_runtime` on the product vhost (set by `install.sh` on the bundled broker; on an external broker,
 create it with these): configure `^(workflow\.jobs\.runtime_(run|control)\.queue|amq\.gen-.*)$`, write
@@ -352,7 +363,8 @@ hosts` of `runtime_secrets`; `openbao` owns `kodus_openbao`. On an external Post
 | `cell-host.sh check`: runsc is not registered | gVisor missing | `cell-host.sh install` installs it |
 | `cell-host.sh check`: `/dev/kvm` is missing | No KVM on this host | Use `docker-gvisor`, or a bare-metal / nested-virtualization host |
 | `cell register`: `registration_refused` `expired` / `unknown_or_used` | Token older than 15 minutes, or used | A new token |
-| `cell register`: `topology_mismatch` | Token made for `hybrid` | A `self_hosted` token (`cell-token.sh` default) |
+| `cell register`: `topology_mismatch` | `cell register -topology` given by hand, not the token's | Leave `-topology` out: the cell takes the token's |
+| `journalctl -u kodus-cell`: `-local-ca is required`, `-ca and -local-ca share a CA key`, or `-cell-ca-cert is also ...` | A `cell.yaml` from before 2026-11-13 (`ca: trust.pem`, both CAs in one file), or two of the hub CA, the cell-local CA and the injector CA on one key | `cell-host.sh upgrade` rewrites `cell.yaml` with `ca: identity/ca.pem` and `localCa: local-ca.pem` |
 | `cell register`: TLS error | `--hub-host` not in the hub certificate, or the wrong CA | `generate.sh --hub-host <name the cell uses> --rotate-certs`, then restart the hub |
 | `journalctl -u kodus-cell`: `the runsc runtime is not installed in this Docker` | Docker restarted without its daemon.json runtimes | `runsc install` and `systemctl reload docker` |
 | The cell connects but takes no work | It waits for both alert feeds (egress, injector) | `systemctl status kodus-cell-egress kodus-cell-injector` |

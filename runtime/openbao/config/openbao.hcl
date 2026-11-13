@@ -1,4 +1,4 @@
-# Vendored from kodustech/kodus-ai@be25fd785 (kody-runtime/base) docker/openbao/config/openbao.hcl.
+# Vendored from kodustech/kodus-ai@ea8b3c846 (kody-runtime/selfhosted-gaps) docker/openbao/config/openbao.hcl.
 # Re-sync with scripts/runtime/sync-from-kodus-ai.sh; do not edit by hand.
 # OpenBao for the Kody Runtime's org secrets (docs/runtime/sandbox.md
 # "Secrets: OpenBao"). Unmodified upstream image, MPL-2.0, run as its own

@@ -7,9 +7,9 @@
 # and the reaper. Linux, as root.
 #
 # Usage: cell-host.sh <command> [options]
-#   check     --profile <p> [--workdir DIR] [--bundle DIR | --hub-url URL --hub-ca FILE]
+#   check     [--profile <p>] [--workdir DIR] [--bundle DIR | --hub-url URL --hub-ca FILE]
 #             Names every requirement of the profile this host misses; exit 1 if any.
-#   install   --profile <p> --bundle DIR [--token-file FILE] [options below]
+#   install   [--profile <p>] --bundle DIR [--token-file FILE] [options below]
 #   upgrade   [--release R] [--cell-image REF | --cell-bin-dir DIR]
 #             Installs another cell release beside the current one and restarts on it.
 #   rollback  Restarts on the release installed before the current one.
@@ -18,7 +18,9 @@
 #   backup    --out FILE   The cell's identity, local PKI, config and bake catalog.
 #   uninstall [--purge] [--remove-runsc]
 #
-# Profiles: docker-gvisor (the cell runs here, under runsc), docker-firecracker
+# Profiles: auto (the default: the profile this host can install, today
+# always docker-gvisor; it says when KVM is there), docker-gvisor (the cell
+# runs here, under runsc), docker-firecracker
 # (checks only: the backend is phase P2), kubernetes (checks only: no chart
 # runs a cell yet).
 #
@@ -86,7 +88,7 @@ DEFAULT_EGRESS_ALLOW=registry-1.docker.io,auth.docker.io,production.cloudfront.d
 
 COMMAND=${1:-}
 [ $# -gt 0 ] && shift
-PROFILE='' BUNDLE='' TOKEN_FILE='' RELEASE='' CELL_IMAGE_ARG='' CELL_BIN_DIR='' WORKDIR_R=/var/lib/kodus-cell
+PROFILE=auto BUNDLE='' TOKEN_FILE='' RELEASE='' CELL_IMAGE_ARG='' CELL_BIN_DIR='' WORKDIR_R=/var/lib/kodus-cell
 EGRESS_ALLOW='' UPSTREAM_DNS='' SANDBOX_POOL='' GVISOR_ARCHIVE='' REINSTALL_RUNSC=0
 ENFORCERS_SUBNET='' EGRESS_ENFORCER_IP='' INJECTOR_ENFORCER_IP=''
 DRY_RUN=0 HUB_URL='' HUB_CA='' OUT='' PURGE=0 REMOVE_RUNSC=0 THIN_POOL='' RUNTIME_CLASS=gvisor MIN_FREE_GB=20
@@ -563,11 +565,14 @@ pki_leaf() { # pki_leaf KEY CERT SUBJECT EKU SAN
     rm -f "$2.csr" "$2.ext" "$ETC/local-ca.srl"
 }
 
-# The hub's CA pins the hub and signs this cell's certificate (identity/,
-# written by `cell register`). The egress, injector and observers get their
-# certificates from a CA of this host's own, which never signs a cell
-# identity. The agent verifies the hub and its egress/injector control ports
-# with one pool (-ca), so trust.pem holds both CAs.
+# Three roots, each for one thing (kodus-ai docs/runtime/self-hosted.md):
+# the hub's CA pins the hub and signs this cell's certificate (identity/,
+# written by `cell register`); a CA of this host's own (local-ca) signs the
+# egress, injector and observer certificates and never a cell identity; the
+# injector's CA signs only the leaves machines see for a secret's host. The
+# agent verifies the hub with the hub CA only (tls.ca) and its enforcers'
+# control ports with local-ca only (tls.localCa), and refuses to start when
+# any two of them share a key.
 write_local_pki() { # write_local_pki [rotate]
     umask 077
     mkdir -p "$ETC/egress" "$ETC/injector" "$ETC/observer-server"
@@ -591,7 +596,8 @@ write_local_pki() { # write_local_pki [rotate]
     cp "$ETC/identity/issuer.pem" "$ETC/egress/ca.pem"
     cp "$ETC/identity/issuer.pem" "$ETC/injector/ca.pem"
     cp "$ETC/local-ca.pem" "$ETC/observer-server/ca.pem"
-    cat "$ETC/identity/ca.pem" "$ETC/local-ca.pem" >"$ETC/trust.pem"
+    # The single pool of earlier releases: the agent refuses it now.
+    rm -f "$ETC/trust.pem"
     if [ -n "$BUNDLE" ] && [ -n "$OPENBAO_ADDR" ]; then
         cp "$BUNDLE/openbao-ca.pem" "$ETC/injector/openbao-ca.pem"
         cp "$BUNDLE/injector-role-id" "$ETC/injector/openbao-injector-role-id"
@@ -619,7 +625,8 @@ gitApi: ${GIT_API:-https://api.github.com}
 metricsAddr: 127.0.0.1:9466
 autoRenew: true
 tls:
-  ca: $ETC_R/trust.pem
+  ca: $ETC_R/identity/ca.pem
+  localCa: $ETC_R/local-ca.pem
   cert: $ETC_R/identity/cert.pem
   key: $ETC_R/identity/key.pem
   issuer: $ETC_R/identity/issuer.pem
@@ -685,7 +692,7 @@ register_cell() {
     local token=${KODUS_CELL_REGISTRATION_TOKEN:-}
     [ -z "$token" ] && [ -n "$TOKEN_FILE" ] && token=$(head -n1 "$TOKEN_FILE")
     if [ "$DRY_RUN" = 1 ]; then
-        printf '[dry-run] KODUS_CELL_REGISTRATION_TOKEN=<token> %s/current/bin/cell register -hub %s -ca %s -topology self_hosted -out %s/identity\n' \
+        printf '[dry-run] KODUS_CELL_REGISTRATION_TOKEN=<token> %s/current/bin/cell register -hub %s -ca %s -out %s/identity\n' \
             "$OPT_R" "$(hub_https)" "$ETC_R/hub-ca.pem" "$ETC_R"
         # What register writes, so the rest of the dry run has its inputs: a
         # throwaway identity from a throwaway CA, never sent anywhere.
@@ -702,11 +709,10 @@ register_cell() {
     esac
     umask 077
     mkdir -p "$ETC/identity"
-    # The token goes in the environment, never on the command line. The
-    # topology must be the token's: tokens are self_hosted or hybrid, while
-    # `cell register` defaults to single-vm.
+    # The token goes in the environment, never on the command line. No
+    # -topology: the cell registers with the token's (made in Settings → Cells).
     KODUS_CELL_REGISTRATION_TOKEN=$token "$PREFIX$(readlink "$OPT/current")/bin/cell" register -hub "$(hub_https)" -ca "$ETC/hub-ca.pem" \
-        -topology self_hosted -out "$ETC/identity"
+        -out "$ETC/identity"
     CELL_ID=$(cell_id_of "$ETC/identity/cert.pem")
     [ -n "$CELL_ID" ] || rt_die "cell register wrote no certificate"
 }
@@ -750,8 +756,24 @@ require_root() {
     [ "$(id -u)" = 0 ] || [ "$DRY_RUN" = 1 ] || rt_die "run as root: the cell host install changes Docker's runtimes, /etc and systemd"
 }
 
+# resolve_profile: auto becomes the profile this host can install. Only
+# docker-gvisor has an installer: microVM cells (docker-firecracker) take code
+# sandboxes only (kodus-ai internal/drivers/microvm RunsEnvironments), so a
+# KVM host still gets gVisor, and is told so. The cell's own capacity (memory,
+# CPUs) comes from the host; nothing here sets it.
+resolve_profile() {
+    [ "$PROFILE" = auto ] || return 0
+    PROFILE=docker-gvisor
+    if [ -c "$KVM_DEVICE" ] && [ -r "$KVM_DEVICE" ] && [ -w "$KVM_DEVICE" ]; then
+        rt_info "Profile: docker-gvisor ($KVM_DEVICE is usable, but microVM cells run code sandboxes only; --profile docker-firecracker checks that host)."
+    else
+        rt_info "Profile: docker-gvisor (no usable $KVM_DEVICE)."
+    fi
+}
+
 # --- commands ---------------------------------------------------------------
 cmd_check() {
+    resolve_profile
     settings_defaults
     load_bundle
     run_checks "$PROFILE"
@@ -760,6 +782,7 @@ cmd_check() {
 
 cmd_install() {
     require_root
+    resolve_profile
     settings_defaults
     load_bundle
     [ -n "$BUNDLE" ] || rt_die "--bundle is required (runtime/state/cell-host/ of the control plane)"

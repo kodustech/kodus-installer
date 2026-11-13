@@ -1,4 +1,4 @@
-# Vendored from kodustech/kodus-ai@be25fd785 (kody-runtime/base) docker/openbao/config/initialize.hcl.
+# Vendored from kodustech/kodus-ai@ea8b3c846 (kody-runtime/selfhosted-gaps) docker/openbao/config/initialize.hcl.
 # Re-sync with scripts/runtime/sync-from-kodus-ai.sh; do not edit by hand.
 # Runs once, on the first start against empty storage (self-initialization,
 # https://openbao.org/docs/configuration/self-init/). No root token survives
