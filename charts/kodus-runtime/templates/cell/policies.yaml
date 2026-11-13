@@ -1,0 +1,172 @@
+{{- if .Values.cell.enabled }}
+{{- $sbx := .Values.cell.sandboxNamespace }}
+{{- $c := .Values.cell }}
+{{- if .Values.networkPolicy.enabled }}
+# Claim pods: no ingress at all, egress to the cell's proxy and resolver
+# ports only (the cell's own ports after the egress Service, 53 → 5353,
+# 80 → 8080, 443 → 8443). The cell's preflight proves these are enforced.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+  namespace: {{ $sbx }}
+  labels:
+    {{- include "kr.labels" (dict "root" $ "component" "sandboxes") | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes: ["Ingress", "Egress"]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: claims-to-cell-egress
+  namespace: {{ $sbx }}
+  labels:
+    {{- include "kr.labels" (dict "root" $ "component" "sandboxes") | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes: ["Egress"]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: {{ $c.namespace }} }
+          podSelector:
+            matchLabels:
+              {{- include "kr.selector" (dict "root" $ "component" "cell") | nindent 14 }}
+      ports:
+        - { protocol: TCP, port: 8080 }
+        - { protocol: TCP, port: 8443 }
+        - { protocol: UDP, port: 5353 }
+        - { protocol: TCP, port: 5353 }
+---
+# The cell namespace takes no ingress but the claims' traffic to the proxy
+# and resolver; the agent and the enforcers' control ports listen on the
+# pod's loopback only. Egress stays open: the proxy goes out to the
+# internet (refusing private addresses itself), the agent to the hub, the
+# API server and OpenBao.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  namespace: {{ $c.namespace }}
+  labels:
+    {{- include "kr.labels" (dict "root" $ "component" "cell") | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes: ["Ingress"]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: claims-to-egress
+  namespace: {{ $c.namespace }}
+  labels:
+    {{- include "kr.labels" (dict "root" $ "component" "cell") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "kr.selector" (dict "root" $ "component" "cell") | nindent 6 }}
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: {{ $sbx }} }
+      ports:
+        - { protocol: TCP, port: 8080 }
+        - { protocol: TCP, port: 8443 }
+        - { protocol: UDP, port: 5353 }
+        - { protocol: TCP, port: 5353 }
+{{- end }}
+---
+# The cell's aggregate size, and each claim pod's bounds and defaults.
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: claims
+  namespace: {{ $sbx }}
+  labels:
+    {{- include "kr.labels" (dict "root" $ "component" "sandboxes") | nindent 4 }}
+spec:
+  hard:
+    pods: {{ $c.quota.pods | quote }}
+    requests.cpu: {{ $c.quota.cpu | quote }}
+    limits.cpu: {{ $c.quota.cpu | quote }}
+    requests.memory: {{ $c.quota.memory | quote }}
+    limits.memory: {{ $c.quota.memory | quote }}
+    secrets: "0"
+    services: "0"
+    configmaps: "1"
+    persistentvolumeclaims: "0"
+---
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: claims
+  namespace: {{ $sbx }}
+  labels:
+    {{- include "kr.labels" (dict "root" $ "component" "sandboxes") | nindent 4 }}
+spec:
+  limits:
+    - type: Container
+      max:
+        cpu: {{ $c.maxClaim.cpus | quote }}
+        memory: {{ printf "%dMi" (int $c.maxClaim.memoryMb) | quote }}
+      default:
+        cpu: {{ $c.sandbox.cpus | quote }}
+        memory: {{ printf "%dMi" (int $c.sandbox.memoryMb) | quote }}
+      defaultRequest:
+        cpu: {{ $c.sandbox.cpus | quote }}
+        memory: {{ printf "%dMi" (int $c.sandbox.memoryMb) | quote }}
+{{- if $c.admissionPolicy.enabled }}
+---
+# On top of Pod Security restricted: every pod in the sandbox namespace runs
+# on the isolated RuntimeClass, with no service account token and no
+# ephemeral container, whoever creates it.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ include "kr.fullname" . }}-sandboxes
+  labels:
+    {{- include "kr.labels" (dict "root" $ "component" "sandboxes") | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["pods", "pods/ephemeralcontainers"]
+  validations:
+    - expression: "has(object.spec.runtimeClassName) && object.spec.runtimeClassName == '{{ $c.runtimeClass.name }}'"
+      message: "claim pods run on the RuntimeClass {{ $c.runtimeClass.name }}"
+    - expression: "has(object.spec.automountServiceAccountToken) && object.spec.automountServiceAccountToken == false"
+      message: "claim pods mount no service account token"
+    - expression: "!has(object.spec.hostNetwork) || object.spec.hostNetwork == false"
+      message: "no hostNetwork"
+    - expression: "!has(object.spec.hostPID) || object.spec.hostPID == false"
+      message: "no hostPID"
+    - expression: "!has(object.spec.hostIPC) || object.spec.hostIPC == false"
+      message: "no hostIPC"
+    - expression: "!has(object.spec.volumes) || object.spec.volumes.all(v, !has(v.hostPath))"
+      message: "no hostPath volumes"
+    - expression: "object.spec.containers.all(c, !has(c.securityContext) || !has(c.securityContext.privileged) || c.securityContext.privileged == false)"
+      message: "no privileged containers"
+    - expression: "object.spec.containers.all(c, has(c.securityContext) && has(c.securityContext.allowPrivilegeEscalation) && c.securityContext.allowPrivilegeEscalation == false)"
+      message: "no privilege escalation"
+    - expression: "!has(object.spec.ephemeralContainers) || size(object.spec.ephemeralContainers) == 0"
+      message: "no ephemeral containers"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ include "kr.fullname" . }}-sandboxes
+  labels:
+    {{- include "kr.labels" (dict "root" $ "component" "sandboxes") | nindent 4 }}
+spec:
+  policyName: {{ include "kr.fullname" . }}-sandboxes
+  validationActions: ["Deny"]
+  matchResources:
+    namespaceSelector:
+      matchLabels: { kubernetes.io/metadata.name: {{ $sbx }} }
+{{- end }}
+{{- end }}

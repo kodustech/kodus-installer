@@ -1,0 +1,17 @@
+# What every test renders with: images by a placeholder digest, the product's
+# Postgres and RabbitMQ named, a release version and a registration token.
+images:
+  hub: registry.example/kodus-runtime-hub@sha256:0000000000000000000000000000000000000000000000000000000000000001
+  worker: registry.example/kodus-runtime-worker@sha256:0000000000000000000000000000000000000000000000000000000000000001
+  cell: registry.example/kodus-runtime-cell@sha256:0000000000000000000000000000000000000000000000000000000000000001
+  sandbox: registry.example/kodus-runtime-sandbox@sha256:0000000000000000000000000000000000000000000000000000000000000001
+postgres:
+  host: kodus-postgres
+  admin: { existingSecret: kodus-postgres-admin }
+rabbitmq:
+  host: kodus-rabbitmq
+  admin: { existingSecret: kodus-rabbitmq-admin }
+controlPlane:
+  releaseVersion: unreleased
+cell:
+  registration: { token: kcr_example }

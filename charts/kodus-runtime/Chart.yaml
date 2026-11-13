@@ -1,0 +1,23 @@
+apiVersion: v2
+name: kodus-runtime
+description: Kody Runtime on Kubernetes (self-hosted) - the control plane (hub, runtime-worker, OpenBao) and cells that run code sandboxes on a gVisor or Kata RuntimeClass
+type: application
+# Chart version, independent of the Runtime release in appVersion.
+version: 0.1.0
+# No Runtime release is published yet (runtime/images.lock: unpublished).
+appVersion: "unreleased"
+# ValidatingAdmissionPolicy is GA in 1.30; native sidecars (init containers
+# with restartPolicy Always) are on by default since 1.29.
+kubeVersion: ">=1.30.0-0"
+keywords:
+  - kodus
+  - kody-runtime
+  - sandbox
+  - gvisor
+home: https://kodus.io
+sources:
+  - https://github.com/kodustech/kodus-installer
+  - https://github.com/kodustech/kodus-ai
+maintainers:
+  - name: Kodus Team
+    email: support@kodus.io

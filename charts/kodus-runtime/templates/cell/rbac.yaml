@@ -1,0 +1,85 @@
+{{- if .Values.cell.enabled }}
+{{- $sbx := .Values.cell.sandboxNamespace }}
+# The cell agent: pods and pods/exec in the sandbox namespace, nothing else.
+# No Secret, no namespace, no policy, nothing cluster-wide (kodus-ai
+# docs/runtime/kubernetes.md decision 1). patch is the expiry annotation;
+# pods/exec get is the WebSocket upgrade, create what newer API servers ask.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "kr.cell" . }}
+  namespace: {{ .Values.cell.namespace }}
+  labels:
+    {{- include "kr.labels" (dict "root" $ "component" "cell") | nindent 4 }}
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "kr.cell" . }}
+  namespace: {{ $sbx }}
+  labels:
+    {{- include "kr.labels" (dict "root" $ "component" "cell") | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["create", "get", "list", "delete", "patch"]
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create", "get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "kr.cell" . }}
+  namespace: {{ $sbx }}
+  labels:
+    {{- include "kr.labels" (dict "root" $ "component" "cell") | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "kr.cell" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "kr.cell" . }}
+    namespace: {{ .Values.cell.namespace }}
+---
+# The reaper has its own identity: read and delete pods in the sandbox
+# namespace (it reads a pod's labels before deleting it: only this cell's go).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "kr.cell" . }}-reaper
+  namespace: {{ .Values.cell.namespace }}
+  labels:
+    {{- include "kr.labels" (dict "root" $ "component" "reaper") | nindent 4 }}
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "kr.cell" . }}-reaper
+  namespace: {{ $sbx }}
+  labels:
+    {{- include "kr.labels" (dict "root" $ "component" "reaper") | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "kr.cell" . }}-reaper
+  namespace: {{ $sbx }}
+  labels:
+    {{- include "kr.labels" (dict "root" $ "component" "reaper") | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "kr.cell" . }}-reaper
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "kr.cell" . }}-reaper
+    namespace: {{ .Values.cell.namespace }}
+{{- end }}

@@ -1,0 +1,237 @@
+{{- if .Values.controlPlane.enabled }}
+{{- $release := include "kr.required" (dict "name" "controlPlane.releaseVersion" "value" .Values.controlPlane.releaseVersion) }}
+# The hub: the cells' endpoint (wss + mTLS on 3410, registration on
+# /cells/register) and the worker's internal listener (3411). One replica:
+# RUNTIME_REPLICA_URL names this Service.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "kr.hub" . }}
+  labels:
+    {{- include "kr.labels" (dict "root" $ "component" "hub") | nindent 4 }}
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector:
+    matchLabels:
+      {{- include "kr.selector" (dict "root" $ "component" "hub") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "kr.selector" (dict "root" $ "component" "hub") | nindent 8 }}
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      {{- include "kr.pullSecrets" . | nindent 6 }}
+      securityContext:
+        {{- include "kr.podSecurity" (dict "uid" 1000) | nindent 8 }}
+      initContainers:
+        {{- include "kr.waitForDb" (dict "root" $ "key" "RUNTIME_DATABASE_URL" "what" "the kodus_runtime role (the db-roles Job)") | nindent 8 }}
+      containers:
+        - name: hub
+          image: {{ include "kr.image" (dict "root" $ "name" "hub") }}
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
+          command: ["node", "dist/apps/runtime/hub/main.js"]
+          env:
+            {{- range $k := list "RUNTIME_DATABASE_URL" "RUNTIME_RABBITMQ_URL" "RUNTIME_PRODUCT_SECRETS_READ_URL" }}
+            - name: {{ $k }}
+              valueFrom: { secretKeyRef: { name: {{ include "kr.fullname" $ }}-env, key: {{ $k }} } }
+            {{- end }}
+            - { name: RUNTIME_REPLICA_ID, value: hub-1 }
+            - { name: RUNTIME_REPLICA_URL, value: {{ printf "https://%s:3411" (include "kr.hubInternal" .) | quote }} }
+            - { name: RUNTIME_HUB_URL, value: {{ printf "https://%s:3411" (include "kr.hubInternal" .) | quote }} }
+            - { name: RUNTIME_HUB_PORT, value: "3410" }
+            - { name: RUNTIME_HUB_INTERNAL_PORT, value: "3411" }
+            - { name: RUNTIME_METRICS_PORT, value: "9464" }
+            - { name: RUNTIME_STREAM_STORE, value: postgres }
+            - { name: RUNTIME_TLS_CA, value: /runtime/pki/ca.pem }
+            - { name: RUNTIME_TLS_CA_KEY, value: /runtime/pki/ca.key }
+            - { name: RUNTIME_TLS_CERT, value: /runtime/pki/hub.pem }
+            - { name: RUNTIME_TLS_KEY, value: /runtime/pki/hub.key }
+            - { name: RUNTIME_TLS_WORKER_CA, value: /runtime/pki/worker-ca.pem }
+            - { name: RUNTIME_WORKER_ALLOWED_CNS, value: runtime-worker }
+          ports:
+            - { name: cells, containerPort: 3410 }
+            - { name: internal, containerPort: 3411 }
+          readinessProbe:
+            httpGet: { path: /health, port: 3410, scheme: HTTPS }
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket: { port: 3410 }
+            initialDelaySeconds: 60
+            periodSeconds: 20
+          securityContext:
+            {{- include "kr.containerSecurity" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.controlPlane.hub.resources | nindent 12 }}
+          volumeMounts:
+            - { name: pki, mountPath: /runtime/pki, readOnly: true }
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: pki
+          secret:
+            secretName: {{ include "kr.fullname" . }}-pki
+            defaultMode: 0440
+            items:
+              {{- range $k := list "ca.pem" "ca.key" "hub.pem" "hub.key" "worker-ca.pem" }}
+              - { key: {{ $k }}, path: {{ $k }} }
+              {{- end }}
+        - name: tmp
+          emptyDir: { sizeLimit: 256Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "kr.hub" . }}
+  labels:
+    {{- include "kr.labels" (dict "root" $ "component" "hub") | nindent 4 }}
+  {{- with .Values.controlPlane.hub.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.controlPlane.hub.service.type }}
+  selector:
+    {{- include "kr.selector" (dict "root" $ "component" "hub") | nindent 4 }}
+  ports:
+    - { name: cells, port: 3410, targetPort: 3410 }
+---
+# The worker's listener: never exposed beyond the release's namespace.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "kr.hubInternal" . }}
+  labels:
+    {{- include "kr.labels" (dict "root" $ "component" "hub") | nindent 4 }}
+spec:
+  selector:
+    {{- include "kr.selector" (dict "root" $ "component" "hub") | nindent 4 }}
+  ports:
+    - { name: internal, port: 3411, targetPort: 3411 }
+---
+# The runtime-worker: Runs, setups and sandboxes (DBOS), the evidence server
+# (3420) and the sandbox and env-session listener (3430).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "kr.worker" . }}-evidence
+  labels:
+    {{- include "kr.labels" (dict "root" $ "component" "worker") | nindent 4 }}
+spec:
+  accessModes: ["ReadWriteOnce"]
+  {{- with .Values.controlPlane.worker.evidence.persistence.storageClass }}
+  storageClassName: {{ . }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.controlPlane.worker.evidence.persistence.size }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "kr.worker" . }}
+  labels:
+    {{- include "kr.labels" (dict "root" $ "component" "worker") | nindent 4 }}
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector:
+    matchLabels:
+      {{- include "kr.selector" (dict "root" $ "component" "worker") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "kr.selector" (dict "root" $ "component" "worker") | nindent 8 }}
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      {{- include "kr.pullSecrets" . | nindent 6 }}
+      securityContext:
+        {{- include "kr.podSecurity" (dict "uid" 1000) | nindent 8 }}
+      initContainers:
+        {{- include "kr.waitForDb" (dict "root" $ "key" "RUNTIME_DATABASE_URL" "what" "the kodus_runtime role (the db-roles Job)") | nindent 8 }}
+      containers:
+        - name: worker
+          image: {{ include "kr.image" (dict "root" $ "name" "worker") }}
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
+          command: ["node", "dist/apps/runtime/worker/main.js"]
+          env:
+            {{- range $k := list "RUNTIME_DATABASE_URL" "RUNTIME_RABBITMQ_URL" "RUNTIME_SECRET_SEAL_KEY" "RUNTIME_EVIDENCE_SIGNING_SECRET" }}
+            - name: {{ $k }}
+              valueFrom: { secretKeyRef: { name: {{ include "kr.fullname" $ }}-env, key: {{ $k }} } }
+            {{- end }}
+            - { name: RUNTIME_RELEASE_VERSION, value: {{ $release | quote }} }
+            - { name: RUNTIME_ENV_DRIVER, value: hub }
+            - { name: RUNTIME_HUB_URL, value: {{ printf "https://%s:3411" (include "kr.hubInternal" .) | quote }} }
+            - { name: RUNTIME_METRICS_PORT, value: "9465" }
+            - { name: RUNTIME_STREAM_STORE, value: postgres }
+            - { name: RUNTIME_TLS_CA, value: /runtime/pki/ca.pem }
+            - { name: RUNTIME_WORKER_TLS_CERT, value: /runtime/pki/worker.pem }
+            - { name: RUNTIME_WORKER_TLS_KEY, value: /runtime/pki/worker.key }
+            - { name: RUNTIME_LLM_GATEWAY_URL, value: {{ .Values.controlPlane.productApiUrl | quote }} }
+            - { name: RUNTIME_GIT_PROVIDER, value: {{ .Values.controlPlane.gitProvider | quote }} }
+            - { name: RUNTIME_GIT_API_BASE, value: {{ .Values.controlPlane.gitApiBase | quote }} }
+            - { name: RUNTIME_EVIDENCE_STORE, value: file }
+            - { name: RUNTIME_EVIDENCE_DIR, value: /data/runtime-evidence }
+            - { name: RUNTIME_EVIDENCE_PORT, value: "3420" }
+            - { name: RUNTIME_EVIDENCE_UPLOAD_URL, value: {{ include "kr.evidenceUrl" . | quote }} }
+            - { name: RUNTIME_ENV_SESSION_PORT, value: "3430" }
+          ports:
+            - { name: evidence, containerPort: 3420 }
+            - { name: sessions, containerPort: 3430 }
+          readinessProbe:
+            tcpSocket: { port: 3430 }
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket: { port: 3430 }
+            initialDelaySeconds: 120
+            periodSeconds: 20
+          securityContext:
+            {{- include "kr.containerSecurity" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.controlPlane.worker.resources | nindent 12 }}
+          volumeMounts:
+            - { name: pki, mountPath: /runtime/pki, readOnly: true }
+            - { name: evidence, mountPath: /data/runtime-evidence }
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: pki
+          secret:
+            secretName: {{ include "kr.fullname" . }}-pki
+            defaultMode: 0440
+            items:
+              {{- range $k := list "ca.pem" "worker.pem" "worker.key" }}
+              - { key: {{ $k }}, path: {{ $k }} }
+              {{- end }}
+        - name: evidence
+          persistentVolumeClaim: { claimName: {{ include "kr.worker" . }}-evidence }
+        - name: tmp
+          emptyDir: { sizeLimit: 512Mi }
+---
+# Sandbox and env sessions (3430): the product's API and worker only.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "kr.worker" . }}
+  labels:
+    {{- include "kr.labels" (dict "root" $ "component" "worker") | nindent 4 }}
+spec:
+  selector:
+    {{- include "kr.selector" (dict "root" $ "component" "worker") | nindent 4 }}
+  ports:
+    - { name: sessions, port: 3430, targetPort: 3430 }
+---
+# Evidence (3420): cells upload, browsers fetch signed URLs; put it behind
+# your ingress for browsers.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "kr.evidence" . }}
+  labels:
+    {{- include "kr.labels" (dict "root" $ "component" "worker") | nindent 4 }}
+spec:
+  selector:
+    {{- include "kr.selector" (dict "root" $ "component" "worker") | nindent 4 }}
+  ports:
+    - { name: evidence, port: 3420, targetPort: 3420 }
+{{- end }}

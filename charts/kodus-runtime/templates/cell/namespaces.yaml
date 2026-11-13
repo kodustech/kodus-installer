@@ -1,0 +1,30 @@
+{{- if .Values.cell.enabled }}
+{{- if eq .Values.cell.namespace .Values.cell.sandboxNamespace }}
+{{- fail "cell.namespace and cell.sandboxNamespace must differ: claim pods get a namespace with nothing else in it" }}
+{{- end }}
+# The cell's two namespaces, made here so their Pod Security labels are the
+# chart's and nobody else's: the cell can create pods in the sandbox one, and
+# a principal that labels a namespace chooses its Pod Security level.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ .Values.cell.namespace }}
+  labels:
+    {{- include "kr.labels" (dict "root" $ "component" "cell") | nindent 4 }}
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/audit: restricted
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ .Values.cell.sandboxNamespace }}
+  labels:
+    {{- include "kr.labels" (dict "root" $ "component" "sandboxes") | nindent 4 }}
+    kodus.io/sandboxes: "true"
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/audit: restricted
+{{- end }}

@@ -1,0 +1,61 @@
+suite: Control plane
+values:
+  - values/ci.yaml
+release:
+  name: kr
+  namespace: kodus
+tests:
+  - it: keeps the state and PKI on uninstall while the data stays
+    templates: [templates/control-plane/secrets.yaml]
+    asserts:
+      - equal: { path: "metadata.annotations[\"helm.sh/resource-policy\"]", value: keep }
+        documentIndex: 0
+      - equal: { path: "metadata.annotations[\"helm.sh/resource-policy\"]", value: keep }
+        documentIndex: 1
+  - it: leaves nothing when the data goes with the release
+    templates:
+      - templates/control-plane/secrets.yaml
+      - templates/control-plane/jobs.yaml
+    set:
+      controlPlane.purgeDataOnUninstall: true
+    asserts:
+      - notExists: { path: metadata.annotations }
+        template: templates/control-plane/secrets.yaml
+        documentIndex: 0
+      - equal: { path: "metadata.annotations[\"helm.sh/hook\"]", value: pre-delete }
+        template: templates/control-plane/jobs.yaml
+        documentSelector: { path: metadata.name, value: kr-kodus-runtime-db-purge }
+  - it: gives the hub only the database, the broker and the secrets reader
+    templates: [templates/control-plane/hub-worker.yaml]
+    documentIndex: 0
+    asserts:
+      - isKind: { of: Deployment }
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content: { name: RUNTIME_SECRET_SEAL_KEY, valueFrom: { secretKeyRef: { name: kr-kodus-runtime-env, key: RUNTIME_SECRET_SEAL_KEY } } }
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: { name: RUNTIME_TLS_WORKER_CA, value: /runtime/pki/worker-ca.pem }
+  - it: lets only the runtime-worker reach the hub's internal listener
+    templates: [templates/control-plane/networkpolicy.yaml]
+    asserts:
+      - equal:
+          path: spec.ingress[1]
+          value:
+            from: [{ podSelector: { matchLabels: { app.kubernetes.io/name: kodus-runtime, app.kubernetes.io/instance: kr, app.kubernetes.io/component: worker } } }]
+            ports: [{ protocol: TCP, port: 3411 }]
+        documentIndex: 0
+  - it: requires the release version DBOS resumes workflows by
+    templates: [templates/control-plane/hub-worker.yaml]
+    set:
+      controlPlane.releaseVersion: ""
+    asserts:
+      - failedTemplate:
+          errorPattern: "controlPlane.releaseVersion is required"
+  - it: runs OpenBao without IPC_LOCK, restricted
+    templates: [templates/control-plane/openbao.yaml]
+    documentSelector: { path: kind, value: Deployment }
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].securityContext
+          value: { allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, runAsNonRoot: true, capabilities: { drop: ["ALL"] } }

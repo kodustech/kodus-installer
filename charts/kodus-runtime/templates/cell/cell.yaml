@@ -1,0 +1,332 @@
+{{- if .Values.cell.enabled }}
+{{- $c := .Values.cell }}
+{{- $ns := $c.namespace }}
+{{- $cellImage := include "kr.image" (dict "root" $ "name" "cell") }}
+{{- $hubCA := $c.hub.caPem }}
+{{- if not $hubCA }}
+{{- if not .Values.controlPlane.enabled }}{{- fail "cell.hub.caPem is required when this release runs no control plane" }}{{- end }}
+{{- $hubCA = include "kr.pki" (dict "root" $ "key" "ca.pem") }}
+{{- end }}
+{{- $bao := dict "ca" $c.openbao.caPem "role" $c.openbao.injectorRoleId "secret" $c.openbao.injectorSecretId }}
+{{- if and .Values.controlPlane.enabled (not $c.openbao.caPem) }}
+{{- $bao = dict "ca" (include "kr.pki" (dict "root" $ "key" "openbao-ca.pem")) "role" (include "kr.get" (dict "root" $ "key" "injectorRoleId")) "secret" (include "kr.get" (dict "root" $ "key" "injectorSecretId")) }}
+{{- end }}
+{{- if or (not $bao.ca) (not $bao.role) (not $bao.secret) }}
+{{- fail "cell.openbao.caPem, injectorRoleId and injectorSecretId are required when this release runs no control plane" }}
+{{- end }}
+{{- $state := "/var/lib/kodus-cell" }}
+# The cell's settings: paths only, no secret (cmd/cell config).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "kr.cell" . }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "kr.labels" (dict "root" $ "component" "cell") | nindent 4 }}
+data:
+  cell.yaml: |
+    hubUrl: {{ include "kr.hubUrl" . }}
+    driver: k8s-sandbox
+    regions: [self-hosted]
+    workDir: {{ $state }}/work
+    stateDir: {{ $state }}/state
+    gitApi: {{ $c.gitApi }}
+    metricsAddr: 127.0.0.1:9466
+    autoRenew: true
+    tls:
+      ca: {{ $state }}/identity/ca.pem
+      localCa: {{ $state }}/etc/local-ca.pem
+      cert: {{ $state }}/identity/cert.pem
+      key: {{ $state }}/identity/key.pem
+      issuer: {{ $state }}/identity/issuer.pem
+  hub-ca.pem: |
+    {{- $hubCA | nindent 4 }}
+---
+# The one-time registration token. Spent at the first start; the cell keeps
+# its identity on its volume.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "kr.cell" . }}-registration
+  namespace: {{ $ns }}
+  labels:
+    {{- include "kr.labels" (dict "root" $ "component" "cell") | nindent 4 }}
+type: Opaque
+{{- if and (not $c.registration.existingSecret) $c.registration.token }}
+stringData:
+  {{ $c.registration.key }}: {{ $c.registration.token | quote }}
+{{- else }}
+data: {}
+{{- end }}
+---
+# OpenBao for the injector: its CA and the injector's read-only AppRole.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "kr.cell" . }}-openbao
+  namespace: {{ $ns }}
+  labels:
+    {{- include "kr.labels" (dict "root" $ "component" "cell") | nindent 4 }}
+type: Opaque
+data:
+  ca.pem: {{ $bao.ca | b64enc }}
+  injector-role-id: {{ $bao.role | b64enc }}
+  injector-secret-id: {{ $bao.secret | b64enc }}
+---
+# The identity cell register wrote, the local PKI, the work directory.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "kr.cell" . }}-state
+  namespace: {{ $ns }}
+  labels:
+    {{- include "kr.labels" (dict "root" $ "component" "cell") | nindent 4 }}
+spec:
+  accessModes: ["ReadWriteOnce"]
+  {{- with $c.persistence.storageClass }}
+  storageClassName: {{ . }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ $c.persistence.size }}
+---
+# The claims' only DNS server and way out: the egress proxy and resolver of
+# the cell pod, on non-root ports.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "kr.cellEgress" . }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "kr.labels" (dict "root" $ "component" "cell") | nindent 4 }}
+spec:
+  selector:
+    {{- include "kr.selector" (dict "root" $ "component" "cell") | nindent 4 }}
+  ports:
+    - { name: dns, protocol: UDP, port: 53, targetPort: 5353 }
+    - { name: dns-tcp, protocol: TCP, port: 53, targetPort: 5353 }
+    - { name: http, protocol: TCP, port: 80, targetPort: 8080 }
+    - { name: https, protocol: TCP, port: 443, targetPort: 8443 }
+---
+# The cell host as one pod (kodus-ai docs/runtime/kubernetes.md decision 2):
+# register and the local PKI first, the egress proxy and resolver and the
+# injector as native sidecars (their control ports on the pod's loopback, as
+# on a cell host), then the agent. Each mounts only its own directory of the
+# volume; only the agent gets the service account token.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "kr.cell" . }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "kr.labels" (dict "root" $ "component" "cell") | nindent 4 }}
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector:
+    matchLabels:
+      {{- include "kr.selector" (dict "root" $ "component" "cell") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "kr.selector" (dict "root" $ "component" "cell") | nindent 8 }}
+      annotations:
+        checksum/config: {{ printf "%s%s" (include "kr.hubUrl" .) $hubCA | sha256sum }}
+    spec:
+      serviceAccountName: {{ include "kr.cell" . }}
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      terminationGracePeriodSeconds: 120
+      {{- include "kr.pullSecrets" . | nindent 6 }}
+      securityContext:
+        {{- include "kr.podSecurity" (dict "uid" 65532) | nindent 8 }}
+      {{- with $c.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $c.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      initContainers:
+        - name: register
+          image: {{ $cellImage }}
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
+          command:
+            - /usr/local/bin/cell
+            - register
+            - -if-unregistered
+            - -hub
+            - {{ include "kr.hubUrl" . | replace "wss://" "https://" | trimSuffix "/cells" | quote }}
+            - -ca
+            - /etc/kodus/cell-config/hub-ca.pem
+            - -out
+            - {{ $state }}/identity
+          env:
+            - name: KODUS_CELL_REGISTRATION_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ default (printf "%s-registration" (include "kr.cell" .)) $c.registration.existingSecret }}
+                  key: {{ $c.registration.key }}
+                  optional: true
+          securityContext:
+            {{- include "kr.containerSecurity" . | nindent 12 }}
+          resources:
+            requests: { cpu: 10m, memory: 32Mi }
+            limits: { memory: 64Mi }
+          volumeMounts:
+            - { name: state, mountPath: {{ $state }} }
+            - { name: config, mountPath: /etc/kodus/cell-config, readOnly: true }
+        - name: local-pki
+          image: {{ $cellImage }}
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
+          command:
+            - /usr/local/bin/cell
+            - local-pki
+            - -dir
+            - {{ $state }}/etc
+            - -identity
+            - {{ $state }}/identity
+            - -copy
+            - injector/openbao-ca.pem=/run/kodus/openbao/ca.pem
+            - -copy
+            - injector/openbao-injector-role-id=/run/kodus/openbao/injector-role-id
+            - -copy
+            - injector/openbao-injector-secret-id=/run/kodus/openbao/injector-secret-id
+          securityContext:
+            {{- include "kr.containerSecurity" . | nindent 12 }}
+          resources:
+            requests: { cpu: 10m, memory: 32Mi }
+            limits: { memory: 64Mi }
+          volumeMounts:
+            - { name: state, mountPath: {{ $state }} }
+            - { name: openbao, mountPath: /run/kodus/openbao, readOnly: true }
+        - name: egress
+          image: {{ $cellImage }}
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
+          restartPolicy: Always
+          command:
+            - /usr/local/bin/egress
+            - -listen-tls
+            - ":8443"
+            - -listen-http
+            - ":8080"
+            - -dns-listen
+            - ":5353"
+            - -control
+            - 127.0.0.1:9443
+            - -upstream-dns
+            - resolv.conf
+            - -transparent=false
+            - -injector-addr
+            - 127.0.0.1:8444
+          ports:
+            - { name: dns, containerPort: 5353, protocol: UDP }
+            - { name: dns-tcp, containerPort: 5353, protocol: TCP }
+            - { name: http, containerPort: 8080 }
+            - { name: https, containerPort: 8443 }
+          startupProbe:
+            tcpSocket: { port: 8443 }
+            periodSeconds: 2
+            failureThreshold: 60
+          securityContext:
+            {{- include "kr.containerSecurity" . | nindent 12 }}
+          resources:
+            {{- toYaml $c.resources.egress | nindent 12 }}
+          volumeMounts:
+            - { name: state, mountPath: /etc/kodus/egress, subPath: etc/egress, readOnly: true }
+        - name: injector
+          image: {{ $cellImage }}
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
+          restartPolicy: Always
+          command:
+            - /usr/local/bin/injector
+            - -listen
+            - 127.0.0.1:8444
+            - -trusted-proxies
+            - 127.0.0.1
+            - -control
+            - 127.0.0.1:9445
+            - -openbao-addr
+            - {{ include "kr.openbaoAddr" . | quote }}
+            - -openbao-ca
+            - /etc/kodus/injector/openbao-ca.pem
+            - -openbao-role-id-file
+            - /etc/kodus/injector/openbao-injector-role-id
+            - -openbao-secret-id-file
+            - /etc/kodus/injector/openbao-injector-secret-id
+          securityContext:
+            {{- include "kr.containerSecurity" . | nindent 12 }}
+          resources:
+            {{- toYaml $c.resources.injector | nindent 12 }}
+          volumeMounts:
+            - { name: state, mountPath: /etc/kodus/injector, subPath: etc/injector, readOnly: true }
+      containers:
+        - name: cell
+          image: {{ $cellImage }}
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
+          command:
+            - /usr/local/bin/cell
+            - -config
+            - /etc/kodus/cell-config/cell.yaml
+            - -driver
+            - k8s-sandbox
+            - -k8s-namespace
+            - {{ $c.sandboxNamespace }}
+            - -k8s-runtime-class
+            - {{ $c.runtimeClass.name }}
+            - -k8s-kernel-must-contain
+            - {{ $c.runtimeClass.kernelMustContain | quote }}
+            - -k8s-holder-image
+            - {{ include "kr.image" (dict "root" $ "name" "holder") }}
+            - -k8s-sandbox-image
+            - {{ include "kr.image" (dict "root" $ "name" "sandbox") }}
+            - -k8s-probe-image
+            - {{ $cellImage }}
+            - -k8s-egress-service
+            - {{ printf "%s.%s.svc" (include "kr.cellEgress" .) $ns }}
+            - -k8s-max-memory-mb
+            - {{ $c.maxClaim.memoryMb | quote }}
+            - -k8s-max-cpus
+            - {{ $c.maxClaim.cpus | quote }}
+            - -egress-control
+            - egress=https://127.0.0.1:9443,resolver=https://127.0.0.1:9443,injector=https://127.0.0.1:9445
+            - -policy-key
+            - {{ $state }}/etc/policy.key.pem
+            {{- with $c.egressAllow }}
+            - -egress-allow
+            - {{ join "," . | quote }}
+            {{- end }}
+            - -sandbox-pool
+            - {{ $c.sandbox.pool | quote }}
+            - -sandbox-memory-mb
+            - {{ $c.sandbox.memoryMb | quote }}
+            - -sandbox-cpus
+            - {{ $c.sandbox.cpus | quote }}
+          securityContext:
+            {{- include "kr.containerSecurity" . | nindent 12 }}
+          resources:
+            {{- toYaml $c.resources.agent | nindent 12 }}
+          volumeMounts:
+            - { name: state, mountPath: {{ $state }} }
+            - { name: config, mountPath: /etc/kodus/cell-config, readOnly: true }
+            - { name: kube-api-access, mountPath: /var/run/secrets/kubernetes.io/serviceaccount, readOnly: true }
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: state
+          persistentVolumeClaim: { claimName: {{ include "kr.cell" . }}-state }
+        - name: config
+          configMap: { name: {{ include "kr.cell" . }} }
+        - name: openbao
+          secret: { secretName: {{ include "kr.cell" . }}-openbao, defaultMode: 0440 }
+        - name: tmp
+          emptyDir: { sizeLimit: 256Mi }
+        # The agent's token only (the pod mounts none): the sidecars facing
+        # claim traffic never hold it.
+        - name: kube-api-access
+          projected:
+            sources:
+              - serviceAccountToken: { path: token, expirationSeconds: 3607 }
+              - configMap: { name: kube-root-ca.crt, items: [{ key: ca.crt, path: ca.crt }] }
+              - downwardAPI: { items: [{ path: namespace, fieldRef: { fieldPath: metadata.namespace } }] }
+{{- end }}

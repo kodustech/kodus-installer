@@ -1,0 +1,21 @@
+suite: Images by digest
+templates:
+  - templates/cell/cell.yaml
+values:
+  - values/ci.yaml
+release:
+  name: kr
+  namespace: kodus
+tests:
+  - it: refuses an image without a digest, naming the value
+    set:
+      images.cell: registry.example/kodus-runtime-cell:latest
+    asserts:
+      - failedTemplate:
+          errorPattern: "images.cell must be pinned by digest"
+  - it: refuses a missing image and says none is published yet
+    set:
+      images.sandbox: ""
+    asserts:
+      - failedTemplate:
+          errorPattern: "images.sandbox is required"

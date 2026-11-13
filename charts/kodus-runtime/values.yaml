@@ -1,0 +1,178 @@
+# Kody Runtime on Kubernetes (docs/runtime.md, "Kubernetes"; design in
+# kodus-ai docs/runtime/kubernetes.md). Two halves, each optional:
+#   controlPlane  hub, runtime-worker and OpenBao, next to the product's
+#                 Postgres and RabbitMQ (in this release's namespace)
+#   cell          one cell: the agent, its egress proxy and resolver and its
+#                 injector in one pod, and the sandbox namespace its claim
+#                 pods run in, on an isolated RuntimeClass
+# Installing the cell needs a cluster admin: it creates two namespaces, a
+# ValidatingAdmissionPolicy and, optionally, the RuntimeClass.
+
+nameOverride: ""
+fullnameOverride: ""
+
+# Every image by digest: a reference without @sha256: fails the render. No
+# Runtime image is published yet (runtime/images.lock): build them from a
+# kodus-ai checkout and push them to a registry you run.
+images:
+  hub: ""        # kodus-runtime-hub (docker-bake.hcl target runtime-hub)
+  worker: ""     # kodus-runtime-worker
+  cell: ""       # kodus-runtime-cell (apps/runtime-cell/Dockerfile): agent, egress, injector, reaper, probe
+  sandbox: ""    # the code sandbox's tool image with the guest agent (runtime-sandbox)
+  holder: docker.io/library/alpine:3.20@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc
+  openbao: docker.io/openbao/openbao:2.7.2@sha256:5046911075e137e154ce49ab051502f4ec7cf367d484ae4a4dce665d9b90561f
+  # psql for the database jobs and the waits.
+  psql: docker.io/library/postgres:16-alpine@sha256:f377d590e5474681d4d7838635031a2b50647923b7abfa803ce9b5ff35d5c663
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+# The product's Postgres (the Compose install's db_kodus_postgres, or an
+# external one). The admin role creates the Runtime's roles and databases
+# once (runtime/sql/runtime-roles.sql); it needs CREATEROLE and CREATEDB.
+postgres:
+  host: ""
+  port: 5432
+  productDatabase: kodus_db
+  sslMode: disable
+  admin:
+    existingSecret: ""   # REQUIRED with controlPlane.enabled
+    usernameKey: username
+    passwordKey: password
+
+# The product's RabbitMQ. The admin user creates the kodus_runtime user and
+# its permissions through the management API (docs/runtime.md, "Network and
+# permissions reference"); manageUser: false when your broker is managed
+# elsewhere, and set existingUserSecret to the kodus_runtime password.
+rabbitmq:
+  host: ""
+  port: 5672
+  managementPort: 15672
+  scheme: amqp
+  vhost: kodus-ai
+  manageUser: true
+  admin:
+    existingSecret: ""
+    usernameKey: username
+    passwordKey: password
+
+controlPlane:
+  enabled: true
+  # Immutable per image: DBOS resumes only workflows of the same release.
+  releaseVersion: ""     # REQUIRED with controlPlane.enabled
+  gitProvider: github    # must equal every cell's -git-api
+  gitApiBase: https://api.github.com
+  # The product API (the LLM gateway, org BYOK) as the runtime-worker reaches it.
+  productApiUrl: http://kodus-api:3001
+  hub:
+    # Cells dial wss://<host>:3410/cells. LoadBalancer or NodePort to reach
+    # cells outside the cluster; add the names they use to externalHosts
+    # (the hub certificate carries them).
+    service:
+      type: ClusterIP
+      annotations: {}
+    externalHosts: []
+    resources:
+      requests: { cpu: 100m, memory: 256Mi }
+      limits: { memory: 768Mi }
+  worker:
+    resources:
+      requests: { cpu: 200m, memory: 512Mi }
+      limits: { memory: 1536Mi }
+    evidence:
+      # Where cells PUT evidence and browsers fetch signed URLs:
+      # https://<DNS name>, or http://<one-label name>. Empty: http://<release>-evidence,
+      # which only a pod in this namespace resolves (a Kubernetes cell runs no
+      # Run, so it uploads nothing yet).
+      publicUrl: ""
+      persistence:
+        size: 10Gi
+        storageClass: ""
+  openbao:
+    resources:
+      requests: { cpu: 50m, memory: 128Mi }
+      limits: { memory: 256Mi }
+    # The names in OpenBao's certificate besides the in-cluster ones (a cell
+    # host outside the cluster).
+    externalHosts: []
+  # Remove the Runtime's databases and roles from Postgres when the release is
+  # uninstalled (runtime/sql/runtime-uninstall.sql): every Run, every org secret.
+  # Off by default; take a backup first (scripts/runtime/backup.sh).
+  purgeDataOnUninstall: false
+  # The product (charts/kodus) reads <release>-product (env) through
+  # services.{api,worker}.extraEnvFrom and <release>-product-files (OpenBao's
+  # CA and the API's AppRole) through services.api.extraVolumes.
+  product:
+    # runtime | unset: move the product's code sandbox to the cell.
+    sandboxProvider: unset
+
+cell:
+  enabled: true
+  # The cell pod (agent, egress, injector) and the reaper.
+  namespace: kodus-runtime-cell
+  # Only claim pods: Pod Security restricted, the admission policy, default-deny
+  # NetworkPolicies, the ResourceQuota and the LimitRange below.
+  sandboxNamespace: kodus-runtime-sandboxes
+  # The hub this cell registers with. Empty: this release's control plane.
+  hub:
+    url: ""          # wss://<host>:3410/cells
+    caPem: ""        # the hub's CA (PEM); empty: this release's
+  # The one-time registration token (Settings, Cells, or scripts/runtime/cell-token.sh),
+  # single use, 15 minutes. Used once: the identity stays on the cell's volume.
+  registration:
+    token: ""
+    existingSecret: ""
+    key: token
+  # OpenBao for the injector. Empty: this release's.
+  openbao:
+    addr: ""
+    caPem: ""
+    injectorRoleId: ""
+    injectorSecretId: ""
+  runtimeClass:
+    # GKE Sandbox: gvisor; kata-deploy: kata-qemu-runtime-rs (and set
+    # kernelMustContain ""). helm install fails when the class is absent and
+    # create is false.
+    name: gvisor
+    create: false
+    handler: runsc
+    nodeSelector: {}
+    tolerations: []
+    # What the preflight probe's kernel must name under the class.
+    kernelMustContain: gvisor
+  gitApi: https://api.github.com
+  # Hosts every claim may reach, besides the ones each claim is given.
+  egressAllow: []
+  sandbox:
+    pool: 0
+    memoryMb: 2048
+    cpus: 2
+  maxClaim:
+    memoryMb: 8192
+    cpus: 4
+  # The sandbox namespace's caps: the cell's aggregate size.
+  quota:
+    pods: 20
+    cpu: "16"
+    memory: 32Gi
+  persistence:
+    size: 1Gi
+    storageClass: ""
+  resources:
+    agent:
+      requests: { cpu: 100m, memory: 128Mi }
+      limits: { memory: 512Mi }
+    egress:
+      requests: { cpu: 50m, memory: 64Mi }
+      limits: { memory: 256Mi }
+    injector:
+      requests: { cpu: 50m, memory: 64Mi }
+      limits: { memory: 128Mi }
+  reaper:
+    schedule: "*/5 * * * *"
+  admissionPolicy:
+    enabled: true
+  nodeSelector: {}
+  tolerations: []
+
+networkPolicy:
+  enabled: true

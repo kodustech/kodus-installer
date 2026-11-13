@@ -1,0 +1,152 @@
+{{- if .Values.controlPlane.enabled }}
+{{- $name := include "kr.openbao" . }}
+# OpenBao, the org secrets' store: upstream, unmodified (MPL-2.0), its own
+# service, storage in the product's Postgres (database kodus_openbao), static
+# unseal key, self-initialized once (files/openbao/initialize.hcl). The
+# Compose config (runtime/openbao/config/openbao.hcl) with two changes for
+# Kubernetes: the in-cluster address, and disable_mlock (IPC_LOCK is not
+# allowed under Pod Security restricted; nodes run without swap).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "kr.labels" (dict "root" $ "component" "openbao") | nindent 4 }}
+data:
+  openbao.hcl: |
+    ui            = false
+    api_addr      = "https://{{ $name }}.{{ .Release.Namespace }}.svc:8200"
+    cluster_addr  = "https://{{ $name }}.{{ .Release.Namespace }}.svc:8201"
+    log_level     = "info"
+    disable_mlock = true
+
+    # The connection is BAO_PG_CONNECTION_URL (the Secret <release>-env).
+    storage "postgresql" {
+      ha_enabled = "false"
+    }
+
+    listener "tcp" {
+      address         = "0.0.0.0:8200"
+      cluster_address = "0.0.0.0:8201"
+      tls_cert_file   = "/openbao/secrets/tls.pem"
+      tls_key_file    = "/openbao/secrets/tls.key"
+      tls_min_version = "tls12"
+    }
+
+    seal "static" {
+      current_key_id = "kodus-runtime-1"
+      current_key    = "file:///openbao/secrets/unseal.key"
+    }
+
+    audit "file" "to-stdout" {
+      description = "OpenBao audit log"
+      options = {
+        file_path = "stdout"
+      }
+    }
+  initialize.hcl: |
+    {{- .Files.Get "files/openbao/initialize.hcl" | nindent 4 }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $name }}-policies
+  labels:
+    {{- include "kr.labels" (dict "root" $ "component" "openbao") | nindent 4 }}
+data:
+  {{- range $path, $_ := .Files.Glob "files/openbao/policies/*.hcl" }}
+  {{ base $path }}: |
+    {{- $.Files.Get $path | nindent 4 }}
+  {{- end }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "kr.labels" (dict "root" $ "component" "openbao") | nindent 4 }}
+type: Opaque
+data:
+  tls.pem: {{ include "kr.pki" (dict "root" $ "key" "openbao.pem") | b64enc }}
+  tls.key: {{ include "kr.pki" (dict "root" $ "key" "openbao.key") | b64enc }}
+  unseal.key: {{ include "kr.get" (dict "root" $ "key" "unsealKey") }}
+  {{- range $k, $f := dict "apiRoleId" "api-role-id" "apiSecretId" "api-secret-id" "injectorRoleId" "injector-role-id" "injectorSecretId" "injector-secret-id" }}
+  {{ $f }}: {{ include "kr.get" (dict "root" $ "key" $k) | b64enc }}
+  {{- end }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "kr.labels" (dict "root" $ "component" "openbao") | nindent 4 }}
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector:
+    matchLabels:
+      {{- include "kr.selector" (dict "root" $ "component" "openbao") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "kr.selector" (dict "root" $ "component" "openbao") | nindent 8 }}
+      annotations:
+        checksum/config: {{ .Files.Get "files/openbao/initialize.hcl" | sha256sum }}
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      {{- include "kr.pullSecrets" . | nindent 6 }}
+      securityContext:
+        {{- include "kr.podSecurity" (dict "uid" 1000) | nindent 8 }}
+      initContainers:
+        {{- include "kr.waitForDb" (dict "root" $ "key" "OPENBAO_DATABASE_URL" "what" "the openbao role (the db-roles Job)") | nindent 8 }}
+      containers:
+        - name: openbao
+          image: {{ include "kr.image" (dict "root" $ "name" "openbao") }}
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
+          command: ["bao", "server", "-config=/openbao/config"]
+          env:
+            - name: BAO_PG_CONNECTION_URL
+              valueFrom: { secretKeyRef: { name: {{ include "kr.fullname" . }}-env, key: OPENBAO_DATABASE_URL } }
+            - { name: HOME, value: /tmp }
+          ports:
+            - { name: api, containerPort: 8200 }
+          readinessProbe:
+            # 200 only when active and unsealed.
+            httpGet: { path: /v1/sys/health, port: 8200, scheme: HTTPS }
+            periodSeconds: 5
+          livenessProbe:
+            tcpSocket: { port: 8200 }
+            initialDelaySeconds: 30
+            periodSeconds: 20
+          securityContext:
+            {{- include "kr.containerSecurity" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.controlPlane.openbao.resources | nindent 12 }}
+          volumeMounts:
+            - { name: config, mountPath: /openbao/config, readOnly: true }
+            - { name: policies, mountPath: /openbao/policies, readOnly: true }
+            - { name: secrets, mountPath: /openbao/secrets, readOnly: true }
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: config
+          configMap: { name: {{ $name }} }
+        - name: policies
+          configMap: { name: {{ $name }}-policies }
+        - name: secrets
+          secret: { secretName: {{ $name }}, defaultMode: 0440 }
+        - name: tmp
+          emptyDir: { sizeLimit: 64Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "kr.labels" (dict "root" $ "component" "openbao") | nindent 4 }}
+spec:
+  selector:
+    {{- include "kr.selector" (dict "root" $ "component" "openbao") | nindent 4 }}
+  ports:
+    - { name: api, port: 8200, targetPort: 8200 }
+{{- end }}

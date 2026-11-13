@@ -1,0 +1,166 @@
+{{- if .Values.controlPlane.enabled }}
+{{- $admin := .Values.postgres.admin }}
+{{- $_ := include "kr.required" (dict "name" "postgres.admin.existingSecret" "value" $admin.existingSecret) }}
+# The SQL and the script the Compose install's runtime-init runs (files/ is
+# a copy of runtime/sql and scripts/runtime/db-init.sh; scripts/test-chart.sh
+# checks they match).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "kr.fullname" . }}-db
+  labels:
+    {{- include "kr.labels" (dict "root" $ "component" "db") | nindent 4 }}
+data:
+  db-init.sh: |
+    {{- .Files.Get "files/db-init.sh" | nindent 4 }}
+  {{- range $path, $_ := .Files.Glob "files/sql/*.sql" }}
+  {{ base $path }}: |
+    {{- $.Files.Get $path | nindent 4 }}
+  {{- end }}
+---
+# The Runtime's Postgres roles and databases (runtime-roles.sql,
+# openbao-database.sql). Idempotent; the hub, the worker and OpenBao wait for
+# it with an init container.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "kr.fullname" . }}-db-roles-{{ .Release.Revision }}
+  labels:
+    {{- include "kr.labels" (dict "root" $ "component" "db") | nindent 4 }}
+spec:
+  backoffLimit: 30
+  template:
+    metadata:
+      labels:
+        {{- include "kr.selector" (dict "root" $ "component" "db") | nindent 8 }}
+    {{- include "kr.dbJobPod" (dict "root" $ "mode" "roles" "script" "bash /runtime/db-init.sh") | nindent 4 }}
+---
+# The readers' grants, once the hub migrated the Runtime tables and the
+# product migrated runtime_secrets (db-init.sh exits 3 while either is
+# missing): retried for 30 minutes.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "kr.fullname" . }}-db-grants-{{ .Release.Revision }}
+  labels:
+    {{- include "kr.labels" (dict "root" $ "component" "db") | nindent 4 }}
+spec:
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        {{- include "kr.selector" (dict "root" $ "component" "db") | nindent 8 }}
+    {{- include "kr.dbJobPod" (dict "root" $ "mode" "grants" "script" "for i in $(seq 1 180); do bash /runtime/db-init.sh && exit 0; rc=$?; [ \"$rc\" = 3 ] || exit \"$rc\"; sleep 10; done; exit 1") | nindent 4 }}
+{{- if .Values.controlPlane.purgeDataOnUninstall }}
+---
+# helm uninstall with purgeDataOnUninstall: the Runtime database, the vault
+# and the roles go (runtime-uninstall.sql), then this Job.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "kr.fullname" . }}-db-purge
+  labels:
+    {{- include "kr.labels" (dict "root" $ "component" "db") | nindent 4 }}
+  annotations:
+    helm.sh/hook: pre-delete
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        {{- include "kr.selector" (dict "root" $ "component" "db") | nindent 8 }}
+    {{- include "kr.dbJobPod" (dict "root" $ "mode" "uninstall" "script" "bash /runtime/db-init.sh") | nindent 4 }}
+{{- end }}
+{{- if .Values.rabbitmq.manageUser }}
+{{- $mq := .Values.rabbitmq.admin }}
+{{- $_ := include "kr.required" (dict "name" "rabbitmq.admin.existingSecret (or rabbitmq.manageUser false)" "value" $mq.existingSecret) }}
+---
+# The kodus_runtime user on the product's vhost, through the management API
+# (the permissions docs/runtime.md lists). Node from the worker image.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "kr.fullname" . }}-mq
+  labels:
+    {{- include "kr.labels" (dict "root" $ "component" "mq") | nindent 4 }}
+data:
+  mq-user.js: |
+    'use strict';
+    const base = `http://${process.env.MQ_HOST}:${process.env.MQ_MGMT_PORT}/api`;
+    const vhost = encodeURIComponent(process.env.MQ_VHOST);
+    const auth = 'Basic ' + Buffer.from(`${process.env.MQ_ADMIN_USER}:${process.env.MQ_ADMIN_PASSWORD}`).toString('base64');
+    const put = async (path, body) => {
+      const r = await fetch(base + path, { method: 'PUT', headers: { authorization: auth, 'content-type': 'application/json' }, body: JSON.stringify(body) });
+      if (r.status >= 300) throw new Error(`${path}: ${r.status} ${(await r.text()).slice(0, 200)}`);
+    };
+    const q = 'workflow\\.jobs\\.runtime_(run|control)\\.queue';
+    (async () => {
+      for (let i = 0; ; i++) {
+        try {
+          await put('/users/kodus_runtime', { password: process.env.MQ_RUNTIME_PASSWORD, tags: '' });
+          await put(`/permissions/${vhost}/kodus_runtime`, {
+            configure: `^(${q}|amq\\.gen-.*)$`,
+            write: `^(workflow\\.exchange|workflow\\.exchange\\.runtime_run_retry|workflow\\.exchange\\.dlx|${q}|amq\\.gen-.*)$`,
+            read: `^(workflow\\.exchange|${q}|amq\\.gen-.*)$`,
+          });
+          await put(`/topic-permissions/${vhost}/kodus_runtime`, {
+            exchange: 'workflow.exchange',
+            write: '^workflow\\.jobs\\.created\\.RUNTIME_PUBLISH$',
+            read: '^workflow\\.jobs\\.(\\*|created)\\.RUNTIME_(RUN|CONTROL)$',
+          });
+          console.log('kodus_runtime user and permissions set');
+          return;
+        } catch (e) {
+          if (i >= 60) throw e;
+          console.log(`waiting for the RabbitMQ management API: ${e.message}`);
+          await new Promise((r) => setTimeout(r, 5000));
+        }
+      }
+    })().catch((e) => { console.error(e.message); process.exit(1); });
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "kr.fullname" . }}-mq-user-{{ .Release.Revision }}
+  labels:
+    {{- include "kr.labels" (dict "root" $ "component" "mq") | nindent 4 }}
+spec:
+  backoffLimit: 5
+  template:
+    metadata:
+      labels:
+        {{- include "kr.selector" (dict "root" $ "component" "mq") | nindent 8 }}
+    spec:
+      restartPolicy: OnFailure
+      automountServiceAccountToken: false
+      {{- include "kr.pullSecrets" . | nindent 6 }}
+      securityContext:
+        {{- include "kr.podSecurity" (dict "uid" 1000) | nindent 8 }}
+      containers:
+        - name: mq-user
+          image: {{ include "kr.image" (dict "root" $ "name" "worker") }}
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
+          command: ["node", "/runtime/mq-user.js"]
+          env:
+            - { name: MQ_HOST, value: {{ .Values.rabbitmq.host | quote }} }
+            - { name: MQ_MGMT_PORT, value: {{ .Values.rabbitmq.managementPort | quote }} }
+            - { name: MQ_VHOST, value: {{ .Values.rabbitmq.vhost | quote }} }
+            - name: MQ_ADMIN_USER
+              valueFrom: { secretKeyRef: { name: {{ $mq.existingSecret }}, key: {{ $mq.usernameKey }} } }
+            - name: MQ_ADMIN_PASSWORD
+              valueFrom: { secretKeyRef: { name: {{ $mq.existingSecret }}, key: {{ $mq.passwordKey }} } }
+            - name: MQ_RUNTIME_PASSWORD
+              valueFrom: { secretKeyRef: { name: {{ include "kr.fullname" . }}-env, key: RUNTIME_MQ_PASSWORD } }
+          securityContext:
+            {{- include "kr.containerSecurity" . | nindent 12 }}
+          resources:
+            requests: { cpu: 10m, memory: 64Mi }
+            limits: { memory: 256Mi }
+          volumeMounts:
+            - { name: mq, mountPath: /runtime/mq-user.js, subPath: mq-user.js, readOnly: true }
+      volumes:
+        - name: mq
+          configMap: { name: {{ include "kr.fullname" . }}-mq }
+{{- end }}
+{{- end }}

@@ -1,0 +1,56 @@
+{{- if .Values.cell.enabled }}
+{{- $c := .Values.cell }}
+# Destroys this cell's pods past kodus:hard-expires with its own identity,
+# whatever happens to the agent (the kubelet's activeDeadlineSeconds stops
+# them; this removes them). The cell id is the CN of the identity on the
+# cell's volume, read-only, on the cell pod's node (the volume is RWO).
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "kr.cell" . }}-reaper
+  namespace: {{ $c.namespace }}
+  labels:
+    {{- include "kr.labels" (dict "root" $ "component" "reaper") | nindent 4 }}
+spec:
+  schedule: {{ $c.reaper.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 1
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      template:
+        metadata:
+          labels:
+            {{- include "kr.selector" (dict "root" $ "component" "reaper") | nindent 12 }}
+        spec:
+          serviceAccountName: {{ include "kr.cell" . }}-reaper
+          automountServiceAccountToken: true
+          enableServiceLinks: false
+          restartPolicy: Never
+          {{- include "kr.pullSecrets" . | nindent 10 }}
+          securityContext:
+            {{- include "kr.podSecurity" (dict "uid" 65532) | nindent 12 }}
+          affinity:
+            podAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+                - labelSelector:
+                    matchLabels:
+                      {{- include "kr.selector" (dict "root" $ "component" "cell") | nindent 22 }}
+                  topologyKey: kubernetes.io/hostname
+          containers:
+            - name: reaper
+              image: {{ include "kr.image" (dict "root" $ "name" "cell") }}
+              imagePullPolicy: {{ .Values.images.pullPolicy }}
+              command: ["/usr/local/bin/reaper", "-once", "-driver", "k8s-sandbox", "-k8s-namespace", {{ $c.sandboxNamespace | quote }}, "-cell-cert", "/var/lib/kodus-cell/identity/cert.pem"]
+              securityContext:
+                {{- include "kr.containerSecurity" . | nindent 16 }}
+              resources:
+                requests: { cpu: 10m, memory: 32Mi }
+                limits: { memory: 64Mi }
+              volumeMounts:
+                - { name: state, mountPath: /var/lib/kodus-cell, readOnly: true }
+          volumes:
+            - name: state
+              persistentVolumeClaim: { claimName: {{ include "kr.cell" . }}-state, readOnly: true }
+{{- end }}

@@ -1,0 +1,152 @@
+suite: Cell isolation
+values:
+  - values/ci.yaml
+release:
+  name: kr
+  namespace: kodus
+tests:
+  - it: enforces Pod Security restricted on both cell namespaces
+    templates: [templates/cell/namespaces.yaml]
+    asserts:
+      - equal: { path: "metadata.labels[\"pod-security.kubernetes.io/enforce\"]", value: restricted }
+        documentIndex: 0
+      - equal: { path: "metadata.labels[\"pod-security.kubernetes.io/enforce\"]", value: restricted }
+        documentIndex: 1
+      - equal: { path: metadata.name, value: kodus-runtime-sandboxes }
+        documentIndex: 1
+  - it: refuses one namespace for the cell and its claim pods
+    templates: [templates/cell/namespaces.yaml]
+    set:
+      cell.sandboxNamespace: kodus-runtime-cell
+    asserts:
+      - failedTemplate:
+          errorPattern: "must differ"
+  - it: grants the cell pods and pods/exec in the sandbox namespace and nothing else
+    templates: [templates/cell/rbac.yaml]
+    asserts:
+      - isKind: { of: Role }
+        documentIndex: 1
+      - equal: { path: metadata.namespace, value: kodus-runtime-sandboxes }
+        documentIndex: 1
+      - equal:
+          path: rules
+          value:
+            - { apiGroups: [""], resources: ["pods"], verbs: ["create", "get", "list", "delete", "patch"] }
+            - { apiGroups: [""], resources: ["pods/exec"], verbs: ["create", "get"] }
+        documentIndex: 1
+      - equal:
+          path: rules
+          value:
+            - { apiGroups: [""], resources: ["pods"], verbs: ["get", "list", "delete"] }
+        documentIndex: 4
+  - it: gives claim pods no ingress and egress only to the cell pod's proxy and resolver ports
+    templates: [templates/cell/policies.yaml]
+    asserts:
+      - equal: { path: spec, value: { podSelector: {}, policyTypes: ["Ingress", "Egress"] } }
+        documentIndex: 0
+      - equal:
+          path: spec.egress[0].ports
+          value:
+            - { protocol: TCP, port: 8080 }
+            - { protocol: TCP, port: 8443 }
+            - { protocol: UDP, port: 5353 }
+            - { protocol: TCP, port: 5353 }
+        documentIndex: 1
+      - equal: { path: "spec.egress[0].to[0].namespaceSelector.matchLabels[\"kubernetes.io/metadata.name\"]", value: kodus-runtime-cell }
+        documentIndex: 1
+  - it: caps the sandbox namespace and gives every claim pod limits
+    templates: [templates/cell/policies.yaml]
+    asserts:
+      - isKind: { of: ResourceQuota }
+        documentIndex: 4
+      - equal: { path: spec.hard.pods, value: "20" }
+        documentIndex: 4
+      - equal: { path: "spec.hard[\"limits.memory\"]", value: 32Gi }
+        documentIndex: 4
+      - equal: { path: "spec.limits[0].max.memory", value: 8192Mi }
+        documentIndex: 5
+  - it: admits in the sandbox namespace only pods on the RuntimeClass with no token
+    templates: [templates/cell/policies.yaml]
+    set:
+      cell.runtimeClass.name: kata-qemu
+    asserts:
+      - isKind: { of: ValidatingAdmissionPolicy }
+        documentIndex: 6
+      - contains:
+          path: spec.validations
+          content:
+            expression: "has(object.spec.runtimeClassName) && object.spec.runtimeClassName == 'kata-qemu'"
+            message: claim pods run on the RuntimeClass kata-qemu
+        documentIndex: 6
+      - equal: { path: "spec.matchResources.namespaceSelector.matchLabels[\"kubernetes.io/metadata.name\"]", value: kodus-runtime-sandboxes }
+        documentIndex: 7
+  - it: mounts the service account token into the agent only, and each sidecar sees only its own files
+    templates: [templates/cell/cell.yaml]
+    documentSelector: { path: kind, value: Deployment }
+    asserts:
+      - equal: { path: spec.template.spec.automountServiceAccountToken, value: false }
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content: { name: kube-api-access, mountPath: /var/run/secrets/kubernetes.io/serviceaccount, readOnly: true }
+      - equal: { path: "spec.template.spec.initContainers[2].name", value: egress }
+      - equal: { path: "spec.template.spec.initContainers[2].restartPolicy", value: Always }
+      - equal:
+          path: spec.template.spec.initContainers[2].volumeMounts
+          value: [{ name: state, mountPath: /etc/kodus/egress, subPath: etc/egress, readOnly: true }]
+      - equal:
+          path: spec.template.spec.initContainers[3].volumeMounts
+          value: [{ name: state, mountPath: /etc/kodus/injector, subPath: etc/injector, readOnly: true }]
+      - equal: { path: "spec.template.spec.initContainers[3].restartPolicy", value: Always }
+  - it: runs every container of the cell pod restricted
+    templates: [templates/cell/cell.yaml]
+    documentSelector: { path: kind, value: Deployment }
+    asserts:
+      - equal: { path: spec.template.spec.securityContext.runAsNonRoot, value: true }
+      - equal: { path: spec.template.spec.securityContext.seccompProfile.type, value: RuntimeDefault }
+      - equal:
+          path: spec.template.spec.containers[0].securityContext
+          value: { allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, runAsNonRoot: true, capabilities: { drop: ["ALL"] } }
+      - equal:
+          path: spec.template.spec.initContainers[2].securityContext
+          value: { allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, runAsNonRoot: true, capabilities: { drop: ["ALL"] } }
+  - it: runs the agent on k8s-sandbox with its namespace, RuntimeClass and egress Service
+    templates: [templates/cell/cell.yaml]
+    documentSelector: { path: kind, value: Deployment }
+    asserts:
+      - contains: { path: "spec.template.spec.containers[0].command", content: k8s-sandbox }
+      - contains: { path: "spec.template.spec.containers[0].command", content: kodus-runtime-sandboxes }
+      - contains: { path: "spec.template.spec.containers[0].command", content: kr-kodus-runtime-cell-egress.kodus-runtime-cell.svc }
+      - contains: { path: "spec.template.spec.initContainers[0].command", content: -if-unregistered }
+  - it: keeps the registration token in a Secret, never on a command line
+    templates: [templates/cell/cell.yaml]
+    asserts:
+      - equal: { path: stringData.token, value: kcr_example }
+        documentSelector: { path: metadata.name, value: kr-kodus-runtime-cell-registration }
+      - notContains: { path: "spec.template.spec.initContainers[0].command", content: kcr_example }
+        documentSelector: { path: kind, value: Deployment }
+  - it: needs the hub's CA when no control plane runs in the release
+    templates: [templates/cell/cell.yaml]
+    set:
+      controlPlane.enabled: false
+    asserts:
+      - failedTemplate:
+          errorPattern: "cell.hub.caPem is required"
+  - it: creates the RuntimeClass only when asked, on the labelled pool
+    templates: [templates/cell/runtimeclass.yaml]
+    set:
+      cell.runtimeClass.create: true
+      cell.runtimeClass.nodeSelector: { kodus.io/runtime-sandbox: gvisor }
+    asserts:
+      - isKind: { of: RuntimeClass }
+      - equal: { path: handler, value: runsc }
+      - equal: { path: scheduling.nodeSelector, value: { kodus.io/runtime-sandbox: gvisor } }
+  - it: renders no RuntimeClass by default (a managed class keeps its own)
+    templates: [templates/cell/runtimeclass.yaml]
+    asserts:
+      - hasDocuments: { count: 0 }
+  - it: reaps only the sandbox namespace, as the cell its identity names
+    templates: [templates/cell/reaper.yaml]
+    asserts:
+      - equal:
+          path: spec.jobTemplate.spec.template.spec.containers[0].command
+          value: ["/usr/local/bin/reaper", "-once", "-driver", "k8s-sandbox", "-k8s-namespace", "kodus-runtime-sandboxes", "-cell-cert", "/var/lib/kodus-cell/identity/cert.pem"]

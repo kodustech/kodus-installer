@@ -1,0 +1,25 @@
+Kody Runtime {{ .Chart.AppVersion }} (chart {{ .Chart.Version }}), release {{ .Release.Name }}.
+{{- if .Values.controlPlane.enabled }}
+
+Control plane in {{ .Release.Namespace }}:
+  hub        {{ include "kr.hub" . }}:3410 (cells), {{ include "kr.hubInternal" . }}:3411 (worker only)
+  worker     {{ include "kr.worker" . }}:3430 (product), {{ include "kr.evidence" . }}:3420 (evidence)
+  OpenBao    {{ include "kr.openbao" . }}:8200
+
+The product (charts/kodus) reads the Runtime from two Secrets of this release:
+  services.api.extraEnvFrom / services.worker.extraEnvFrom: [{ secretRef: { name: {{ include "kr.fullname" . }}-product } }]
+  services.api.extraVolumes: a volume of the Secret {{ include "kr.fullname" . }}-product-files mounted at /runtime/openbao
+{{- if not .Values.controlPlane.purgeDataOnUninstall }}
+
+{{ include "kr.fullname" . }}-state and {{ include "kr.fullname" . }}-pki are kept on helm uninstall: they open the
+Runtime database and the vault. Back them up with the database.
+{{- end }}
+{{- end }}
+{{- if .Values.cell.enabled }}
+
+Cell in {{ .Values.cell.namespace }}, claim pods in {{ .Values.cell.sandboxNamespace }} on the RuntimeClass {{ .Values.cell.runtimeClass.name }}.
+It registers once with the token, then proves the sandbox namespace (a privileged pod refused, a probe
+pod under {{ .Values.cell.runtimeClass.name }} that cannot reach the API server) before it takes work:
+
+  kubectl -n {{ .Values.cell.namespace }} logs deploy/{{ include "kr.cell" . }} -c cell | grep -E 'k8s.preflight|hub.connected|cell.start'
+{{- end }}

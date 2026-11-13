@@ -1,0 +1,61 @@
+{{- if and .Values.controlPlane.enabled .Values.networkPolicy.enabled }}
+# Who may connect to the control plane (docs/runtime.md, "Network and
+# permissions reference"): the hub's 3410 from anywhere (cells dial out to it,
+# mTLS after registration), 3411 from the runtime-worker only; 3430 from this
+# namespace (the product's API and worker); 3420 from anywhere (cells,
+# browsers); OpenBao from this namespace and the cell's.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "kr.hub" . }}
+  labels:
+    {{- include "kr.labels" (dict "root" $ "component" "hub") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "kr.selector" (dict "root" $ "component" "hub") | nindent 6 }}
+  policyTypes: ["Ingress"]
+  ingress:
+    - ports: [{ protocol: TCP, port: 3410 }]
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "kr.selector" (dict "root" $ "component" "worker") | nindent 14 }}
+      ports: [{ protocol: TCP, port: 3411 }]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "kr.worker" . }}
+  labels:
+    {{- include "kr.labels" (dict "root" $ "component" "worker") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "kr.selector" (dict "root" $ "component" "worker") | nindent 6 }}
+  policyTypes: ["Ingress"]
+  ingress:
+    - from: [{ podSelector: {} }]
+      ports: [{ protocol: TCP, port: 3430 }]
+    - ports: [{ protocol: TCP, port: 3420 }]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "kr.openbao" . }}
+  labels:
+    {{- include "kr.labels" (dict "root" $ "component" "openbao") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "kr.selector" (dict "root" $ "component" "openbao") | nindent 6 }}
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector: {}
+        {{- if .Values.cell.enabled }}
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: {{ .Values.cell.namespace }} }
+        {{- end }}
+      ports: [{ protocol: TCP, port: 8200 }]
+{{- end }}
