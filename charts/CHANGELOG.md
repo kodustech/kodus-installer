@@ -10,6 +10,15 @@ upgrade. See [Releasing the chart](README.md#releasing-the-chart).
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.3.5] — 2026-11-13 · Kodus 2.2.10
+
+### Added
+
+- `services.<name>.extraVolumes` and `extraVolumeMounts`: Volume and VolumeMount
+  lists for a service's pod. The Kody Runtime chart (`charts/kodus-runtime`) needs
+  them to give the API OpenBao's CA and its AppRole (`<release>-product-files` at
+  `/runtime/openbao`).
+
 ## [0.2.2] — 2026-07-30 · Kodus 2.1.28
 
 Fixes a shutdown bug and exposes the settings around it. The Kodus release is unchanged.

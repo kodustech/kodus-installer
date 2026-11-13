@@ -98,6 +98,9 @@ spec:
             - name: writable-{{ $i }}
               mountPath: {{ $path | quote }}
             {{- end }}
+            {{- with $svc.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
       volumes:
         {{- include "kodus-common.tmpVolume" (dict "root" $ "config" $svc) | nindent 8 }}
         {{- /* Per-service scratch dirs for frameworks that insist on writing inside
@@ -107,6 +110,9 @@ spec:
         - name: writable-{{ $i }}
           emptyDir:
             sizeLimit: {{ include "kodus-common.emptyDirSizeLimit" (dict "root" $ "config" $svc "name" (printf "writable-%d" $i) "fallback" ($svc.writablePathsSizeLimit | default "256Mi")) | quote }}
+        {{- end }}
+        {{- with $svc.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
         {{- end }}
 {{- end }}
 {{- end }}

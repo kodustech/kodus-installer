@@ -248,10 +248,15 @@ emptyDir:
 # Secret/ConfigMap references must exist in the release namespace. These lists are
 # appended after chart defaults; avoid names already supplied by the chart or env.
 # Values are rendered literally, without Helm tpl evaluation.
+# extraVolumes / extraVolumeMounts: Volume and VolumeMount lists for a service's
+# pod and container, e.g. the Kody Runtime's OpenBao files (charts/kodus-runtime,
+# Secret <release>-product-files mounted read-only at /runtime/openbao on api).
 services:
   web:
     extraEnv: []
     extraEnvFrom: []
+    extraVolumes: []
+    extraVolumeMounts: []
     enabled: true
     image:
       repository: ghcr.io/kodustech/kodus-ai-web
@@ -277,6 +282,8 @@ services:
   api:
     extraEnv: []
     extraEnvFrom: []
+    extraVolumes: []
+    extraVolumeMounts: []
     enabled: true
     image:
       repository: ghcr.io/kodustech/kodus-ai-api
@@ -296,6 +303,8 @@ services:
   worker:
     extraEnv: []
     extraEnvFrom: []
+    extraVolumes: []
+    extraVolumeMounts: []
     enabled: true
     image:
       repository: ghcr.io/kodustech/kodus-ai-worker
@@ -325,6 +334,8 @@ services:
   worker-analytics:
     extraEnv: []
     extraEnvFrom: []
+    extraVolumes: []
+    extraVolumeMounts: []
     enabled: true
     image:
       repository: ghcr.io/kodustech/kodus-ai-worker
@@ -349,6 +360,8 @@ services:
   webhooks:
     extraEnv: []
     extraEnvFrom: []
+    extraVolumes: []
+    extraVolumeMounts: []
     enabled: true
     image:
       repository: ghcr.io/kodustech/kodus-ai-webhook
@@ -367,6 +380,8 @@ services:
   mcp-manager:
     extraEnv: []
     extraEnvFrom: []
+    extraVolumes: []
+    extraVolumeMounts: []
     enabled: true
     image:
       repository: ghcr.io/kodustech/kodus-mcp-manager
@@ -563,6 +578,8 @@ postgres:
   bundled:
     extraEnv: []
     extraEnvFrom: []
+    extraVolumes: []
+    extraVolumeMounts: []
     image: pgvector/pgvector:pg16
     database: kodus_db
     username: kodusdev
@@ -607,6 +624,8 @@ mongodb:
   bundled:
     extraEnv: []
     extraEnvFrom: []
+    extraVolumes: []
+    extraVolumeMounts: []
     # Pinned, never floating, same as docker-compose.yml. 8.3.13 is what
     # `mongo:8` resolves to today, so a release that ran the floating tag keeps
     # opening its data (8.2 cannot open files written by 8.3).
@@ -646,6 +665,8 @@ rabbitmq:
   bundled:
     extraEnv: []
     extraEnvFrom: []
+    extraVolumes: []
+    extraVolumeMounts: []
     # Pre-built Kodus image: delayed_message_exchange plugin + kodus-ai/kodus-ast
     # vhosts baked in. Runs init-definitions.sh on boot (same as docker-compose).
     image: ghcr.io/kodustech/kodus-rabbitmq:4.2.2-kodus.1

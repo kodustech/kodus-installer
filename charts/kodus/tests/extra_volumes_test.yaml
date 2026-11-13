@@ -1,0 +1,32 @@
+suite: Additional volumes
+templates:
+  - templates/deployment.yaml
+  - templates/configmap.yaml
+  - templates/secrets.yaml
+release:
+  name: kodus
+tests:
+  - it: mounts the Kody Runtime's OpenBao files into the API, and only there
+    set:
+      services.api.extraVolumes: [{"name":"runtime-openbao","secret":{"secretName":"kodus-runtime-product-files","defaultMode":288}}]
+      services.api.extraVolumeMounts: [{"name":"runtime-openbao","mountPath":"/runtime/openbao","readOnly":true}]
+    documentSelector:
+      path: metadata.name
+      value: kodus-api
+    asserts:
+      - contains:
+          path: spec.template.spec.volumes
+          content: {"name":"runtime-openbao","secret":{"secretName":"kodus-runtime-product-files","defaultMode":288}}
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content: {"name":"runtime-openbao","mountPath":"/runtime/openbao","readOnly":true}
+  - it: adds no volume to a service that names none
+    set:
+      services.api.extraVolumes: [{"name":"runtime-openbao","secret":{"secretName":"x"}}]
+    documentSelector:
+      path: metadata.name
+      value: kodus-worker
+    asserts:
+      - notContains:
+          path: spec.template.spec.volumes
+          content: {"name":"runtime-openbao","secret":{"secretName":"x"}}
