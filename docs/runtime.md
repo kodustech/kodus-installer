@@ -189,11 +189,22 @@ writes `/etc/kodus/cell/cell.yaml` and `cell.env`, and enables these units:
 
 | Unit | What |
 |---|---|
-| `kodus-cell-injector.service` | Credential injector, in a container on Docker's default bridge, control port `127.0.0.1:9445` |
-| `kodus-cell-egress.service` | Egress proxy, resolver (the same process: the proxy accepts exactly the addresses the resolver handed out) and the registry/Go mirror; control port `127.0.0.1:9443` |
+| `kodus-cell-injector.service` | Credential injector, in a container on Docker's default bridge, control port `127.0.0.1:9445`; listens at `10.214.0.3:8443` on the internal `kodus-cell-enforcers` network and takes connections from the egress's address there only |
+| `kodus-cell-egress.service` | Egress proxy, resolver (the same process: the proxy accepts exactly the addresses the resolver handed out) and the registry/Go mirror; control port `127.0.0.1:9443`; sends an org secret's host to the injector on `kodus-cell-enforcers` (`10.214.0.2`) |
 | `kodus-cell.service` | The agent, on the host as root; bound to the egress (claim networks are joined to that container) |
 | `kodus-cell-reaper.timer` | One reaper pass a minute: destroys every machine past its hard expiry, whatever anyone renews |
 | `kodus-cell.target` | The three services, restarted in order |
+
+The egress and the injector share `kodus-cell-enforcers` (`10.214.0.0/29`, internal, outside the claims'
+`10.213.0.0/16`). If that subnet is taken on the host, set `ENFORCERS_SUBNET`, `EGRESS_ENFORCER_IP` and
+`INJECTOR_ENFORCER_IP` in `/etc/kodus/cell/cell.env`, `docker network rm kodus-cell-enforcers`, and restart
+`kodus-cell.target`; `upgrade` keeps them.
+
+The agent bundles the host's public roots (`/etc/ssl/certs/ca-certificates.crt`, or RHEL's or Alpine's: `check` names
+the one it finds) with the injector's CA (`-cell-ca-cert /etc/kodus/cell/injector/cell-ca.pem`, the certificate only)
+into `/var/lib/kodus-cell/work/trust/` at start, and mounts it read-only into every machine of a claim with org
+secrets, so an HTTPS call to a secret's host trusts the injector. Java services are not covered: they need the CA
+(`/etc/kodus/cell-ca.pem` inside the machine) in their own truststore.
 
 Options: `--egress-allow` (the hosts every claim may reach; default the image registry, npm and the Debian, Ubuntu and
 Alpine mirrors), `--upstream-dns` (default `1.1.1.1:53`; set your resolver on a closed network), `--sandbox-pool N`
@@ -230,7 +241,8 @@ sudo scripts/runtime/cell-host.sh upgrade --release <cell release>
 ```
 
 The hub always goes first: a newer cell's hello carries fields an older hub refuses. `cell-host.sh rollback` puts the
-previous cell release back (with the images it ran with); `install.sh --release <previous>` rolls the control plane
+previous cell release back (with the images and the units it ran with; a release installed before the units were kept
+leaves the current ones, which pass flags it does not know); `install.sh --release <previous>` rolls the control plane
 back (the Runtime's migrations only add tables).
 
 ## Backup and restore
@@ -256,7 +268,7 @@ Restore after the product database: `scripts/runtime/restore.sh --from /backups/
 - Control plane: `scripts/runtime/uninstall.sh` removes the services and recreates the API and the worker without the
   Runtime; data stays. `--purge-data --i-have-a-backup` also drops `kodus_runtime`, `kodus_openbao`, the roles, the
   RabbitMQ user, the evidence volume and `runtime/state`.
-- Cell host: `sudo scripts/runtime/cell-host.sh uninstall --purge` (units, containers and networks of the cell,
+- Cell host: `sudo scripts/runtime/cell-host.sh uninstall --purge` (units, containers and networks of the cell, `kodus-cell-enforcers` included,
   `/etc/kodus/cell`, `/opt/kodus-cell`, `/var/lib/kodus-cell`; `--remove-runsc` also unregisters gVisor). Then revoke
   the cell in Kodus: `POST /runtime/cells/<cell id>/revoke` as the org owner.
 
@@ -344,6 +356,8 @@ hosts` of `runtime_secrets`; `openbao` owns `kodus_openbao`. On an external Post
 | `cell register`: TLS error | `--hub-host` not in the hub certificate, or the wrong CA | `generate.sh --hub-host <name the cell uses> --rotate-certs`, then restart the hub |
 | `journalctl -u kodus-cell`: `the runsc runtime is not installed in this Docker` | Docker restarted without its daemon.json runtimes | `runsc install` and `systemctl reload docker` |
 | The cell connects but takes no work | It waits for both alert feeds (egress, injector) | `systemctl status kodus-cell-egress kodus-cell-injector` |
+| A sandbox with secrets: `curl` to the secret's host fails certificate verification | The agent runs without `-cell-ca-cert` (`journalctl -u kodus-cell` has `machine_trust.unconfigured`), or the service is Java | `cell-host.sh upgrade` writes the flag; for Java, the CA in the service's truststore |
+| `journalctl -u kodus-cell-injector`: `network connect` fails | `10.214.0.0/29` is taken on this host | Another subnet in `cell.env` (above) |
 | Sandbox smoke: `sandbox_off` | `RUNTIME_SANDBOX_URL` or the sealing key missing on the product | Re-run `install.sh` |
 | Evidence links do not open | `--evidence-url` not reachable from browsers | Publish 3420 behind your proxy and set `--evidence-url` |
 | Builds fail on `RUN apt-get` | The package host is not on the allow-list | `--egress-allow` with your mirrors, then `cell-host.sh upgrade` |
