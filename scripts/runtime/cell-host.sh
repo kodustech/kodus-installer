@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # The Kody Runtime cell host (docs/runtime.md, "Cell host"): checks a host
-# against its profile, installs gVisor's runsc by checksum and registers it
-# with Docker, installs the cell release's binaries, writes the cell's
+# against its profile, installs gVisor (runsc, its containerd shim and its
+# gvisor-bin/ sidecars) by checksum and registers runsc with Docker, installs the cell release's binaries, writes the cell's
 # configuration, enrolls the cell with a one-time token, and installs the
 # systemd units for the cell, the egress (proxy and resolver), the injector
 # and the reaper. Linux, as root.
@@ -426,15 +426,30 @@ report() { # report PROFILE: prints the result; true when nothing is missing
 gvisor_release() { rt_rows "$RT_GVISOR" | awk -F '\t' 'NR == 1 { print $1 }'; }
 gvisor_sha() { rt_rows "$RT_GVISOR" | awk -F '\t' -v r="$1" -v a="$2" '$1 == r && $2 == a { print $3; exit }'; }
 
+# Since release 20260721.0 runsc runs its sidecars (gvisor_sentry, the
+# kernel, among them) from gvisor-bin/ next to itself, and no sandbox starts
+# without them (gvisor.dev/docs/user_guide/install, "Install latest release").
+# runsc install would fetch a missing gvisor-bin/ itself, outside this pin, and
+# fails offline; it finds nothing missing because install_gvisor unpacks it.
+SIDECARS="$LOCAL_BIN/gvisor-bin"
+
 install_gvisor() {
     local arch rel sha tmp published have
     if runsc_registered && [ "$REINSTALL_RUNSC" = 0 ]; then
         have=$(runsc --version 2>/dev/null | head -n1 || true)
         case "$have" in
-            *"$(gvisor_release)"*) rt_info "runsc already registered ($have)." ;;
-            *) rt_warn "runsc already registered (${have:-unknown version}), not the pinned $(gvisor_release); kept (--reinstall-runsc replaces it)" ;;
+            *"$(gvisor_release)"*)
+                if [ -x "$SIDECARS/gvisor_sentry" ]; then
+                    rt_info "runsc already registered ($have)."
+                    return 0
+                fi
+                rt_warn "runsc already registered ($have), but $SIDECARS/ is missing (no sandbox starts without gvisor_sentry); reinstalling gVisor $(gvisor_release)"
+                ;;
+            *)
+                rt_warn "runsc already registered (${have:-unknown version}), not the pinned $(gvisor_release); kept (--reinstall-runsc replaces it)"
+                return 0
+                ;;
         esac
-        return 0
     fi
     arch=$(uname -m)
     rel=$(gvisor_release)
@@ -454,10 +469,19 @@ install_gvisor() {
     printf '%s  %s\n' "$sha" "$tmp/gvisor.tar.bz2" | sha512sum -c --quiet - ||
         rt_die "gVisor $rel $arch: the archive does not match the SHA-512 pinned in runtime/gvisor.tsv"
     mkdir -p "$tmp/x" "$LOCAL_BIN"
-    tar -xjf "$tmp/gvisor.tar.bz2" -C "$tmp/x" runsc containerd-shim-runsc-v1
+    tar -xjf "$tmp/gvisor.tar.bz2" -C "$tmp/x" --no-same-owner runsc containerd-shim-runsc-v1 gvisor-bin ||
+        rt_die "gVisor $rel $arch: the archive lacks runsc, containerd-shim-runsc-v1 or gvisor-bin/"
+    [ -x "$tmp/x/gvisor-bin/gvisor_sentry" ] || rt_die "gVisor $rel $arch: the archive has no gvisor-bin/gvisor_sentry"
+    # The whole directory is swapped, so no sidecar of another release stays
+    # next to this runsc. Readable and executable by all: the sentry may
+    # re-exec itself as an unprivileged user.
+    rm -rf "$SIDECARS.new"
+    cp -R "$tmp/x/gvisor-bin" "$SIDECARS.new"
+    chmod 0755 "$SIDECARS.new" && find "$SIDECARS.new" -type f -exec chmod 0755 {} +
+    rm -rf "$SIDECARS" && mv "$SIDECARS.new" "$SIDECARS"
     install -m 0755 "$tmp/x/runsc" "$LOCAL_BIN/runsc"
     install -m 0755 "$tmp/x/containerd-shim-runsc-v1" "$LOCAL_BIN/containerd-shim-runsc-v1"
-    rt_ok "gVisor $rel installed in /usr/local/bin (SHA-512 verified)."
+    rt_ok "gVisor $rel installed in /usr/local/bin: runsc, containerd-shim-runsc-v1, gvisor-bin/ (SHA-512 verified)."
     # Adds "runsc" to /etc/docker/daemon.json's runtimes, then Docker reloads
     # its runtimes on SIGHUP without restarting containers.
     run "$LOCAL_BIN/runsc" install --runtime runsc
@@ -928,7 +952,7 @@ cmd_uninstall() {
     if [ "$REMOVE_RUNSC" = 1 ]; then
         run "$LOCAL_BIN/runsc" uninstall --runtime runsc || true
         run "$SYSTEMCTL" reload docker
-        run rm -f "$LOCAL_BIN/runsc" "$LOCAL_BIN/containerd-shim-runsc-v1"
+        run rm -rf "$LOCAL_BIN/runsc" "$LOCAL_BIN/containerd-shim-runsc-v1" "$SIDECARS"
     fi
     rt_ok "Cell ${cell:-?} removed from this host. Revoke it in Kodus too: POST /runtime/cells/${cell:-<id>}/revoke (org owner)."
 }

@@ -123,6 +123,10 @@ t "no --profile: the host's profile, docker-gvisor without KVM, and says why" sh
 t "units enabled and started (dry run)" has "[dry-run] systemctl restart kodus-cell.target" /tmp/install.log
 t "runsc runs" sh -c '/usr/local/bin/runsc --version | grep -q "release-20261026.0"'
 t "containerd shim installed" test -x /usr/local/bin/containerd-shim-runsc-v1
+# runsc runs its sidecars (gvisor_sentry, the kernel, among them) from
+# gvisor-bin/ next to itself; without it no sandbox starts
+# (gvisor.dev/docs/user_guide/install, "Install latest release").
+t "gVisor's sidecars installed next to runsc, from the pinned archive" sh -c 'test -x /usr/local/bin/gvisor-bin/gvisor_sentry && test -x /usr/local/bin/gvisor-bin/runsc-metric-server && [ "$(stat -c %a /usr/local/bin/gvisor-bin)" = 755 ]'
 printf 'not the archive' >/tmp/bad.tar.bz2
 t "a corrupted gVisor archive is refused" fails_with "does not match the SHA-512 pinned in runtime/gvisor.tsv" \
     $CH install --profile docker-gvisor --bundle $BUNDLE "${BIN_ARGS[@]}" --min-free-gb 1 --gvisor-archive /tmp/bad.tar.bz2 --dry-run
@@ -202,6 +206,7 @@ fi
 
 echo "== upgrade"
 R='{"runc":{},"runsc":{"path":"/usr/local/bin/runsc"}}'
+t "a registered runsc of the pinned release without gvisor-bin/ is reinstalled" sh -c "rm -rf /usr/local/bin/gvisor-bin && STUB_RUNTIMES='$R' $CH install --profile docker-gvisor --bundle $BUNDLE ${BIN_ARGS[*]} --min-free-gb 1 --dry-run >/tmp/reinstall.log 2>&1 && grep -q 'gvisor-bin/ is missing' /tmp/reinstall.log && test -x /usr/local/bin/gvisor-bin/gvisor_sentry"
 t "install --egress-allow sets the allow-list" sh -c "STUB_RUNTIMES='$R' $CH install --profile docker-gvisor --bundle $BUNDLE ${BIN_ARGS[*]} --min-free-gb 1 --egress-allow registry.example.com --dry-run >/dev/null && grep -qx KODUS_CELL_EGRESS_ALLOW=registry.example.com /etc/kodus/cell/cell.env"
 t "upgrade --dry-run succeeds" sh -c "STUB_RUNTIMES='$R' $CH upgrade ${BIN_ARGS[*]} --min-free-gb 1 --dry-run >/tmp/upgrade.log 2>&1 || { tail -20 /tmp/upgrade.log; exit 1; }"
 t "upgrade keeps the allow-list" sh -c "grep -qx KODUS_CELL_EGRESS_ALLOW=registry.example.com /etc/kodus/cell/cell.env && grep -q 'egress-allow registry.example.com' /etc/kodus/cell/cell.env && grep -q '\[dry-run\] systemctl restart kodus-cell.target' /tmp/upgrade.log"
@@ -211,6 +216,7 @@ echo "== backup and uninstall"
 t "backup writes the identity and config" sh -c "$CH backup --out /tmp/cell-backup.tgz && tar -tzf /tmp/cell-backup.tgz | grep -q etc/kodus/cell/identity/issuer.pem"
 t "uninstall --purge --dry-run lists what it removes" sh -c "$CH uninstall --purge --dry-run | grep -q '\[dry-run\] rm -rf /etc/kodus/cell /opt/kodus-cell /var/lib/kodus-cell'"
 t "uninstall removes the enforcers network (dry run)" sh -c "$CH uninstall --dry-run | grep -q '\[dry-run\] docker network rm kodus-cell-enforcers'"
+t "uninstall --remove-runsc removes gvisor-bin/ with runsc (dry run)" sh -c "$CH uninstall --remove-runsc --dry-run | grep -qF '[dry-run] rm -rf /usr/local/bin/runsc /usr/local/bin/containerd-shim-runsc-v1 /usr/local/bin/gvisor-bin'"
 t "nothing removed by the dry run" test -s /etc/kodus/cell/cell.yaml
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"

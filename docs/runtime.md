@@ -193,8 +193,8 @@ installer (on a host with a usable `/dev/kvm` it says so: microVM cells take cod
 registers with the token's topology, and takes its claim ceiling from the host: a claim may ask up to the memory the
 cell may commit (MemTotal less 1 GB) and the host's CPUs; a claim that asks nothing gets 4 GB and 2 CPUs.
 
-`install` checks the host, installs gVisor's `runsc` and `containerd-shim-runsc-v1` from the pinned release after
-checking its SHA-512 (and the published one), registers `runsc` with Docker (`runsc install`, then a Docker reload, not
+`install` checks the host, installs gVisor's `runsc`, `containerd-shim-runsc-v1` and the `gvisor-bin/` sidecars next to
+`runsc` (the sentry among them) from the pinned release after checking its SHA-512 (and the published one), registers `runsc` with Docker (`runsc install`, then a Docker reload, not
 a restart), copies the cell release's binaries out of the cell image into `/opt/kodus-cell/releases/<release>`,
 builds the observer image from them, enrolls the cell (`cell register`, token in the environment, never on the command
 line), creates the cell-local CA and the egress, injector and observer certificates,
@@ -291,7 +291,7 @@ Restore after the product database: `scripts/runtime/restore.sh --from /backups/
   Runtime; data stays. `--purge-data --i-have-a-backup` also drops `kodus_runtime`, `kodus_openbao`, the roles, the
   RabbitMQ user, the evidence volume and `runtime/state`.
 - Cell host: `sudo scripts/runtime/cell-host.sh uninstall --purge` (units, containers and networks of the cell, `kodus-cell-enforcers` included,
-  `/etc/kodus/cell`, `/opt/kodus-cell`, `/var/lib/kodus-cell`; `--remove-runsc` also unregisters gVisor). Then revoke
+  `/etc/kodus/cell`, `/opt/kodus-cell`, `/var/lib/kodus-cell`; `--remove-runsc` also unregisters gVisor and removes `runsc`, its shim and `gvisor-bin/`). Then revoke
   the cell in Kodus: `POST /runtime/cells/<cell id>/revoke` as the org owner.
 
 ## Offline bundle
@@ -417,6 +417,7 @@ hosts` of `runtime_secrets`; `openbao` owns `kodus_openbao`. On an external Post
 | `cell register`: `topology_mismatch` | `cell register -topology` given by hand, not the token's | Leave `-topology` out: the cell takes the token's |
 | `journalctl -u kodus-cell`: `-local-ca is required`, `-ca and -local-ca share a CA key`, or `-cell-ca-cert is also ...` | A `cell.yaml` from before 2026-11-13 (`ca: trust.pem`, both CAs in one file), or two of the hub CA, the cell-local CA and the injector CA on one key | `cell-host.sh upgrade` rewrites `cell.yaml` with `ca: identity/ca.pem` and `localCa: local-ca.pem` |
 | `cell register`: TLS error | `--hub-host` not in the hub certificate, or the wrong CA | `generate.sh --hub-host <name the cell uses> --rotate-certs`, then restart the hub |
+| A machine fails to start: `sidecar "gvisor_sentry" not usable` | `runsc` installed without the `gvisor-bin/` directory its release ships | `cell-host.sh install` reinstalls the pinned release with it; a `runsc` of your own needs `gvisor-bin/` next to it |
 | `journalctl -u kodus-cell`: `the runsc runtime is not installed in this Docker` | Docker restarted without its daemon.json runtimes | `runsc install` and `systemctl reload docker` |
 | The cell connects but takes no work | It waits for both alert feeds (egress, injector) | `systemctl status kodus-cell-egress kodus-cell-injector` |
 | A sandbox with secrets: `curl` to the secret's host fails certificate verification | The agent runs without `-cell-ca-cert` (`journalctl -u kodus-cell` has `machine_trust.unconfigured`), or the service is Java | `cell-host.sh upgrade` writes the flag; for Java, the CA in the service's truststore |

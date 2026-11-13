@@ -1,5 +1,6 @@
-# gVisor (Apache-2.0) release the docker-gvisor cell host installs: runsc and
-# containerd-shim-runsc-v1 from the release archive, verified against the
+# gVisor (Apache-2.0) release the docker-gvisor cell host installs: runsc,
+# containerd-shim-runsc-v1 and the gvisor-bin/ sidecars runsc runs (the
+# sentry among them) from the release archive, verified against the
 # SHA-512 pinned here before anything is unpacked. The published .sha512 next
 # to the archive is checked too, but it comes from the same origin, so the pin
 # is what proves the bytes. Bump the release, both digests and the date

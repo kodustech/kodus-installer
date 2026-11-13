@@ -26,7 +26,7 @@ scheduling:
 {{- else if lookup "v1" "Namespace" "" "kube-system" }}
 {{- /* A live cluster (install, upgrade, a server dry run); helm template has none and skips this. */}}
 {{- if not (lookup "node.k8s.io/v1" "RuntimeClass" "" $rc.name) }}
-{{- fail (printf "cell.runtimeClass.name: the RuntimeClass %q does not exist in this cluster. Claim pods run only on an isolated runtime: install gVisor (runsc and containerd-shim-runsc-v1 registered with containerd as the handler %q) or Kata Containers on the nodes, then create the class (cell.runtimeClass.create=true) or name the one your platform made (GKE Sandbox: gvisor)." $rc.name $rc.handler) }}
+{{- fail (printf "cell.runtimeClass.name: the RuntimeClass %q does not exist in this cluster. Claim pods run only on an isolated runtime: install gVisor (runsc, with gvisor-bin/ next to it, and containerd-shim-runsc-v1 registered with containerd as the handler %q) or Kata Containers on the nodes, then create the class (cell.runtimeClass.create=true) or name the one your platform made (GKE Sandbox: gvisor)." $rc.name $rc.handler) }}
 {{- end }}
 {{- end }}
 {{- end }}
