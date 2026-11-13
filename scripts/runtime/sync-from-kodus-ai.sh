@@ -46,6 +46,8 @@ while read -r src dest c; do
         fi
         rm -f "$tmp"
     else
+        # mktemp makes it 0600: OpenBao (uid 1000) and runtime-init read these.
+        chmod 0644 "$tmp"
         mv "$tmp" "$RT_ROOT/$dest"
         rt_info "synced $dest"
     fi
