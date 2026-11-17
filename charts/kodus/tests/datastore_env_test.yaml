@@ -241,3 +241,11 @@ tests:
             name: API_CRYPTO_KEY
             valueFrom:
               secretKeyRef: { name: kodus-vault-synced, key: API_CRYPTO_KEY }
+
+  - it: rabbitmq.bundled.uriKey requires existingSecret
+    template: templates/deployment.yaml
+    set:
+      rabbitmq.bundled.uriKey: uri
+    asserts:
+      - failedTemplate:
+          errorPattern: rabbitmq\.bundled\.existingSecret is required

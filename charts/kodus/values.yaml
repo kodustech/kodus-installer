@@ -688,6 +688,11 @@ rabbitmq:
     # managed by External Secrets. GitOps tools render without cluster access, so
     # the generated password changes on every render; this avoids that churn.
     existingSecret: ""
+    # The app gets amqp://<username>:<password>@... with the password unescaped, so
+    # a password from existingSecret must be URI-safe (alphanumeric). Otherwise set
+    # this to a key in existingSecret holding the full, percent-encoded URI
+    # (amqp://kodus:<encoded>@<release>-rabbitmq:5672/kodus-ai).
+    uriKey: ""
     storage:
       size: 8Gi
       storageClass: ""

@@ -938,3 +938,15 @@ and no release history. Two chart defaults behave differently there:
   Set this before the first install. The datastores read the password only when
   they initialize their volume, so changing the Secret later does not change the
   password the database already uses.
+
+  The app reaches RabbitMQ through a URI that the chart builds with the password
+  unescaped, so keep that password alphanumeric. If it has URI-reserved characters
+  (`@ : / # %`), add the full percent-encoded URI to the same Secret and set
+  `rabbitmq.bundled.uriKey` to its key:
+
+  ```yaml
+  rabbitmq:
+    bundled:
+      existingSecret: kodus-rabbitmq     # keys: password, uri
+      uriKey: uri                        # amqp://kodus:<encoded>@<release>-rabbitmq:5672/kodus-ai
+  ```

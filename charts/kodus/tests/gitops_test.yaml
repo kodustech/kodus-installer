@@ -118,3 +118,35 @@ tests:
       - contains:
           path: spec.template.spec.containers[0].env
           content: {name: RABBITMQ_PASS, valueFrom: {secretKeyRef: {name: rmq-ext, key: password}}}
+
+  - it: builds the bundled RabbitMQ URI from the password by default
+    template: templates/deployment.yaml
+    set:
+      rabbitmq.bundled.existingSecret: rmq-ext
+    documentSelector:
+      path: metadata.name
+      value: kodus-api
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: API_RABBITMQ_URI, value: "amqp://$(RABBITMQ_USER):$(RABBITMQ_PASS)@kodus-rabbitmq:5672/kodus-ai"}
+
+  - it: rabbitmq.bundled.uriKey reads the full URI from existingSecret
+    templates:
+      - templates/deployment.yaml
+      - templates/migration-job.yaml
+    set:
+      rabbitmq.bundled.existingSecret: rmq-ext
+      rabbitmq.bundled.uriKey: uri
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: API_RABBITMQ_URI, valueFrom: {secretKeyRef: {name: rmq-ext, key: uri}}}
+        template: templates/deployment.yaml
+        documentSelector:
+          path: metadata.name
+          value: kodus-api
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: API_RABBITMQ_URI, valueFrom: {secretKeyRef: {name: rmq-ext, key: uri}}}
+        template: templates/migration-job.yaml

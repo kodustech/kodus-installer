@@ -194,7 +194,20 @@
         }
       }
     },
-    "rabbitmq": { "$ref": "#/definitions/store" },
+    "rabbitmq": {
+      "allOf": [{ "$ref": "#/definitions/store" }],
+      "properties": {
+        "bundled": {
+          "type": "object",
+          "properties": {
+            "uriKey": {
+              "type": "string",
+              "description": "Key in bundled.existingSecret holding the full, percent-encoded AMQP URI. Needed when the password has URI-reserved characters, since the chart interpolates it unescaped."
+            }
+          }
+        }
+      }
+    },
     "services": {
       "type": "object",
       "additionalProperties": {

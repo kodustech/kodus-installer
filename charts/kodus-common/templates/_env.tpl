@@ -129,7 +129,17 @@ refs (k8s resolves $(VAR) only inside the pod env block). Vhost is kodus-ai.
       name: {{ include "kodus-common.bundledSecretName" (dict "root" . "store" "rabbitmq") }}
       key: password
 - name: API_RABBITMQ_URI
+{{- if .Values.rabbitmq.bundled.uriKey }}
+{{- /* The password is interpolated raw into the URI below, so one with URI-reserved
+       characters (@ : / # %) breaks it. A user-managed Secret can carry the full,
+       already-encoded URI instead. */}}
+  valueFrom:
+    secretKeyRef:
+      name: {{ required "rabbitmq.bundled.existingSecret is required when rabbitmq.bundled.uriKey is set" .Values.rabbitmq.bundled.existingSecret }}
+      key: {{ .Values.rabbitmq.bundled.uriKey }}
+{{- else }}
   value: "amqp://$(RABBITMQ_USER):$(RABBITMQ_PASS)@{{ .Release.Name }}-rabbitmq:5672/kodus-ai"
+{{- end }}
 {{- else if eq .Values.rabbitmq.mode "operator" }}
 - name: RABBITMQ_USER
   valueFrom:
