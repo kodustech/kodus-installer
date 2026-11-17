@@ -118,7 +118,7 @@ spec:
             - name: RABBITMQ_DEFAULT_PASS
               valueFrom:
                 secretKeyRef:
-                  name: {{ $name }}-secret
+                  name: {{ include "kodus-common.bundledSecretName" (dict "root" . "store" "rabbitmq") }}
                   key: password
             - name: RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS
               value: "-rabbit heartbeat 60"

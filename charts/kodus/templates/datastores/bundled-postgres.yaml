@@ -93,7 +93,7 @@ spec:
             - name: POSTGRES_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ $name }}-secret
+                  name: {{ include "kodus-common.bundledSecretName" (dict "root" . "store" "postgres") }}
                   key: password
             - name: PGDATA
               value: /var/lib/postgresql/data/pgdata

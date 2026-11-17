@@ -122,7 +122,13 @@
           "allOf": [
             { "$ref": "#/definitions/extraEnvironment" },
             { "$ref": "#/definitions/scheduling" }
-          ]
+          ],
+          "properties": {
+            "existingSecret": {
+              "type": "string",
+              "description": "Pre-created Secret (key `password`) used instead of the chart-generated <release>-<store>-secret."
+            }
+          }
         },
         "mode": {
           "enum": ["bundled", "external", "operator"],
@@ -216,6 +222,10 @@
       ],
       "properties": {
         "enabled": { "type": "boolean" },
+        "annotations": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        },
         "emptyDir": { "$ref": "#/definitions/emptyDir" }
       }
     },

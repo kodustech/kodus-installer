@@ -1,4 +1,13 @@
 {{/*
+Secret holding a bundled store's password (key `password`): <store>.bundled.existingSecret
+when set (e.g. managed by External Secrets), else the chart-generated
+<release>-<store>-secret. Call with (dict "root" $ "store" "postgres|mongodb|rabbitmq").
+*/}}
+{{- define "kodus-common.bundledSecretName" -}}
+{{- (index .root.Values .store).bundled.existingSecret | default (printf "%s-%s-secret" .root.Release.Name .store) }}
+{{- end }}
+
+{{/*
 Database connection env vars. Per store, one of three modes:
   bundled  → the StatefulSet + Secret this chart creates
   external → user-provided values + existingSecret
@@ -17,7 +26,7 @@ Call with root ctx.
 - name: API_PG_DB_PASSWORD
   valueFrom:
     secretKeyRef:
-      name: {{ printf "%s-postgres-secret" .Release.Name }}
+      name: {{ include "kodus-common.bundledSecretName" (dict "root" . "store" "postgres") }}
       key: password
 - name: API_PG_DB_DATABASE
   value: {{ .Values.postgres.bundled.database | quote }}
@@ -61,7 +70,7 @@ Call with root ctx.
 - name: API_MG_DB_PASSWORD
   valueFrom:
     secretKeyRef:
-      name: {{ printf "%s-mongodb-secret" .Release.Name }}
+      name: {{ include "kodus-common.bundledSecretName" (dict "root" . "store" "mongodb") }}
       key: password
 - name: API_MG_DB_DATABASE
   value: {{ .Values.mongodb.bundled.database | quote }}
@@ -117,7 +126,7 @@ refs (k8s resolves $(VAR) only inside the pod env block). Vhost is kodus-ai.
 - name: RABBITMQ_PASS
   valueFrom:
     secretKeyRef:
-      name: {{ printf "%s-rabbitmq-secret" .Release.Name }}
+      name: {{ include "kodus-common.bundledSecretName" (dict "root" . "store" "rabbitmq") }}
       key: password
 - name: API_RABBITMQ_URI
   value: "amqp://$(RABBITMQ_USER):$(RABBITMQ_PASS)@{{ .Release.Name }}-rabbitmq:5672/kodus-ai"

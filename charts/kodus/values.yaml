@@ -400,6 +400,12 @@ migrations:
   extraEnv: []
   extraEnvFrom: []
   enabled: true
+  # Annotations on the Job. For Argo CD (which renders with `helm template`, where
+  # Release.Revision is always 1, so the Job name never changes and the immutable
+  # Job cannot be updated) run it as a hook instead:
+  #   argocd.argoproj.io/hook: Sync
+  #   argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+  annotations: {}
   image:
     repository: ghcr.io/kodustech/kodus-ai-api
     tag: ""                            # REQUIRED — should match services.api.tag
@@ -581,6 +587,10 @@ postgres:
     database: kodus_db
     username: kodusdev
     password: ""                    # auto-generated when empty
+    # Use a pre-created Secret (key `password`) instead of the generated one, e.g.
+    # managed by External Secrets. GitOps tools render without cluster access, so
+    # the generated password changes on every render; this avoids that churn.
+    existingSecret: ""
     # Passed as `-c max_connections=`. The image default (100) is not enough once
     # api/worker/webhooks each run several replicas with their own pools; the
     # failure mode is "sorry, too many clients already" from every service at once.
@@ -631,6 +641,10 @@ mongodb:
     database: kodus_db
     username: kodusdev              # root user
     password: ""                    # auto-generated when empty
+    # Use a pre-created Secret (key `password`) instead of the generated one, e.g.
+    # managed by External Secrets. GitOps tools render without cluster access, so
+    # the generated password changes on every render; this avoids that churn.
+    existingSecret: ""
     storage:
       size: 10Gi
       storageClass: ""
@@ -670,6 +684,10 @@ rabbitmq:
     image: ghcr.io/kodustech/kodus-rabbitmq:4.2.2-kodus.1
     username: kodus
     password: ""                    # auto-generated when empty
+    # Use a pre-created Secret (key `password`) instead of the generated one, e.g.
+    # managed by External Secrets. GitOps tools render without cluster access, so
+    # the generated password changes on every render; this avoids that churn.
+    existingSecret: ""
     storage:
       size: 8Gi
       storageClass: ""

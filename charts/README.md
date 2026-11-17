@@ -899,3 +899,42 @@ services:
 Values are rendered verbatim. Without `labelSelector`, a constraint's
 `matchLabelKeys` scopes the spread to pods with the same label value (here, the
 same service); `matchLabelKeys` needs Kubernetes 1.27+.
+
+## GitOps (Argo CD, Flux)
+
+GitOps tools render the chart with `helm template`, which has no cluster access
+and no release history. Two chart defaults behave differently there:
+
+- **The migration Job name** is `<release>-migrations-<Release.Revision>`, and the
+  revision is always `1` under `helm template`. The name never changes, and a Job
+  is immutable, so the next sync cannot update it. Run it as a sync hook through
+  `migrations.annotations`, so Argo CD deletes and recreates it on each sync:
+
+  ```yaml
+  migrations:
+    annotations:
+      argocd.argoproj.io/hook: Sync
+      argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+  ```
+
+- **Bundled datastore passwords** are generated with `lookup` + random. Without
+  cluster access the lookup returns nothing, so every render produces a new
+  password. Point each bundled store at a Secret you manage, for example with
+  External Secrets (key `password`). The chart then skips its own Secret, and both
+  the StatefulSet and the app pods read the existing one:
+
+  ```yaml
+  postgres:
+    bundled:
+      existingSecret: kodus-postgres     # key: password
+  mongodb:
+    bundled:
+      existingSecret: kodus-mongodb
+  rabbitmq:
+    bundled:
+      existingSecret: kodus-rabbitmq
+  ```
+
+  Set this before the first install. The datastores read the password only when
+  they initialize their volume, so changing the Secret later does not change the
+  password the database already uses.
