@@ -65,9 +65,18 @@ spec:
             mongodb+srv://*)
               echo "  mongodb -> mongodb+srv:// (SRV record, not TCP-probed)" ;;
             *)
-              mghostport=$(echo "$MONGODB_URI" | sed -e 's|^[^/]*//||' -e 's|^.*@||' -e 's|[/?].*$||' -e 's|,.*$||')
-              mghost=$(echo "$mghostport" | cut -d: -f1)
-              mgport=$(echo "$mghostport" | cut -s -d: -f2)
+              # Cut the path/query first: `@` is legal in a database name, while the
+              # userinfo before it must already be percent-encoded. Then keep the
+              # first host of the list. An IPv6 literal is bracketed: [::1]:27017.
+              mghostport=$(echo "$MONGODB_URI" | sed -e 's|^[^/]*//||' -e 's|[/?].*$||' -e 's|^.*@||' -e 's|,.*$||')
+              case "$mghostport" in
+                \[*)
+                  mghost=$(echo "$mghostport" | sed -e 's|^\[||' -e 's|\].*$||')
+                  mgport=$(echo "$mghostport" | sed -n 's|^\[[^]]*\]:||p') ;;
+                *)
+                  mghost=$(echo "$mghostport" | cut -d: -f1)
+                  mgport=$(echo "$mghostport" | cut -s -d: -f2) ;;
+              esac
               probe mongodb "$mghost" "${mgport:-27017}" ;;
           esac
           {{- else }}
