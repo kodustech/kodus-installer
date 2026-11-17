@@ -59,8 +59,10 @@ spec:
       {{- with include "kodus-common.scheduling" (dict "root" $ "cfg" $svc) | trim }}
       {{- . | nindent 6 }}
       {{- end }}
+      {{- if dig "enabled" true $.Values.waitForDeps }}
       initContainers:
         {{- include "kodus-common.waitForDeps" $ | nindent 8 }}
+      {{- end }}
       containers:
         - name: {{ $name }}
           image: {{ include "kodus-common.appImage" (dict "image" $svc.image "root" $ "name" $name) }}

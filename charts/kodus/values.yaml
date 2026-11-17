@@ -230,8 +230,11 @@ image:
 imagePullSecrets: []
 # - name: ghcr-credentials
 
-# Init container image used to wait for data deps (TCP probe).
+# Init container that waits for data deps (TCP probe) before app pods and the
+# migration Job start. enabled: false drops it (e.g. when an external store's port
+# is not reachable by a plain TCP check); the app then retries on its own.
 waitForDeps:
+  enabled: true
   image: busybox:1.37.0
 
 # Limits for chart-created emptyDir volumes. Empty default preserves each volume's
@@ -643,6 +646,11 @@ mongodb:
     database: kodus_db
     existingSecret: ""
     passwordKey: password
+    # Key in existingSecret holding a full connection string (e.g. Atlas
+    # mongodb+srv://user:pass@cluster.example.mongodb.net/?retryWrites=true).
+    # When set, host/port/username/passwordKey are ignored and wait-for-deps
+    # skips Mongo. database above still selects the DB.
+    uriKey: ""
   operator:
     version: "8.0.4"
     members: 3

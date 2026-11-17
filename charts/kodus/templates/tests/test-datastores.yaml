@@ -56,7 +56,11 @@ spec:
             fi
           }
           probe postgres "$API_PG_DB_HOST" "$API_PG_DB_PORT"
+          {{- if and (eq .Values.mongodb.mode "external") .Values.mongodb.external.uriKey }}
+          echo "  mongodb -> MONGODB_URI (connection string, not TCP-probed)"
+          {{- else }}
           probe mongodb  "$API_MG_DB_HOST" "$API_MG_DB_PORT"
+          {{- end }}
           # The broker is configured as a URI, so strip credentials and vhost off
           # it: amqp://user:pass@host:port/vhost -> host, port. An external URI may
           # omit the port (amqps://host/vhost), in which case fall back by scheme.

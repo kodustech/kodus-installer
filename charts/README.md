@@ -286,6 +286,31 @@ kubectl -n kodus create secret generic kodus-pg    --from-literal=password='...'
 kubectl -n kodus create secret generic kodus-rabbit --from-literal=uri='amqps://user:pass@host:5671/kodus-ai'
 ```
 
+**MongoDB connection string (Atlas `mongodb+srv://`).** An SRV host has no A
+record, so `host`/`port` cannot describe it. Store the full URI in the Secret and
+point `mongodb.external.uriKey` at it:
+
+```bash
+kubectl -n kodus create secret generic kodus-mongo \
+  --from-literal=uri='mongodb+srv://kodus:...@cluster0.abcde.mongodb.net/?retryWrites=true&w=majority&authSource=admin'
+```
+
+```yaml
+mongodb:
+  mode: external
+  external:
+    existingSecret: kodus-mongo
+    uriKey: uri
+    database: kodus_db       # still selects the database (API_MG_DB_DATABASE)
+```
+
+The pods then get `MONGODB_URI` (which the app prefers) instead of
+`API_MG_DB_HOST/PORT/USERNAME/PASSWORD`, so the Secret needs no `password` key,
+and the `wait-for-deps` init container skips the Mongo TCP check. To drop that
+init container entirely (for example when an external port is not reachable by a
+plain TCP probe), set `waitForDeps.enabled: false`; the app retries its
+connections on its own.
+
 ### Datastore security in closed / high-security environments
 
 The **bundled** stores are hardened for the common threat model — verified live on

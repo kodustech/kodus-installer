@@ -89,7 +89,7 @@ Emits nothing when both are empty, so callers wrap it in `with`.
 {{/*
 initContainers that wait for the data dependencies to accept TCP connections
 before the app container starts — prevents CrashLoopBackOff during the DB/queue
-warm-up race. Call with root ctx.
+warm-up race. Call with root ctx. Callers skip it when waitForDeps.enabled=false.
 */}}
 {{- define "kodus-common.waitForDeps" -}}
 {{- $pgHost := "" }}{{- $pgPort := "5432" }}
@@ -107,7 +107,10 @@ warm-up race. Call with root ctx.
     - -c
     - |
       until nc -z {{ $pgHost }} {{ $pgPort }}; do echo "waiting for postgres..."; sleep 2; done
+      {{- /* URI mode (e.g. mongodb+srv://) has no TCP-resolvable host to probe */}}
+      {{- if not (and (eq .Values.mongodb.mode "external") .Values.mongodb.external.uriKey) }}
       until nc -z {{ $mgHost }} {{ $mgPort }}; do echo "waiting for mongodb..."; sleep 2; done
+      {{- end }}
       {{- if ne .Values.rabbitmq.mode "external" }}
       until nc -z {{ .Release.Name }}-rabbitmq 5672; do echo "waiting for rabbitmq..."; sleep 2; done
       {{- end }}

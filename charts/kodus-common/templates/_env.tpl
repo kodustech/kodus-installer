@@ -79,6 +79,16 @@ Call with root ctx.
       key: password
 - name: API_MG_DB_DATABASE
   value: {{ .Values.mongodb.operator.database | quote }}
+{{- else if .Values.mongodb.external.uriKey }}
+{{- /* Full connection string (e.g. Atlas mongodb+srv://). The app prefers
+       MONGODB_URI over host/port/user/password, so those are not emitted. */}}
+- name: MONGODB_URI
+  valueFrom:
+    secretKeyRef:
+      name: {{ required "mongodb.external.existingSecret is required when mongodb.mode=external" .Values.mongodb.external.existingSecret }}
+      key: {{ .Values.mongodb.external.uriKey }}
+- name: API_MG_DB_DATABASE
+  value: {{ .Values.mongodb.external.database | quote }}
 {{- else }}
 - name: API_MG_DB_HOST
   value: {{ .Values.mongodb.external.host | quote }}
