@@ -56,7 +56,44 @@ spec:
             fi
           }
           probe postgres "$API_PG_DB_HOST" "$API_PG_DB_PORT"
+          {{- if and (eq .Values.mongodb.mode "external") .Values.mongodb.external.uriKey }}
+          # A connection string: probe the first host of a plain mongodb:// URI.
+          # mongodb+srv:// names an SRV record, not a host, so it cannot be dialed.
+          case "$MONGODB_URI" in
+            "")
+              echo "  mongodb -> MONGODB_URI is empty"; fail=1 ;;
+            mongodb+srv://*)
+              echo "  mongodb -> mongodb+srv:// (SRV record, not TCP-probed)" ;;
+            *)
+              # Drop the userinfo before cutting the path, so credentials never reach
+              # the probe log or DNS. Valid userinfo is percent-encoded: it ends at the
+              # first `@` and holds no `/` or `?`. Any `@` left after that means an
+              # unescaped character the app's driver rejects too, so fail without
+              # printing the URI.
+              mgrest=${MONGODB_URI#*//}
+              case "${mgrest%%@*}" in
+                *[/?]*) ;;
+                *) mgrest=${mgrest#*@} ;;
+              esac
+              if [ "${mgrest#*@}" != "$mgrest" ]; then
+                echo "  mongodb -> MONGODB_URI has an unescaped '@', '/' or '?' (not printed)"; fail=1
+              else
+                # First host of the list. An IPv6 literal is bracketed: [::1]:27017.
+                mghostport=$(echo "$mgrest" | sed -e 's|[/?].*$||' -e 's|,.*$||')
+                case "$mghostport" in
+                  \[*)
+                    mghost=$(echo "$mghostport" | sed -e 's|^\[||' -e 's|\].*$||')
+                    mgport=$(echo "$mghostport" | sed -n 's|^\[[^]]*\]:||p') ;;
+                  *)
+                    mghost=$(echo "$mghostport" | cut -d: -f1)
+                    mgport=$(echo "$mghostport" | cut -s -d: -f2) ;;
+                esac
+                probe mongodb "$mghost" "${mgport:-27017}"
+              fi ;;
+          esac
+          {{- else }}
           probe mongodb  "$API_MG_DB_HOST" "$API_MG_DB_PORT"
+          {{- end }}
           # The broker is configured as a URI, so strip credentials and vhost off
           # it: amqp://user:pass@host:port/vhost -> host, port. An external URI may
           # omit the port (amqps://host/vhost), in which case fall back by scheme.

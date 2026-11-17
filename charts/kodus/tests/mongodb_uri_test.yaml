@@ -1,0 +1,115 @@
+suite: MongoDB external URI and waitForDeps toggle
+templates:
+  - templates/deployment.yaml
+  - templates/configmap.yaml
+  - templates/secrets.yaml
+  - templates/migration-job.yaml
+release:
+  name: kodus
+tests:
+  - it: external mode without uriKey keeps host/port/password env and the mongo wait
+    template: templates/deployment.yaml
+    set:
+      mongodb.mode: external
+      mongodb.external.host: mongo.internal
+      mongodb.external.existingSecret: kodus-mongo
+    documentSelector:
+      path: metadata.name
+      value: kodus-api
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: API_MG_DB_HOST, value: mongo.internal}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: API_MG_DB_PASSWORD, valueFrom: {secretKeyRef: {name: kodus-mongo, key: password}}}
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content: {name: MONGODB_URI}
+          any: true
+      - matchRegex:
+          path: spec.template.spec.initContainers[0].command[2]
+          pattern: nc -z mongo.internal 27017
+
+  - it: uriKey emits MONGODB_URI + database and drops host/port/user/password
+    template: templates/deployment.yaml
+    set:
+      mongodb.mode: external
+      mongodb.external.existingSecret: kodus-mongo
+      mongodb.external.uriKey: uri
+      mongodb.external.database: kodus_prod
+    documentSelector:
+      path: metadata.name
+      value: kodus-api
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: MONGODB_URI, valueFrom: {secretKeyRef: {name: kodus-mongo, key: uri}}}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: API_MG_DB_DATABASE, value: kodus_prod}
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content: {name: API_MG_DB_HOST}
+          any: true
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content: {name: API_MG_DB_PORT}
+          any: true
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content: {name: API_MG_DB_USERNAME}
+          any: true
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content: {name: API_MG_DB_PASSWORD}
+          any: true
+      - notMatchRegex:
+          path: spec.template.spec.initContainers[0].command[2]
+          pattern: mongodb
+      - matchRegex:
+          path: spec.template.spec.initContainers[0].command[2]
+          pattern: nc -z kodus-postgres 5432
+
+  - it: uriKey still requires existingSecret
+    template: templates/migration-job.yaml
+    set:
+      mongodb:
+        mode: external
+        external: { existingSecret: "", uriKey: uri }
+    asserts:
+      - failedTemplate:
+          errorPattern: mongodb.external.existingSecret is required
+
+  - it: uriKey also applies to the migration Job
+    template: templates/migration-job.yaml
+    set:
+      mongodb.mode: external
+      mongodb.external.existingSecret: kodus-mongo
+      mongodb.external.uriKey: uri
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: MONGODB_URI, valueFrom: {secretKeyRef: {name: kodus-mongo, key: uri}}}
+      - notMatchRegex:
+          path: spec.template.spec.initContainers[0].command[2]
+          pattern: mongodb
+
+  - it: keeps the wait-for-deps init container by default
+    templates:
+      - templates/deployment.yaml
+      - templates/migration-job.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.initContainers[0].name
+          value: wait-for-deps
+
+  - it: waitForDeps.enabled=false removes the init container
+    templates:
+      - templates/deployment.yaml
+      - templates/migration-job.yaml
+    set:
+      waitForDeps.enabled: false
+    asserts:
+      - notExists:
+          path: spec.template.spec.initContainers

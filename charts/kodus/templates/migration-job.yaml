@@ -12,6 +12,10 @@ metadata:
   labels:
     {{- include "kodus.labels" . | nindent 4 }}
     app.kubernetes.io/component: migrations
+  {{- with .Values.migrations.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
 spec:
   backoffLimit: 3
   ttlSecondsAfterFinished: 600
@@ -25,8 +29,13 @@ spec:
       restartPolicy: OnFailure
       securityContext:
         {{- include "kodus-common.podSecurityContext" . | nindent 8 }}
+      {{- with include "kodus-common.scheduling" (dict "root" . "cfg" .Values.migrations) | trim }}
+      {{- . | nindent 6 }}
+      {{- end }}
+      {{- if dig "enabled" true .Values.waitForDeps }}
       initContainers:
         {{- include "kodus-common.waitForDeps" . | nindent 8 }}
+      {{- end }}
       containers:
         - name: migrations
           image: {{ include "kodus-common.appImage" (dict "image" .Values.migrations.image "root" . "name" "migrations") }}

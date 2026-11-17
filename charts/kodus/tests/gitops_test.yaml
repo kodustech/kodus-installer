@@ -1,0 +1,152 @@
+suite: GitOps knobs (migration Job annotations, bundled existingSecret)
+templates:
+  - templates/deployment.yaml
+  - templates/configmap.yaml
+  - templates/secrets.yaml
+  - templates/migration-job.yaml
+  - templates/datastores/datastore-secrets.yaml
+  - templates/datastores/bundled-postgres.yaml
+  - templates/datastores/bundled-mongodb.yaml
+  - templates/datastores/bundled-rabbitmq.yaml
+release:
+  name: kodus
+tests:
+  - it: renders no annotations on the migration Job by default
+    template: templates/migration-job.yaml
+    asserts:
+      - notExists:
+          path: metadata.annotations
+
+  - it: renders migrations.annotations on the migration Job
+    template: templates/migration-job.yaml
+    set:
+      migrations.annotations:
+        argocd.argoproj.io/hook: Sync
+        argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+    asserts:
+      - equal:
+          path: metadata.annotations
+          value:
+            argocd.argoproj.io/hook: Sync
+            argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+
+  - it: generates the three datastore Secrets by default
+    template: templates/datastores/datastore-secrets.yaml
+    asserts:
+      - hasDocuments:
+          count: 3
+
+  - it: wires the generated Secret into the StatefulSet and the app by default
+    templates:
+      - templates/datastores/bundled-postgres.yaml
+      - templates/deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: POSTGRES_PASSWORD, valueFrom: {secretKeyRef: {name: kodus-postgres-secret, key: password}}}
+        template: templates/datastores/bundled-postgres.yaml
+        documentSelector: {path: kind, value: StatefulSet}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: API_PG_DB_PASSWORD, valueFrom: {secretKeyRef: {name: kodus-postgres-secret, key: password}}}
+        template: templates/deployment.yaml
+        documentSelector: {path: metadata.name, value: kodus-api}
+
+  - it: skips only the Secret of a store with existingSecret
+    template: templates/datastores/datastore-secrets.yaml
+    set:
+      postgres.bundled.existingSecret: pg-ext
+    asserts:
+      - hasDocuments:
+          count: 2
+      - notEqual:
+          path: metadata.name
+          value: kodus-postgres-secret
+
+  - it: skips all generated Secrets when every store has existingSecret
+    template: templates/datastores/datastore-secrets.yaml
+    set:
+      postgres.bundled.existingSecret: pg-ext
+      mongodb.bundled.existingSecret: mg-ext
+      rabbitmq.bundled.existingSecret: rmq-ext
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: points the StatefulSets at existingSecret
+    templates:
+      - templates/datastores/bundled-postgres.yaml
+      - templates/datastores/bundled-mongodb.yaml
+      - templates/datastores/bundled-rabbitmq.yaml
+    set:
+      postgres.bundled.existingSecret: pg-ext
+      mongodb.bundled.existingSecret: mg-ext
+      rabbitmq.bundled.existingSecret: rmq-ext
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: POSTGRES_PASSWORD, valueFrom: {secretKeyRef: {name: pg-ext, key: password}}}
+        template: templates/datastores/bundled-postgres.yaml
+        documentSelector: {path: kind, value: StatefulSet}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: MONGO_INITDB_ROOT_PASSWORD, valueFrom: {secretKeyRef: {name: mg-ext, key: password}}}
+        template: templates/datastores/bundled-mongodb.yaml
+        documentSelector: {path: kind, value: StatefulSet}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: RABBITMQ_DEFAULT_PASS, valueFrom: {secretKeyRef: {name: rmq-ext, key: password}}}
+        template: templates/datastores/bundled-rabbitmq.yaml
+        documentSelector: {path: kind, value: StatefulSet}
+
+  - it: points the app env at existingSecret
+    template: templates/deployment.yaml
+    set:
+      postgres.bundled.existingSecret: pg-ext
+      mongodb.bundled.existingSecret: mg-ext
+      rabbitmq.bundled.existingSecret: rmq-ext
+    documentSelector:
+      path: metadata.name
+      value: kodus-api
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: API_PG_DB_PASSWORD, valueFrom: {secretKeyRef: {name: pg-ext, key: password}}}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: API_MG_DB_PASSWORD, valueFrom: {secretKeyRef: {name: mg-ext, key: password}}}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: RABBITMQ_PASS, valueFrom: {secretKeyRef: {name: rmq-ext, key: password}}}
+
+  - it: builds the bundled RabbitMQ URI from the password by default
+    template: templates/deployment.yaml
+    set:
+      rabbitmq.bundled.existingSecret: rmq-ext
+    documentSelector:
+      path: metadata.name
+      value: kodus-api
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: API_RABBITMQ_URI, value: "amqp://$(RABBITMQ_USER):$(RABBITMQ_PASS)@kodus-rabbitmq:5672/kodus-ai"}
+
+  - it: rabbitmq.bundled.uriKey reads the full URI from existingSecret
+    templates:
+      - templates/deployment.yaml
+      - templates/migration-job.yaml
+    set:
+      rabbitmq.bundled.existingSecret: rmq-ext
+      rabbitmq.bundled.uriKey: uri
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: API_RABBITMQ_URI, valueFrom: {secretKeyRef: {name: rmq-ext, key: uri}}}
+        template: templates/deployment.yaml
+        documentSelector:
+          path: metadata.name
+          value: kodus-api
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: API_RABBITMQ_URI, valueFrom: {secretKeyRef: {name: rmq-ext, key: uri}}}
+        template: templates/migration-job.yaml

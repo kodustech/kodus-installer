@@ -1,0 +1,42 @@
+suite: helm test datastore probe
+# templates/tests/test-datastores.yaml is the `helm test` hook that dials each
+# store. It is not rendered by any other suite, so a branch that stops probing
+# (and always passes) would go unnoticed.
+templates:
+  - templates/tests/test-datastores.yaml
+release:
+  name: kodus
+tests:
+  - it: helm test still checks MongoDB in URI mode
+    template: templates/tests/test-datastores.yaml
+    set:
+      mongodb.mode: external
+      mongodb.external.existingSecret: kodus-mongo
+      mongodb.external.uriKey: uri
+    asserts:
+      - contains:
+          path: spec.containers[0].env
+          content: {name: MONGODB_URI, valueFrom: {secretKeyRef: {name: kodus-mongo, key: uri}}}
+      - matchRegex:
+          path: spec.containers[0].args[0]
+          pattern: 'MONGODB_URI is empty"; fail=1'
+      - matchRegex:
+          path: spec.containers[0].args[0]
+          pattern: 'unescaped .* \(not printed\)"; fail=1'
+      - matchRegex:
+          path: spec.containers[0].args[0]
+          pattern: 'probe mongodb "\$mghost" "\$\{mgport:-27017\}"'
+
+  - it: helm test probes host/port when there is no uriKey
+    template: templates/tests/test-datastores.yaml
+    set:
+      mongodb.mode: external
+      mongodb.external.host: mongo.internal
+      mongodb.external.existingSecret: kodus-mongo
+    asserts:
+      - matchRegex:
+          path: spec.containers[0].args[0]
+          pattern: 'probe mongodb +"\$API_MG_DB_HOST" "\$API_MG_DB_PORT"'
+      - notMatchRegex:
+          path: spec.containers[0].args[0]
+          pattern: MONGODB_URI
