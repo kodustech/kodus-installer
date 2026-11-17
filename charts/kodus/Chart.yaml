@@ -7,7 +7,7 @@ type: application
 # is published to a registry by tag and a published version can never be re-cut.
 version: 0.3.5
 # appVersion tracks the Kodus self-hosted release (docker image tag).
-appVersion: "2.2.10"
+appVersion: "2.2.11"
 keywords:
   - kodus
   - ai
