@@ -126,9 +126,11 @@ MQ_URI=$(rt_env_get "$ENV_FILE" API_RABBITMQ_URI)
 VHOST=$(rt_url_part "$MQ_URI" path)
 MQ_PW=$(rt_env_get "$RT_STATE/secrets.env" RUNTIME_MQ_PASSWORD)
 Q='workflow\.jobs\.runtime_(run|control)\.queue'
-# The retry exchange, and the dead-letter exchange its queues name: RabbitMQ
+# The retry exchange (kodus-ai libs/runtime/run RUNTIME_RUN_RETRY_EXCHANGE,
+# declared by the product's API; no delayed-message plugin), and the
+# dead-letter exchange its queues name: RabbitMQ
 # checks write access to a queue's x-dead-letter-exchange at every declare.
-D='workflow\.exchange\.runtime_run_retry|workflow\.exchange\.dlx'
+D='workflow\.exchange\.runtime_retry|workflow\.exchange\.dlx'
 if [ "${use_local_mq:-true}" = false ]; then
     rt_warn "external RabbitMQ: create user kodus_runtime on vhost '$VHOST' with the password RUNTIME_MQ_PASSWORD of $RT_STATE/secrets.env and the permissions in docs/runtime.md (RabbitMQ), then re-run."
 else

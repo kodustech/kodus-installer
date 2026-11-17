@@ -150,7 +150,8 @@ MQU=$(grep '^RABBITMQ_DEFAULT_USER=' .env | cut -d= -f2)
 mqadmin() { scripts/runtime/compose.sh exec -T rabbitmq rabbitmqadmin -u "$MQU" -p "$MQPW" -V kodus-ai "$@"; }
 mqadmin declare exchange name=workflow.exchange type=topic durable=true
 mqadmin declare exchange name=workflow.exchange.dlx type=topic durable=true
-mqadmin declare exchange name=workflow.exchange.runtime_run_retry type=x-delayed-message durable=true arguments='{"x-delayed-type":"direct"}'
+mqadmin declare exchange name=workflow.exchange.runtime_retry type=headers durable=true
+mqadmin declare exchange name=workflow.exchange.runtime_retry.return type=direct durable=true
 for i in $(seq 1 60); do
     scripts/runtime/compose.sh exec -T runtime-worker node -e "require('net').connect(3430,'127.0.0.1').on('connect',()=>process.exit(0)).on('error',()=>process.exit(1))" 2>/dev/null && break
     [ "$i" = 60 ] && { scripts/runtime/compose.sh logs --tail 30 runtime-worker; echo "FAILED the runtime-worker's sandbox listener never opened"; exit 1; }

@@ -411,7 +411,7 @@ installs on a throwaway kind cluster with gVisor and proves registration, the pr
 
 RabbitMQ user `kodus_runtime` on the product vhost (set by `install.sh` on the bundled broker; on an external broker,
 create it with these): configure `^(workflow\.jobs\.runtime_(run|control)\.queue|amq\.gen-.*)$`, write
-`^(workflow\.exchange|workflow\.exchange\.runtime_run_retry|workflow\.exchange\.dlx|workflow\.jobs\.runtime_(run|control)\.queue|amq\.gen-.*)$`
+`^(workflow\.exchange|workflow\.exchange\.runtime_retry|workflow\.exchange\.dlx|workflow\.jobs\.runtime_(run|control)\.queue|amq\.gen-.*)$`
 (the dead-letter exchange: RabbitMQ checks write access to it whenever the worker declares its queues),
 read `^(workflow\.exchange|workflow\.jobs\.runtime_(run|control)\.queue|amq\.gen-.*)$`, and on `workflow.exchange` the
 topic permissions write `^workflow\.jobs\.created\.RUNTIME_PUBLISH$`, read `^workflow\.jobs\.(\*|created)\.RUNTIME_(RUN|CONTROL)$`.

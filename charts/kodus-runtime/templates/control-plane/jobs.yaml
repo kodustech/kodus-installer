@@ -101,7 +101,7 @@ data:
           await put('/users/kodus_runtime', { password: process.env.MQ_RUNTIME_PASSWORD, tags: '' });
           await put(`/permissions/${vhost}/kodus_runtime`, {
             configure: `^(${q}|amq\\.gen-.*)$`,
-            write: `^(workflow\\.exchange|workflow\\.exchange\\.runtime_run_retry|workflow\\.exchange\\.dlx|${q}|amq\\.gen-.*)$`,
+            write: `^(workflow\\.exchange|workflow\\.exchange\\.runtime_retry|workflow\\.exchange\\.dlx|${q}|amq\\.gen-.*)$`,
             read: `^(workflow\\.exchange|${q}|amq\\.gen-.*)$`,
           });
           await put(`/topic-permissions/${vhost}/kodus_runtime`, {
