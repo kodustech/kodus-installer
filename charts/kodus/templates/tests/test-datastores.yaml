@@ -65,19 +65,35 @@ spec:
             mongodb+srv://*)
               echo "  mongodb -> mongodb+srv:// (SRV record, not TCP-probed)" ;;
             *)
-              # Cut the path/query first: `@` is legal in a database name, while the
-              # userinfo before it must already be percent-encoded. Then keep the
-              # first host of the list. An IPv6 literal is bracketed: [::1]:27017.
-              mghostport=$(echo "$MONGODB_URI" | sed -e 's|^[^/]*//||' -e 's|[/?].*$||' -e 's|^.*@||' -e 's|,.*$||')
-              case "$mghostport" in
-                \[*)
-                  mghost=$(echo "$mghostport" | sed -e 's|^\[||' -e 's|\].*$||')
-                  mgport=$(echo "$mghostport" | sed -n 's|^\[[^]]*\]:||p') ;;
-                *)
-                  mghost=$(echo "$mghostport" | cut -d: -f1)
-                  mgport=$(echo "$mghostport" | cut -s -d: -f2) ;;
+              # Drop the userinfo before cutting the path, so credentials never reach
+              # the probe log or DNS. Valid userinfo is percent-encoded: it ends at the
+              # first `@` and holds no `/` or `?`. An `@` after one of those is
+              # ambiguous (an `@` in the database name, or a password with a raw `/`),
+              # so skip the probe without printing the URI.
+              mgrest=${MONGODB_URI#*//}
+              mgskip=0
+              case "$mgrest" in
+                *@*)
+                  case "${mgrest%%@*}" in
+                    *[/?]*) mgskip=1 ;;
+                    *)      mgrest=${mgrest#*@} ;;
+                  esac ;;
               esac
-              probe mongodb "$mghost" "${mgport:-27017}" ;;
+              if [ "$mgskip" = 1 ]; then
+                echo "  mongodb -> MONGODB_URI has '@' after its host (not TCP-probed)"
+              else
+                # First host of the list. An IPv6 literal is bracketed: [::1]:27017.
+                mghostport=$(echo "$mgrest" | sed -e 's|[/?].*$||' -e 's|,.*$||')
+                case "$mghostport" in
+                  \[*)
+                    mghost=$(echo "$mghostport" | sed -e 's|^\[||' -e 's|\].*$||')
+                    mgport=$(echo "$mghostport" | sed -n 's|^\[[^]]*\]:||p') ;;
+                  *)
+                    mghost=$(echo "$mghostport" | cut -d: -f1)
+                    mgport=$(echo "$mghostport" | cut -s -d: -f2) ;;
+                esac
+                probe mongodb "$mghost" "${mgport:-27017}"
+              fi ;;
           esac
           {{- else }}
           probe mongodb  "$API_MG_DB_HOST" "$API_MG_DB_PORT"
