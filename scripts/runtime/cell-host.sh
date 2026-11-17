@@ -74,7 +74,14 @@
 #                       accepted hello with the hub; if it does not,
 #                       kodus-cell-update-watch.timer returns this host to the
 #                       release before by itself, and `cell update` refuses that
-#                       release until -retry-rolled-back.
+#                       release until --retry-rolled-back.
+#   --retry-rolled-back install a release this host rolled back by itself
+#   --require-protocol  refuse a release whose manifest names no PROTOCOL
+#   --skip-preflight    swap without the new release's host preflight
+#   --skip-protocol-check  install without checking the release's protocol
+#                       against what the hub last accepted (cell state-dir)
+#                       The four map to the same `cell update` flags; the
+#                       two --skip-* are for a host the checks misjudge.
 #   --release-bundle PATH  the same from an offline bundle: verified and its
 #                       images loaded as for install, then its release/ goes
 #                       through `cell update -from` as above (release from the
@@ -133,6 +140,7 @@ EGRESS_ALLOW='' UPSTREAM_DNS='' SANDBOX_POOL='' GVISOR_ARCHIVE='' REINSTALL_RUNS
 ENFORCERS_SUBNET='' EGRESS_ENFORCER_IP='' INJECTOR_ENFORCER_IP=''
 DRY_RUN=0 HUB_URL='' HUB_CA='' OUT='' PURGE=0 REMOVE_RUNSC=0 THIN_POOL='' RUNTIME_CLASS=gvisor MIN_FREE_GB=20
 FROM='' ROLLBACK_WINDOW=10m RELEASE_BUNDLE='' REGISTRY_MIRROR=''
+UPDATE_EXTRA=()
 while [ $# -gt 0 ]; do
     case "$1" in
         --profile) PROFILE=${2:?}; shift 2 ;;
@@ -145,6 +153,8 @@ while [ $# -gt 0 ]; do
         --release-bundle) RELEASE_BUNDLE=${2:?}; shift 2 ;;
         --registry-mirror) REGISTRY_MIRROR=${2:?}; shift 2 ;;
         --rollback-window) ROLLBACK_WINDOW=${2:?}; shift 2 ;;
+        --retry-rolled-back | --require-protocol | --skip-preflight | --skip-protocol-check)
+            UPDATE_EXTRA+=("-${1#--}"); shift ;;
         --workdir) WORKDIR_R=${2:?}; shift 2 ;;
         --egress-allow) EGRESS_ALLOW=${2:?}; shift 2 ;;
         --upstream-dns) UPSTREAM_DNS=${2:?}; shift 2 ;;
@@ -604,7 +614,7 @@ cell_update_release() {
     cur=$(readlink "$OPT/current" 2>/dev/null) || rt_die "no current release to run cell update with ($OPT_R/current): install first"
     cur=${cur#"$PREFIX"}
     cell="$PREFIX$cur/bin/cell"
-    local args=(update -root "$OPT" -from "$1" -release "$RELEASE" -preflight-config "$ETC/cell.yaml" -rollback-window "$ROLLBACK_WINDOW")
+    local args=(update -root "$OPT" -from "$1" -release "$RELEASE" -preflight-config "$ETC/cell.yaml" -rollback-window "$ROLLBACK_WINDOW" ${UPDATE_EXTRA[@]+"${UPDATE_EXTRA[@]}"})
     if [ "$DRY_RUN" = 1 ]; then
         printf '[dry-run] %s %s\n' "$cell" "${args[*]}"
         REL_DIR=$cur

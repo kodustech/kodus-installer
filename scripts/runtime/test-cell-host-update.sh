@@ -5,8 +5,9 @@
 # run with KODUS_CELL_ROOT on the temporary directory, a stub cell and a
 # stub systemctl.
 #   - every `cell update` the script runs carries -preflight-config with the
-#     cell's config, -root and the rollback window; a refused update dies
-#     and keeps the release current;
+#     cell's config, -root and the rollback window, plus the upgrade flags
+#     (--retry-rolled-back, --require-protocol, --skip-*); a refused update
+#     dies and keeps the release current;
 #   - `upgrade --from` needs --release;
 #   - `rollback` by hand swaps back, restores the release's settings and
 #     units, and turns the automatic rollback watch off;
@@ -84,6 +85,15 @@ t "it runs with the installer's root, the release and its files" has "update -ro
 t "it arms the rollback watch (default window)" has "-rollback-window 10m" "$STUB_LOG"
 t "the release's settings go into the directory cell update made" has "/opt/kodus-cell/releases/v2-bbbbbbbbbbbb" "$H/rel-dir"
 t "the release cell update ran from was the current one" test -s "$H/cell.log"
+
+new_host passthrough
+CALL=(eval 'RELEASE=v2; UPDATE_EXTRA=(-retry-rolled-back -require-protocol); cell_update_release /srv/release-v2')
+t "upgrade flags reach cell update" in_script
+t "it passes -retry-rolled-back and -require-protocol" has "-rollback-window 10m -retry-rolled-back -require-protocol" "$STUB_LOG"
+t "cell-host.sh parses the four cell update flags" sh -c '
+    for f in retry-rolled-back require-protocol skip-preflight skip-protocol-check; do
+        grep -q -- "--$f)" "$0" || grep -q -- "--$f |" "$0" || grep -q -- "| --$f" "$0" || { echo "--$f not parsed"; exit 1; }
+    done' "$CH"
 
 new_host refused
 CALL=(eval 'RELEASE=v2; export STUB_EXIT=1; cell_update_release /srv/release-v2')
