@@ -57,7 +57,19 @@ spec:
           }
           probe postgres "$API_PG_DB_HOST" "$API_PG_DB_PORT"
           {{- if and (eq .Values.mongodb.mode "external") .Values.mongodb.external.uriKey }}
-          echo "  mongodb -> MONGODB_URI (connection string, not TCP-probed)"
+          # A connection string: probe the first host of a plain mongodb:// URI.
+          # mongodb+srv:// names an SRV record, not a host, so it cannot be dialed.
+          case "$MONGODB_URI" in
+            "")
+              echo "  mongodb -> MONGODB_URI is empty"; fail=1 ;;
+            mongodb+srv://*)
+              echo "  mongodb -> mongodb+srv:// (SRV record, not TCP-probed)" ;;
+            *)
+              mghostport=$(echo "$MONGODB_URI" | sed -e 's|^[^/]*//||' -e 's|^.*@||' -e 's|[/?].*$||' -e 's|,.*$||')
+              mghost=$(echo "$mghostport" | cut -d: -f1)
+              mgport=$(echo "$mghostport" | cut -s -d: -f2)
+              probe mongodb "$mghost" "${mgport:-27017}" ;;
+          esac
           {{- else }}
           probe mongodb  "$API_MG_DB_HOST" "$API_MG_DB_PORT"
           {{- end }}
