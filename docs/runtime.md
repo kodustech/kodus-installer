@@ -259,13 +259,23 @@ It waits for the claims in flight to end, stops the runtime-worker, backs up, th
 cell release of the same row of `runtime/compatibility.tsv`:
 
 ```bash
-sudo scripts/runtime/cell-host.sh upgrade --release <cell release>
+sudo scripts/runtime/cell-host.sh upgrade --release <cell release> --from <the release's signed files>
 ```
 
+With `--from` (the release directory the release workflow publishes: `SHA256SUMS`, `SHA256SUMS.sig`, `RELEASE-INDEX`
+and its signature, `<command>-linux-<arch>`), the running cell installs it with `cell update`: the signature and the
+release index verify offline, the release's protocol is one the hub last accepted, and the new release's own
+`cell preflight` passes with `/etc/kodus/cell/cell.yaml` before `current` moves. Then the new release has
+`--rollback-window` (default `10m`) to complete one accepted hello with the hub. If it does not (it crashes at start,
+or the hub refuses it), `kodus-cell-update-watch.timer` puts the release before back by itself, with its images and
+units, restarts the cell and logs one line naming both releases and why (`journalctl -u kodus-cell-update-watch`).
+`cell update` then refuses that release until `-retry-rolled-back`. Without `--from` (`--cell-image`, `--cell-bin-dir`,
+or the image of `images.lock`) the binaries are copied without a signature check and without the automatic rollback.
+
 The hub always goes first: a newer cell's hello carries fields an older hub refuses. `cell-host.sh rollback` puts the
-previous cell release back (with the images and the units it ran with; a release installed before the units were kept
-leaves the current ones, which pass flags it does not know); `install.sh --release <previous>` rolls the control plane
-back (the Runtime's migrations only add tables).
+previous cell release back by hand (with the images and the units it ran with; a release installed before the units
+were kept leaves the current ones, which pass flags it does not know) and turns the automatic watch off;
+`install.sh --release <previous>` rolls the control plane back (the Runtime's migrations only add tables).
 
 ## Backup and restore
 

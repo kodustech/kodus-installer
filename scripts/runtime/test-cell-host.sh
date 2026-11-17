@@ -132,7 +132,7 @@ t "a corrupted gVisor archive is refused" fails_with "does not match the SHA-512
     $CH install --profile docker-gvisor --bundle $BUNDLE "${BIN_ARGS[@]}" --min-free-gb 1 --gvisor-archive /tmp/bad.tar.bz2 --dry-run
 
 echo "== what install wrote"
-for u in kodus-cell-injector.service kodus-cell-egress.service kodus-cell.service kodus-cell.target kodus-cell-reaper.service kodus-cell-reaper.timer; do
+for u in kodus-cell-injector.service kodus-cell-egress.service kodus-cell.service kodus-cell.target kodus-cell-reaper.service kodus-cell-reaper.timer kodus-cell-update-watch.service kodus-cell-update-watch.timer; do
     t "unit $u" test -s /etc/systemd/system/$u
 done
 t "units name the real docker path" sh -c '! grep -l @DOCKER@ /etc/systemd/system/kodus-cell-*.service && grep -q "ExecStart=/usr/bin/docker start -a" /etc/systemd/system/kodus-cell-egress.service'
@@ -140,6 +140,8 @@ t "reaper runs the binary the release ships (not /usr/local/bin/kodus-reaper)" h
 t "reaper binary exists at that path" test -x /opt/kodus-cell/current/bin/reaper
 printf '[Unit]\nDescription=stub\n[Service]\nExecStart=/bin/true\n' >/etc/systemd/system/docker.service
 t "systemd-analyze verify accepts the units" sh -c 'cd /etc/systemd/system && systemd-analyze verify kodus-cell.target kodus-cell.service kodus-cell-egress.service kodus-cell-injector.service kodus-cell-reaper.service kodus-cell-reaper.timer'
+# The watch runs previous/bin/cell, which exists once an update made one.
+t "systemd-analyze verify accepts the update watch" sh -c 'ln -sfn "$(readlink /opt/kodus-cell/current)" /opt/kodus-cell/previous && cd /etc/systemd/system && systemd-analyze verify kodus-cell-update-watch.service kodus-cell-update-watch.timer; rc=$?; rm -f /opt/kodus-cell/previous; exit $rc'
 t "cell.yaml: the hub verified with the hub CA, the enforcers with the cell-local CA" sh -c 'grep -q "hubUrl: wss://hub.example.internal:3410/cells" /etc/kodus/cell/cell.yaml && grep -qx "  ca: /etc/kodus/cell/identity/ca.pem" /etc/kodus/cell/cell.yaml && grep -qx "  localCa: /etc/kodus/cell/local-ca.pem" /etc/kodus/cell/cell.yaml'
 t "no single trust bundle of both CAs is written" test ! -e /etc/kodus/cell/trust.pem
 spki() { openssl x509 -in "$1" -noout -pubkey | openssl pkey -pubin -outform der | sha256sum | cut -d' ' -f1; }

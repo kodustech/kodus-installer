@@ -10,9 +10,10 @@
 #   check     [--profile <p>] [--workdir DIR] [--bundle DIR | --hub-url URL --hub-ca FILE]
 #             Names every requirement of the profile this host misses; exit 1 if any.
 #   install   [--profile <p>] --bundle DIR [--token-file FILE] [options below]
-#   upgrade   [--release R] [--cell-image REF | --cell-bin-dir DIR]
+#   upgrade   [--release R] [--from DIR | --cell-image REF | --cell-bin-dir DIR] [--rollback-window D]
 #             Installs another cell release beside the current one and restarts on it.
-#   rollback  Restarts on the release installed before the current one.
+#   rollback  Restarts on the release installed before the current one (by hand;
+#             see "upgrade options" for the automatic one).
 #   rotate-local-pki   Re-issues the egress, injector and observer certificates.
 #   status    The units, the release, the cell id and the agent's metrics.
 #   backup    --out FILE   The cell's identity, local PKI, config and bake catalog.
@@ -47,6 +48,22 @@
 #   --dry-run           print what would change the host (Docker, systemd,
 #                       runsc install, cell register) instead of doing it
 #
+# upgrade options:
+#   --from DIR          the release's signed files (SHA256SUMS, SHA256SUMS.sig,
+#                       RELEASE-INDEX and its signature, <command>-linux-<arch>),
+#                       with --release: the running cell's `cell update` installs
+#                       them only after the signature and the index verify
+#                       offline, the hub accepts the release's protocol, and the
+#                       new release's own `cell preflight` passes with this cell's
+#                       config (/etc/kodus/cell/cell.yaml). Then the new release
+#                       has --rollback-window (default 10m) to complete an
+#                       accepted hello with the hub; if it does not,
+#                       kodus-cell-update-watch.timer returns this host to the
+#                       release before by itself, and `cell update` refuses that
+#                       release until -retry-rolled-back.
+#   --cell-image, --cell-bin-dir copy the binaries without a signature check
+#                       and without the automatic rollback.
+#
 # Test hooks (never needed on a real host): KODUS_CELL_ROOT (a prefix for
 # every path written), KODUS_CELL_DOCKER, KODUS_CELL_SYSTEMCTL,
 # KODUS_CELL_KVM_DEVICE, KODUS_CELL_CGROUP_ROOT, KODUS_CELL_SYSTEMD_RUN.
@@ -71,7 +88,11 @@ OPT="$PREFIX$OPT_R"
 UNITS="$PREFIX/etc/systemd/system"
 REAPER_ENV="$PREFIX/etc/kodus/cell-reaper.env"
 LOCAL_BIN="$PREFIX/usr/local/bin"
-UNIT_NAMES="kodus-cell-injector.service kodus-cell-egress.service kodus-cell.service kodus-cell.target kodus-cell-reaper.service kodus-cell-reaper.timer"
+UNIT_NAMES="kodus-cell-injector.service kodus-cell-egress.service kodus-cell.service kodus-cell.target kodus-cell-reaper.service kodus-cell-reaper.timer kodus-cell-update-watch.service kodus-cell-update-watch.timer"
+# What `cell update` leaves for the watch while a new release is on probation
+# (kodus-ai apps/runtime-cell/internal/cellupdate watch.go).
+PENDING_NAME=update-pending.json
+ROLLED_BACK_NAME=rolled-back.json
 EGRESS_NAME=kodus-cell-egress
 INJECTOR_NAME=kodus-cell-injector
 # The internal network the egress reaches the injector on, with fixed
@@ -92,6 +113,7 @@ PROFILE=auto BUNDLE='' TOKEN_FILE='' RELEASE='' CELL_IMAGE_ARG='' CELL_BIN_DIR='
 EGRESS_ALLOW='' UPSTREAM_DNS='' SANDBOX_POOL='' GVISOR_ARCHIVE='' REINSTALL_RUNSC=0
 ENFORCERS_SUBNET='' EGRESS_ENFORCER_IP='' INJECTOR_ENFORCER_IP=''
 DRY_RUN=0 HUB_URL='' HUB_CA='' OUT='' PURGE=0 REMOVE_RUNSC=0 THIN_POOL='' RUNTIME_CLASS=gvisor MIN_FREE_GB=20
+FROM='' ROLLBACK_WINDOW=10m
 while [ $# -gt 0 ]; do
     case "$1" in
         --profile) PROFILE=${2:?}; shift 2 ;;
@@ -100,6 +122,8 @@ while [ $# -gt 0 ]; do
         --release) RELEASE=${2:?}; shift 2 ;;
         --cell-image) CELL_IMAGE_ARG=${2:?}; shift 2 ;;
         --cell-bin-dir) CELL_BIN_DIR=${2:?}; shift 2 ;;
+        --from) FROM=${2:?}; shift 2 ;;
+        --rollback-window) ROLLBACK_WINDOW=${2:?}; shift 2 ;;
         --workdir) WORKDIR_R=${2:?}; shift 2 ;;
         --egress-allow) EGRESS_ALLOW=${2:?}; shift 2 ;;
         --upstream-dns) UPSTREAM_DNS=${2:?}; shift 2 ;;
@@ -548,6 +572,28 @@ install_binaries() { # install_binaries SOURCE -> sets REL_DIR (real path)
     printf '%s\n' "$src" >"$PREFIX$REL_DIR/source"
 }
 
+# cell_update_release DIR: the running cell installs the signed release in DIR
+# (kodus-ai apps/runtime-cell/internal/cellupdate): signature and release index
+# checked offline, the release's protocol against what the hub last accepted,
+# then the new release's own host preflight with this cell's config, before it
+# swaps current and arms the rollback watch. Every `cell update` this script
+# runs is this one, so each carries -preflight-config. Sets REL_DIR.
+cell_update_release() {
+    local cur cell
+    cur=$(readlink "$OPT/current" 2>/dev/null) || rt_die "no current release to run cell update with ($OPT_R/current): install first"
+    cur=${cur#"$PREFIX"}
+    cell="$PREFIX$cur/bin/cell"
+    local args=(update -root "$OPT" -from "$1" -release "$RELEASE" -preflight-config "$ETC/cell.yaml" -rollback-window "$ROLLBACK_WINDOW")
+    if [ "$DRY_RUN" = 1 ]; then
+        printf '[dry-run] %s %s\n' "$cell" "${args[*]}"
+        REL_DIR=$cur
+        return 0
+    fi
+    "$cell" "${args[@]}" || rt_die "cell update refused release $RELEASE (above): $cur stays current"
+    REL_DIR=$(readlink "$OPT/current")
+    REL_DIR=${REL_DIR#"$PREFIX"}
+}
+
 activate_release() { # current -> REL_DIR, previous -> what current was
     local cur
     cur=$(readlink "$OPT/current" 2>/dev/null || true)
@@ -742,9 +788,9 @@ register_cell() {
 
 start_units() {
     run "$SYSTEMCTL" daemon-reload
-    run "$SYSTEMCTL" enable kodus-cell.target kodus-cell-injector.service kodus-cell-egress.service kodus-cell.service kodus-cell-reaper.timer
+    run "$SYSTEMCTL" enable kodus-cell.target kodus-cell-injector.service kodus-cell-egress.service kodus-cell.service kodus-cell-reaper.timer kodus-cell-update-watch.timer
     run "$SYSTEMCTL" restart kodus-cell.target
-    run "$SYSTEMCTL" start kodus-cell-reaper.timer
+    run "$SYSTEMCTL" start kodus-cell-reaper.timer kodus-cell-update-watch.timer
 }
 
 resolve_images() {
@@ -849,6 +895,7 @@ cmd_install() {
 cmd_upgrade() {
     require_root
     [ -s "$ETC/cell.env" ] || rt_die "no cell installed here ($ETC_R/cell.env)"
+    [ -z "$FROM" ] || [ -n "$RELEASE" ] || rt_die "--from needs --release: the release its signature must name"
     CELL_ID=$(rt_env_get "$ETC/cell.env" CELL_ID)
     settings_defaults from-installed
     load_bundle
@@ -861,15 +908,24 @@ cmd_upgrade() {
     run_checks docker-gvisor
     report docker-gvisor || exit 1
     resolve_images
-    install_binaries "$CELL_SOURCE"
-    activate_release
+    if [ -n "$FROM" ]; then
+        cell_update_release "$FROM"
+    else
+        install_binaries "$CELL_SOURCE"
+        activate_release
+    fi
     build_observer_image
     write_config
     # The deploy order of the Runtime: injector, egress, then the agent (the
-    # agent refuses work until both alert feeds answer).
+    # agent refuses work until both alert feeds answer). At once: the new
+    # release's rollback window started at the swap.
     run "$SYSTEMCTL" daemon-reload
+    run "$SYSTEMCTL" enable --now kodus-cell-update-watch.timer
     run "$SYSTEMCTL" restart kodus-cell.target
     rt_ok "Cell $CELL_ID now runs $(readlink "$OPT/current"); 'cell-host.sh rollback' returns to $(readlink "$OPT/previous" 2>/dev/null || echo none)."
+    if [ -n "$FROM" ]; then
+        rt_info "If it completes no accepted hello with the hub within $ROLLBACK_WINDOW, kodus-cell-update-watch.timer rolls it back by itself (journalctl -u kodus-cell-update-watch)."
+    fi
 }
 
 cmd_rollback() {
@@ -879,6 +935,12 @@ cmd_rollback() {
     cur=$(readlink "$OPT/current")
     ln -sfn "$prev" "$OPT/current"
     ln -sfn "$cur" "$OPT/previous"
+    # A rollback by hand ends the watch of an update on probation: the
+    # operator took over, and the watch must not act on links it did not set.
+    if [ -e "$OPT/$PENDING_NAME" ]; then
+        rm -f "$OPT/$PENDING_NAME"
+        rt_info "The automatic rollback watch of $cur is off ($OPT_R/$PENDING_NAME removed)."
+    fi
     # The images it ran with (observer, builder, sandbox) come back with it.
     [ -s "$PREFIX$prev/cell.env" ] && cp "$PREFIX$prev/cell.env" "$ETC/cell.env"
     local u
@@ -907,7 +969,13 @@ cmd_status() {
     local u
     printf 'release:  %s\n' "$(readlink "$OPT/current" 2>/dev/null || echo 'not installed')"
     printf 'cell id:  %s\n' "$(rt_env_get "$ETC/cell.env" CELL_ID)"
-    for u in kodus-cell-injector.service kodus-cell-egress.service kodus-cell.service kodus-cell-reaper.timer; do
+    if [ -e "$OPT/$PENDING_NAME" ]; then
+        printf 'update:   on probation until its first accepted hello (%s)\n' "$OPT_R/$PENDING_NAME"
+    fi
+    if [ -s "$OPT/$ROLLED_BACK_NAME" ]; then
+        printf 'rolled back by the watch: see %s\n' "$OPT_R/$ROLLED_BACK_NAME"
+    fi
+    for u in kodus-cell-injector.service kodus-cell-egress.service kodus-cell.service kodus-cell-reaper.timer kodus-cell-update-watch.timer; do
         printf '%-28s %s\n' "$u" "$("$SYSTEMCTL" is-active "$u" 2>/dev/null || true)"
     done
     if command -v curl >/dev/null 2>&1; then
@@ -932,7 +1000,7 @@ cmd_uninstall() {
     require_root
     local cell
     cell=$(rt_env_get "$ETC/cell.env" CELL_ID)
-    run "$SYSTEMCTL" disable --now kodus-cell-reaper.timer kodus-cell.target kodus-cell.service kodus-cell-egress.service kodus-cell-injector.service || true
+    run "$SYSTEMCTL" disable --now kodus-cell-update-watch.timer kodus-cell-reaper.timer kodus-cell.target kodus-cell.service kodus-cell-egress.service kodus-cell-injector.service || true
     run "$DOCKER" rm -f "$EGRESS_NAME" "$INJECTOR_NAME" || true
     run "$DOCKER" network rm "$ENFORCERS_NAME" || true
     if [ -n "$cell" ] && [ "$DRY_RUN" = 0 ]; then
@@ -956,6 +1024,11 @@ cmd_uninstall() {
     fi
     rt_ok "Cell ${cell:-?} removed from this host. Revoke it in Kodus too: POST /runtime/cells/${cell:-<id>}/revoke (org owner)."
 }
+
+# Sourced (scripts/runtime/test-cell-host-update.sh): the functions only.
+if [ "${BASH_SOURCE[0]}" != "$0" ]; then
+    return 0
+fi
 
 case "$COMMAND" in
     check) cmd_check ;;
