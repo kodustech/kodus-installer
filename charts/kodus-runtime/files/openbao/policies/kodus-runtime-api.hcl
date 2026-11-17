@@ -1,4 +1,4 @@
-# Vendored from kodustech/kodus-ai@ea8b3c846 (kody-runtime/selfhosted-gaps) docker/openbao/policies/kodus-runtime-api.hcl.
+# Vendored from kodustech/kodus-ai@002359871 (kody-runtime/next-all) docker/openbao/policies/kodus-runtime-api.hcl.
 # Re-sync with scripts/runtime/sync-from-kodus-ai.sh; do not edit by hand.
 # The Kodus API: writes, replaces and deletes org secrets for the Runtime.
 # It can never read a value back: no "read" on data/, no "list" anywhere.

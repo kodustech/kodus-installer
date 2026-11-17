@@ -2,7 +2,8 @@
 # Copies the Runtime files the installer vendors from a kodus-ai checkout:
 # OpenBao's config and policies, the Runtime's grant scripts and the cell
 # release's pinned public keys (cell-host.sh --release-bundle verifies with them), each with a
-# header naming the commit. --check only reports drift (exit 1), for CI.
+# header naming the commit, and mirrors the ones the kodus-runtime chart packs
+# into charts/kodus-runtime/files. --check only reports drift (exit 1), for CI.
 #
 # Usage: scripts/runtime/sync-from-kodus-ai.sh --from <kodus-ai checkout> [--check]
 set -euo pipefail
@@ -32,6 +33,15 @@ scripts/runtime/runtime-reader-grants.sql runtime/sql/runtime-reader-grants.sql 
 scripts/runtime/runtime-secrets-reader-grants.sql runtime/sql/runtime-secrets-reader-grants.sql --
 apps/runtime-cell/internal/releasesig/keys/cell-release.pub runtime/cell/cell-release.pub #"
 
+# The chart packs its own copy (helm cannot read outside the chart directory).
+chart_copy() {
+    case "$1" in
+        runtime/sql/*) echo "charts/kodus-runtime/files/sql/${1#runtime/sql/}" ;;
+        runtime/openbao/policies/*) echo "charts/kodus-runtime/files/openbao/policies/${1#runtime/openbao/policies/}" ;;
+        runtime/openbao/config/initialize.hcl) echo "charts/kodus-runtime/files/openbao/initialize.hcl" ;;
+    esac
+}
+
 drift=0
 while read -r src dest c; do
     tmp=$(mktemp)
@@ -46,10 +56,17 @@ while read -r src dest c; do
             rt_warn "$dest differs from kodus-ai $src"
             drift=1
         fi
+        copy=$(chart_copy "$dest")
+        if [ -n "$copy" ] && ! diff -q <(tail -n +3 "$tmp") <(tail -n +3 "$RT_ROOT/$copy") >/dev/null; then
+            rt_warn "$copy differs from kodus-ai $src"
+            drift=1
+        fi
         rm -f "$tmp"
     else
         # mktemp makes it 0600: OpenBao (uid 1000) and runtime-init read these.
         chmod 0644 "$tmp"
+        copy=$(chart_copy "$dest")
+        [ -z "$copy" ] || { cp "$tmp" "$RT_ROOT/$copy"; rt_info "synced $copy"; }
         mv "$tmp" "$RT_ROOT/$dest"
         rt_info "synced $dest"
     fi

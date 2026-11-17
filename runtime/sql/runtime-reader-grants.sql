@@ -1,4 +1,4 @@
--- Vendored from kodustech/kodus-ai@ea8b3c846 (kody-runtime/selfhosted-gaps) scripts/runtime/runtime-reader-grants.sql.
+-- Vendored from kodustech/kodus-ai@002359871 (kody-runtime/next-all) scripts/runtime/runtime-reader-grants.sql.
 -- Re-sync with scripts/runtime/sync-from-kodus-ai.sh; do not edit by hand.
 -- What the product API's read-only role (kodus_runtime_reader, RUNTIME_DATABASE_READ_URL)
 -- may read in the Runtime database (ADR-025): SELECT on these tables and views only, and
@@ -19,7 +19,17 @@ BEGIN
       -- The sandbox operations, counted by the usage report (v22; never output or file content).
       'runtime_sandbox_audit',
       -- The cells' live sessions (connected, free slots, isolation, driver): the Health screen's cells.
-      'runtime_cell_sessions'
+      'runtime_cell_sessions',
+      -- Preview activity for the owner and the usage report (v27; ids, actions and counts, never an IP or a path).
+      'runtime_preview_audit',
+      -- The build states a cell evicted (v33; ids and a time): the environment needs a setup again.
+      'runtime_build_state_evictions',
+      -- Where each memory snapshot is and the PR a session holds (v30, v31): the PR session sweep.
+      'runtime_snapshot_cells',
+      -- The org's egress switch and who may add, and the approvals' audit (v32): Settings, Runtime, Outbound access.
+      'runtime_egress_settings', 'runtime_egress_audit',
+      -- The org's own daily machine minutes (v35): Settings, Runtime, machine minutes.
+      'runtime_org_machine_budget'
     ] LOOP
       IF to_regclass(format('runtime.%I', t)) IS NOT NULL THEN
         EXECUTE format('GRANT SELECT ON runtime.%I TO kodus_runtime_reader', t);
