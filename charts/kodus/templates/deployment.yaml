@@ -56,6 +56,9 @@ spec:
       {{- include "kodus-common.imagePullSecrets" $ | nindent 6 }}
       securityContext:
         {{- include "kodus-common.podSecurityContext" $ | nindent 8 }}
+      {{- with include "kodus-common.scheduling" (dict "root" $ "cfg" $svc) | trim }}
+      {{- . | nindent 6 }}
+      {{- end }}
       initContainers:
         {{- include "kodus-common.waitForDeps" $ | nindent 8 }}
       containers:

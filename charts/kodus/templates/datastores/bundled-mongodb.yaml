@@ -46,6 +46,9 @@ spec:
       automountServiceAccountToken: false   # DB doesn't call the k8s API
       securityContext:
         {{- include "kodus-common.datastorePodSecurityContext" . | nindent 8 }}
+      {{- with include "kodus-common.scheduling" (dict "root" . "cfg" $b) | trim }}
+      {{- . | nindent 6 }}
+      {{- end }}
       containers:
         - name: mongodb
           image: {{ include "kodus-common.regPrefix" . }}{{ $b.image }}

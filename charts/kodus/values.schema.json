@@ -103,10 +103,27 @@
         }
       }
     },
+    "scheduling": {
+      "type": "object",
+      "properties": {
+        "nodeSelector": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        },
+        "tolerations": { "type": "array", "items": { "type": "object" } },
+        "affinity": { "type": "object" },
+        "topologySpreadConstraints": { "type": "array", "items": { "type": "object" } }
+      }
+    },
     "store": {
       "type": "object",
       "properties": {
-        "bundled": { "$ref": "#/definitions/extraEnvironment" },
+        "bundled": {
+          "allOf": [
+            { "$ref": "#/definitions/extraEnvironment" },
+            { "$ref": "#/definitions/scheduling" }
+          ]
+        },
         "mode": {
           "enum": ["bundled", "external", "operator"],
           "description": "bundled (StatefulSet run by this chart) | external (managed/your own) | operator (CNPG/RabbitMQ/Mongo operator)"
@@ -115,6 +132,7 @@
       "required": ["mode"]
     }
   },
+  "allOf": [{ "$ref": "#/definitions/scheduling" }],
   "properties": {
     "emptyDir": { "$ref": "#/definitions/emptyDir" },
     "platform": {
@@ -158,6 +176,9 @@
         "allOf": [
           {
             "$ref": "#/definitions/extraEnvironment"
+          },
+          {
+            "$ref": "#/definitions/scheduling"
           }
         ],
         "properties": {
@@ -169,7 +190,10 @@
     },
     "migrations": {
       "type": "object",
-      "allOf": [{ "$ref": "#/definitions/extraEnvironment" }],
+      "allOf": [
+        { "$ref": "#/definitions/extraEnvironment" },
+        { "$ref": "#/definitions/scheduling" }
+      ],
       "properties": {
         "enabled": { "type": "boolean" },
         "emptyDir": { "$ref": "#/definitions/emptyDir" }

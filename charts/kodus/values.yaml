@@ -243,6 +243,17 @@ emptyDir:
   defaultSizeLimit: ""
   sizeLimits: {}
 
+# Pod scheduling defaults for every chart-managed pod: app Deployments, the
+# migration Job and the bundled datastore StatefulSets (operator CRs are not
+# covered — configure those through the operator). Override per workload with the
+# same keys under services.<name>, migrations or <store>.bundled; a non-empty
+# override REPLACES the value here (no merge). Rendered verbatim, so
+# topologySpreadConstraints may use matchLabelKeys.
+nodeSelector: {}
+tolerations: []
+affinity: {}
+topologySpreadConstraints: []
+
 # Additional environment for chart-managed containers (services, migrations and bundled stores).
 # extraEnv: Kubernetes EnvVar list (value or valueFrom); extraEnvFrom: EnvFromSource list.
 # Secret/ConfigMap references must exist in the release namespace. These lists are

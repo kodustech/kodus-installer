@@ -839,3 +839,38 @@ The writable-N name corresponds to the zero-based index in writablePaths; update
 limits when reordering that list. These settings size existing volumes, without
 creating new ones. Limits do not reserve node disk space and remain subject to
 available node storage and Pod ephemeral-storage limits.
+
+## Pod scheduling
+
+`nodeSelector`, `tolerations`, `affinity` and `topologySpreadConstraints` set at
+the top level apply to every chart-managed pod: the app Deployments, the
+migration Job and the bundled datastore StatefulSets. Override them per workload
+with the same keys under `services.<name>`, `migrations` or `<store>.bundled`. A
+non-empty override **replaces** the top-level value for that key (no merge);
+empty falls back to it. Operator-mode datastores are configured through the
+operator, not here.
+
+```yaml
+# Pin everything to a dedicated node pool
+nodeSelector:
+  agentpool: kodus
+tolerations:
+  - key: dedicated
+    operator: Equal
+    value: kodus
+    effect: NoSchedule
+# Spread each service's replicas across zones
+topologySpreadConstraints:
+  - maxSkew: 1
+    topologyKey: topology.kubernetes.io/zone
+    whenUnsatisfiable: ScheduleAnyway
+    matchLabelKeys: [app.kubernetes.io/name]
+services:
+  worker:
+    nodeSelector:           # replaces the top-level nodeSelector for the worker only
+      agentpool: kodus-workers
+```
+
+Values are rendered verbatim. Without `labelSelector`, a constraint's
+`matchLabelKeys` scopes the spread to pods with the same label value (here, the
+same service); `matchLabelKeys` needs Kubernetes 1.27+.
