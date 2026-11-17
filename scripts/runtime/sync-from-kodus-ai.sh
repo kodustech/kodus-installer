@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Copies the Runtime files the installer vendors from a kodus-ai checkout:
-# OpenBao's config and policies and the Runtime's grant scripts, each with a
+# OpenBao's config and policies, the Runtime's grant scripts and the cell
+# release's pinned public keys (cell-host.sh --release-bundle verifies with them), each with a
 # header naming the commit. --check only reports drift (exit 1), for CI.
 #
 # Usage: scripts/runtime/sync-from-kodus-ai.sh --from <kodus-ai checkout> [--check]
@@ -18,7 +19,7 @@ while [ $# -gt 0 ]; do
     esac
 done
 [ -d "$FROM/apps/runtime" ] || rt_die "--from must be a kodus-ai checkout that has apps/runtime"
-SHA=$(git -C "$FROM" log -1 --format=%h -- docker/openbao scripts/runtime)
+SHA=$(git -C "$FROM" log -1 --format=%h -- docker/openbao scripts/runtime apps/runtime-cell/internal/releasesig/keys)
 BRANCH=$(git -C "$FROM" rev-parse --abbrev-ref HEAD)
 
 # source in kodus-ai -> destination here -> comment prefix
@@ -28,7 +29,8 @@ docker/openbao/policies/kodus-runtime-api.hcl runtime/openbao/policies/kodus-run
 docker/openbao/policies/kodus-runtime-injector.hcl runtime/openbao/policies/kodus-runtime-injector.hcl #
 docker/openbao/create-database.sql runtime/sql/openbao-database.sql --
 scripts/runtime/runtime-reader-grants.sql runtime/sql/runtime-reader-grants.sql --
-scripts/runtime/runtime-secrets-reader-grants.sql runtime/sql/runtime-secrets-reader-grants.sql --"
+scripts/runtime/runtime-secrets-reader-grants.sql runtime/sql/runtime-secrets-reader-grants.sql --
+apps/runtime-cell/internal/releasesig/keys/cell-release.pub runtime/cell/cell-release.pub #"
 
 drift=0
 while read -r src dest c; do

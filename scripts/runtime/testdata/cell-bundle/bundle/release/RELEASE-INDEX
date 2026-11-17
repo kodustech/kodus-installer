@@ -1,0 +1,7 @@
+{
+  "issued": "2026-11-16T00:00:00Z",
+  "expires": "2027-12-21T00:00:00Z",
+  "latest": "v1.4.0",
+  "minimum": "v1.2.0",
+  "revokedKeys": []
+}

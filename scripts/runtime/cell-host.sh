@@ -10,7 +10,7 @@
 #   check     [--profile <p>] [--workdir DIR] [--bundle DIR | --hub-url URL --hub-ca FILE]
 #             Names every requirement of the profile this host misses; exit 1 if any.
 #   install   [--profile <p>] --bundle DIR [--token-file FILE] [options below]
-#   upgrade   [--release R] [--from DIR | --cell-image REF | --cell-bin-dir DIR] [--rollback-window D]
+#   upgrade   [--release R] [--from DIR | --release-bundle PATH | --cell-image REF | --cell-bin-dir DIR] [--rollback-window D]
 #             Installs another cell release beside the current one and restarts on it.
 #   rollback  Restarts on the release installed before the current one (by hand;
 #             see "upgrade options" for the automatic one).
@@ -35,6 +35,20 @@
 #   --cell-image REF    the cell image (default: images.lock for the release, or
 #                       KODUS_RUNTIME_CELL_IMAGE); its binaries are copied out
 #   --cell-bin-dir DIR  the cell's static binaries instead of an image (local builds)
+#   --release-bundle PATH  air-gapped host: the release's offline bundle (a
+#                       directory or a tar of one, kodus-ai `release-sign bundle`).
+#                       BUNDLE.sig is verified with the pinned release keys
+#                       (runtime/cell/cell-release.pub, or KODUS_CELL_RELEASE_KEYS)
+#                       and every artifact's sha256 before anything loads; its
+#                       release index must be current, not revoke the key, admit
+#                       the release, and be no older than the host's. Then its
+#                       images are loaded into Docker (OCI archives, by digest),
+#                       its gVisor archive installs runsc and its binaries the
+#                       cell. Nothing is fetched. (--bundle stays the control
+#                       plane's cell-host directory.)
+#   --registry-mirror HOST[:PORT][/PREFIX]  with --release-bundle: also push each
+#                       image to the registry this host's Docker pulls through,
+#                       and refuse a push that does not keep its digest
 #   --workdir DIR       claims' scratch and state (default /var/lib/kodus-cell)
 #   --egress-allow LIST hosts every claim may reach (default: image registry,
 #                       npm and the Debian, Ubuntu and Alpine mirrors)
@@ -61,12 +75,17 @@
 #                       kodus-cell-update-watch.timer returns this host to the
 #                       release before by itself, and `cell update` refuses that
 #                       release until -retry-rolled-back.
+#   --release-bundle PATH  the same from an offline bundle: verified and its
+#                       images loaded as for install, then its release/ goes
+#                       through `cell update -from` as above (release from the
+#                       bundle; --release, when given, must match).
 #   --cell-image, --cell-bin-dir copy the binaries without a signature check
 #                       and without the automatic rollback.
 #
 # Test hooks (never needed on a real host): KODUS_CELL_ROOT (a prefix for
 # every path written), KODUS_CELL_DOCKER, KODUS_CELL_SYSTEMCTL,
-# KODUS_CELL_KVM_DEVICE, KODUS_CELL_CGROUP_ROOT, KODUS_CELL_SYSTEMD_RUN.
+# KODUS_CELL_KVM_DEVICE, KODUS_CELL_CGROUP_ROOT, KODUS_CELL_SYSTEMD_RUN,
+# KODUS_CELL_NOW (epoch seconds the release index is checked at), KODUS_CELL_ARCH.
 set -euo pipefail
 # shellcheck source=lib.sh
 . "$(dirname "$0")/lib.sh"
@@ -113,7 +132,7 @@ PROFILE=auto BUNDLE='' TOKEN_FILE='' RELEASE='' CELL_IMAGE_ARG='' CELL_BIN_DIR='
 EGRESS_ALLOW='' UPSTREAM_DNS='' SANDBOX_POOL='' GVISOR_ARCHIVE='' REINSTALL_RUNSC=0
 ENFORCERS_SUBNET='' EGRESS_ENFORCER_IP='' INJECTOR_ENFORCER_IP=''
 DRY_RUN=0 HUB_URL='' HUB_CA='' OUT='' PURGE=0 REMOVE_RUNSC=0 THIN_POOL='' RUNTIME_CLASS=gvisor MIN_FREE_GB=20
-FROM='' ROLLBACK_WINDOW=10m
+FROM='' ROLLBACK_WINDOW=10m RELEASE_BUNDLE='' REGISTRY_MIRROR=''
 while [ $# -gt 0 ]; do
     case "$1" in
         --profile) PROFILE=${2:?}; shift 2 ;;
@@ -123,6 +142,8 @@ while [ $# -gt 0 ]; do
         --cell-image) CELL_IMAGE_ARG=${2:?}; shift 2 ;;
         --cell-bin-dir) CELL_BIN_DIR=${2:?}; shift 2 ;;
         --from) FROM=${2:?}; shift 2 ;;
+        --release-bundle) RELEASE_BUNDLE=${2:?}; shift 2 ;;
+        --registry-mirror) REGISTRY_MIRROR=${2:?}; shift 2 ;;
         --rollback-window) ROLLBACK_WINDOW=${2:?}; shift 2 ;;
         --workdir) WORKDIR_R=${2:?}; shift 2 ;;
         --egress-allow) EGRESS_ALLOW=${2:?}; shift 2 ;;
@@ -594,6 +615,238 @@ cell_update_release() {
     REL_DIR=${REL_DIR#"$PREFIX"}
 }
 
+# --- offline release bundle (air-gapped host) -------------------------------
+# A bundle (kodus-ai `release-sign bundle`, apps/runtime-cell/internal/
+# releasesig/bundle.go) holds the signed release, every image as an OCI
+# archive pinned by digest and the gVisor archives, each listed with its
+# sha256 in BUNDLE, which is signed with the release key. Everything is
+# checked here, offline, with the pinned keys (runtime/cell/cell-release.pub)
+# before anything is loaded; an upgrade then goes through `cell update -from`,
+# which checks the release again with the keys compiled into the running cell.
+RELEASE_KEYS="${KODUS_CELL_RELEASE_KEYS:-$RT_DATA/cell/cell-release.pub}"
+BUNDLE_HEADER='kodus-cell-bundle v1'
+BUNDLE_SIG_HEADER='kodus-cell-release-bundle-signature v1'
+BUNDLE_MSG_PREFIX='kodus-cell-release-bundle v1'
+RB_DIR='' RB_TMP='' RB_RELEASE='' RB_KEY='' RB_ISSUED='' RB_REVOKED=''
+RB_IMAGES=() RB_RUNSC=()
+
+rb_sha256() { openssl dgst -sha256 -r "$1" | cut -c1-64; }
+rb_now() { printf '%s' "${KODUS_CELL_NOW:-$(date -u +%s)}"; } # test hook: epoch seconds
+rb_epoch() { date -u -d "$1" +%s 2>/dev/null || date -u -j -f '%Y-%m-%dT%H:%M:%SZ' "$1" +%s 2>/dev/null; }
+rb_goarch() {
+    case "${KODUS_CELL_ARCH:-$(uname -m)}" in
+        x86_64 | amd64) echo amd64 ;;
+        aarch64 | arm64) echo arm64 ;;
+        *) rt_die "no cell release is built for $(uname -m)" ;;
+    esac
+}
+rb_gvisor_arch() { # the host's arch as gVisor names it (runtime/gvisor.tsv)
+    case "${KODUS_CELL_ARCH:-$(uname -m)}" in
+        x86_64 | amd64) echo x86_64 ;;
+        aarch64 | arm64) echo aarch64 ;;
+        *) uname -m ;;
+    esac
+}
+rb_cleanup() { [ -z "$RB_TMP" ] || rm -rf "$RB_TMP"; }
+
+# rb_semver NAME: "MAJOR MINOR PATCH" of vX.Y.Z (or runtime-cell/vX.Y.Z); fails otherwise.
+rb_semver() {
+    local n=${1#runtime-cell/}
+    [[ $n =~ ^v?([0-9]+)\.([0-9]+)\.([0-9]+)$ ]] || return 1
+    printf '%s.%s.%s' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" "${BASH_REMATCH[3]}"
+}
+
+# rb_key_pem ID OUT: the pinned key with id ID as a PEM public key; fails when none is pinned.
+rb_key_pem() {
+    local line b64
+    [ -r "$RELEASE_KEYS" ] || rt_die "no pinned release keys at $RELEASE_KEYS (KODUS_CELL_RELEASE_KEYS)"
+    while IFS= read -r line; do
+        case "$line" in 'kodus-cell-release-key '*) ;; *) continue ;; esac
+        b64=${line#kodus-cell-release-key }
+        b64=${b64%%[[:space:]]*}
+        [ "$(printf '%s' "$b64" | openssl base64 -d -A | openssl dgst -sha256 -r | cut -c1-16)" = "$1" ] || continue
+        # An ed25519 SubjectPublicKeyInfo is this 12-byte prefix and the raw key.
+        { printf '\060\052\060\005\006\003\053\145\160\003\041\000'; printf '%s' "$b64" | openssl base64 -d -A; } |
+            openssl pkey -pubin -inform DER -out "$2" 2>/dev/null
+        return
+    done <"$RELEASE_KEYS"
+    return 1
+}
+
+# verify_release_bundle PATH: PATH (a directory, or a tar of one) is a bundle
+# whose BUNDLE verifies with a pinned key and whose every artifact has the
+# sha256 BUNDLE lists. Sets RB_DIR, RB_RELEASE, RB_KEY, RB_IMAGES
+# ("component reference path") and RB_RUNSC ("arch path"). Loads nothing.
+verify_release_bundle() {
+    local src=$1 d h k r s line sha kind name path ref
+    if [ -f "$src" ]; then
+        RB_TMP=$(mktemp -d)
+        tar -xf "$src" -C "$RB_TMP" --no-same-owner 2>/dev/null || rt_die "$src: not a tar of a bundle"
+        d=$RB_TMP
+        [ -f "$d/BUNDLE" ] || d=$(dirname "$(find "$RB_TMP" -mindepth 2 -maxdepth 2 -name BUNDLE -type f | head -n1)")
+    else
+        d=$src
+    fi
+    [ -f "$d/BUNDLE" ] && [ -f "$d/BUNDLE.sig" ] || rt_die "$src: not a signed release bundle (no BUNDLE and BUNDLE.sig)"
+    d=$(cd "$d" && pwd)
+    { IFS= read -r h; IFS= read -r k; IFS= read -r r; IFS= read -r s; } <"$d/BUNDLE.sig" || true
+    [ "$h" = "$BUNDLE_SIG_HEADER" ] && [ "${k#key }" != "$k" ] && [ "${r#release }" != "$r" ] && [ "${s#signature }" != "$s" ] ||
+        rt_die "$d/BUNDLE.sig: not a \"$BUNDLE_SIG_HEADER\" file"
+    k=${k#key } r=${r#release } s=${s#signature }
+    [ -n "$RB_TMP" ] || RB_TMP=$(mktemp -d)
+    local tmp="$RB_TMP/verify"
+    mkdir -p "$tmp"
+    rb_key_pem "$k" "$tmp/key.pem" || rt_die "bundle refused: signed with key $k, which is not pinned ($RELEASE_KEYS)"
+    { printf '%s\nrelease %s\n' "$BUNDLE_MSG_PREFIX" "$r"; cat "$d/BUNDLE"; } >"$tmp/msg"
+    printf '%s' "$s" | openssl base64 -d -A >"$tmp/sig" 2>/dev/null || true
+    openssl pkeyutl -verify -pubin -inkey "$tmp/key.pem" -rawin -in "$tmp/msg" -sigfile "$tmp/sig" >/dev/null 2>&1 ||
+        rt_die "bundle refused: $d/BUNDLE.sig does not verify against BUNDLE with key $k"
+    { IFS= read -r h; IFS= read -r line; } <"$d/BUNDLE"
+    [ "$h" = "$BUNDLE_HEADER" ] && [ "$line" = "release $r" ] || rt_die "bundle refused: BUNDLE does not name release $r"
+    RB_IMAGES=() RB_RUNSC=()
+    while IFS=$'\t' read -r sha kind name path ref; do
+        case "$path" in
+            release/* | images/*.oci.tar | gvisor/x86_64/gvisor.tar.bz2 | gvisor/aarch64/gvisor.tar.bz2) ;;
+            *) rt_die "bundle refused: BUNDLE lists $path, outside the bundle's layout" ;;
+        esac
+        case "$path" in *..* | */./* | *//*) rt_die "bundle refused: BUNDLE lists $path, outside the bundle's layout" ;; esac
+        [ -f "$d/$path" ] || rt_die "bundle refused: $path is listed but missing"
+        [ "$(rb_sha256 "$d/$path")" = "$sha" ] || rt_die "bundle refused: $path: sha256 $(rb_sha256 "$d/$path"), not the signed $sha"
+        case "$kind" in
+            image)
+                [[ $ref =~ @sha256:[0-9a-f]{64}$ ]] || rt_die "bundle refused: image $name is not pinned by digest ($ref)"
+                RB_IMAGES+=("$name $ref $d/$path")
+                ;;
+            runsc) RB_RUNSC+=("$name $d/$path") ;;
+        esac
+    done < <(tail -n +3 "$d/BUNDLE")
+    for name in SHA256SUMS SHA256SUMS.sig RELEASE-INDEX RELEASE-INDEX.sig PROTOCOL; do
+        grep -q "	release/$name	" "$d/BUNDLE" || rt_die "bundle refused: it carries no release/$name"
+    done
+    if [ -n "$RELEASE" ] && [ "$RELEASE" != "$r" ]; then
+        rt_die "bundle refused: it holds release $r, not $RELEASE (--release, or KODUS_RUNTIME_CELL_RELEASE of the control plane's cell-host.conf)"
+    fi
+    RB_DIR=$d RB_RELEASE=$r RB_KEY=$k RELEASE=$r
+    rt_ok "Bundle of release $r verified offline (key $k): ${#RB_IMAGES[@]} images, ${#RB_RUNSC[@]} gVisor archives."
+}
+
+# check_bundle_index: the release index inside the bundle, as `cell update`
+# reads it (kodus-ai internal/cellupdate index_state.go): refused when
+# expired or issued in the future, when it revokes the bundle's key, when
+# the release is above its latest or below its minimum, and when it is older
+# than the index this host last accepted (/opt/kodus-cell/release-index.state).
+# The index's bytes are covered by BUNDLE's signature.
+check_bundle_index() {
+    local ix="$RB_DIR/release/RELEASE-INDEX" issued expires latest minimum now st v l m
+    issued=$(sed -n 's/^ *"issued": *"\([^"]*\)".*/\1/p' "$ix")
+    expires=$(sed -n 's/^ *"expires": *"\([^"]*\)".*/\1/p' "$ix")
+    latest=$(sed -n 's/^ *"latest": *"\([^"]*\)".*/\1/p' "$ix")
+    minimum=$(sed -n 's/^ *"minimum": *"\([^"]*\)".*/\1/p' "$ix")
+    RB_REVOKED=$(sed -n '/"revokedKeys"/,/]/p' "$ix" | grep -o '[0-9a-f]\{16\}' || true)
+    [ -n "$(rb_epoch "$issued")" ] && [ -n "$(rb_epoch "$expires")" ] || rt_die "bundle refused: $ix has no readable issued and expires"
+    RB_ISSUED=$issued
+    now=$(rb_now)
+    [ "$now" -lt "$(rb_epoch "$expires")" ] || rt_die "bundle refused: its release index expired $expires: ask for a bundle with the current release index"
+    [ "$(rb_epoch "$issued")" -le $((now + 300)) ] || rt_die "bundle refused: its release index is issued $issued, in the future: check this host's clock"
+    ! printf '%s\n' "$RB_REVOKED" | grep -qx "$RB_KEY" || rt_die "bundle refused: signed with key $RB_KEY, which its release index revokes"
+    if v=$(rb_semver "$RB_RELEASE") && l=$(rb_semver "$latest"); then
+        [ "$v" = "$l" ] || ver_ge "$l" "$v" || rt_die "bundle refused: release $RB_RELEASE is newer than the release index's latest ($latest)"
+        if m=$(rb_semver "$minimum"); then
+            ver_ge "$v" "$m" || rt_die "bundle refused: release $RB_RELEASE is below the release index's minimum $minimum, which no host may install"
+        fi
+    elif [ "$RB_RELEASE" != "$latest" ]; then
+        rt_die "bundle refused: release $RB_RELEASE is not the release index's latest ($latest)"
+    fi
+    st="$OPT/release-index.state"
+    if [ -s "$st" ]; then
+        local had
+        had=$(sed -n 's/.*"issued": *"\([^"]*\)".*/\1/p' "$st" | head -n1)
+        if [ -n "$had" ] && [ "$(rb_epoch "$issued")" -lt "$(rb_epoch "$had")" ]; then
+            rt_die "bundle refused: its release index (issued $issued) is older than the one this host accepted ($had)"
+        fi
+        ! sed -n '/"revokedKeys"/,/]/p' "$st" | grep -o '[0-9a-f]\{16\}' | grep -qx "$RB_KEY" ||
+            rt_die "bundle refused: signed with key $RB_KEY, which this host has seen revoked"
+    fi
+}
+
+# save_bundle_index: what `cell update` keeps after it accepts an index, for
+# a host installed from a bundle: the latest issue time and every revoked key.
+save_bundle_index() {
+    local st="$OPT/release-index.state" keys k first=1
+    keys=$({ printf '%s\n' "$RB_REVOKED"; [ ! -s "$st" ] || sed -n '/"revokedKeys"/,/]/p' "$st" | grep -o '[0-9a-f]\{16\}'; } | grep . | sort -u || true)
+    {
+        printf '{\n  "issued": "%s",\n  "revokedKeys": [' "$RB_ISSUED"
+        for k in $keys; do
+            [ "$first" = 1 ] && printf '\n' || printf ',\n'
+            printf '    "%s"' "$k"
+            first=0
+        done
+        [ "$first" = 1 ] && printf ']\n}\n' || printf '\n  ]\n}\n'
+    } >"$st.tmp"
+    mv "$st.tmp" "$st"
+}
+
+# load_bundle_images: every image of the bundle into this host's Docker, from
+# its OCI archive, without the network; each must then resolve by its pinned
+# digest, which is what the cell's configuration names. With
+# --registry-mirror each is also pushed there and the digest compared.
+load_bundle_images() {
+    local e comp ref path pushed repo tag
+    for e in "${RB_IMAGES[@]}"; do
+        read -r comp ref path <<<"$e"
+        run "$DOCKER" load -i "$path"
+        if [ "$DRY_RUN" = 0 ] && ! "$DOCKER" image inspect "$ref" >/dev/null 2>&1; then
+            rt_die "loaded $path, but Docker does not resolve $ref: this Docker discards the digest of a loaded image. Turn on its containerd image store (daemon.json \"features\": {\"containerd-snapshotter\": true}) and run again"
+        fi
+        export "$(rt_override_var "$comp")=$ref"
+        [ -n "$REGISTRY_MIRROR" ] || continue
+        repo=${ref%@*} repo=${repo#*/}
+        case "$repo" in *:*) tag=${repo##*:} repo=${repo%:*} ;; *) tag=bundle ;; esac
+        run "$DOCKER" tag "$ref" "$REGISTRY_MIRROR/$repo:$tag"
+        if [ "$DRY_RUN" = 1 ]; then
+            printf '[dry-run] %s push %s\n' "$DOCKER" "$REGISTRY_MIRROR/$repo:$tag"
+            continue
+        fi
+        pushed=$("$DOCKER" push "$REGISTRY_MIRROR/$repo:$tag" | sed -n 's/.*digest: \(sha256:[0-9a-f]\{64\}\).*/\1/p' | tail -n1)
+        [ "$pushed" = "${ref##*@}" ] || rt_die "pushed $ref to $REGISTRY_MIRROR as ${pushed:-no digest}: the mirror would serve another image"
+    done
+}
+
+# bundle_bin_dir: the release's binaries for this host's arch, named as the
+# installer installs them (cell, egress, ...); sets CELL_BIN_DIR.
+bundle_bin_dir() {
+    local arch f
+    arch=$(rb_goarch)
+    [ -n "$RB_TMP" ] || RB_TMP=$(mktemp -d)
+    mkdir -p "$RB_TMP/bin"
+    for f in "$RB_DIR"/release/*-linux-"$arch"; do
+        [ -f "$f" ] || rt_die "the bundle's release has no binaries for linux/$arch"
+        cp "$f" "$RB_TMP/bin/$(basename "$f" "-linux-$arch")"
+    done
+    CELL_BIN_DIR="$RB_TMP/bin"
+}
+
+# prepare_release_bundle install|upgrade: verify, check the index, then (for
+# install) point the gVisor install and the binaries at the bundle.
+prepare_release_bundle() {
+    [ -n "$RELEASE_BUNDLE" ] || return 0
+    [ -z "$FROM$CELL_IMAGE_ARG$CELL_BIN_DIR" ] || rt_die "--release-bundle brings the release: no --from, --cell-image or --cell-bin-dir"
+    trap rb_cleanup EXIT
+    verify_release_bundle "$RELEASE_BUNDLE"
+    check_bundle_index
+    if [ "$1" = install ]; then
+        local e a p
+        for e in "${RB_RUNSC[@]}"; do
+            read -r a p <<<"$e"
+            [ "$a" != "$(rb_gvisor_arch)" ] || [ -n "$GVISOR_ARCHIVE" ] || GVISOR_ARCHIVE=$p
+        done
+        [ -n "$GVISOR_ARCHIVE" ] || runsc_registered || rt_die "the bundle has no gVisor archive for $(rb_gvisor_arch), and runsc is not installed"
+        bundle_bin_dir
+    else
+        FROM="$RB_DIR/release"
+    fi
+}
+
 activate_release() { # current -> REL_DIR, previous -> what current was
     local cur
     cur=$(readlink "$OPT/current" 2>/dev/null || true)
@@ -870,6 +1123,7 @@ cmd_install() {
         *) rt_die "--profile is required: docker-gvisor, docker-firecracker or kubernetes" ;;
     esac
     [ -n "$HUB_URL" ] || rt_die "the bundle names no HUB_URL"
+    prepare_release_bundle install
     run_checks docker-gvisor skip-runsc
     report "docker-gvisor (before runsc)" || exit 1
     install_gvisor
@@ -877,6 +1131,7 @@ cmd_install() {
         run_checks docker-gvisor
         report docker-gvisor || exit 1
     fi
+    load_bundle_images
     resolve_images
     umask 077
     mkdir -p "$ETC" "$OPT/releases"
@@ -888,6 +1143,7 @@ cmd_install() {
     write_local_pki
     write_config
     start_units
+    [ -z "$RELEASE_BUNDLE" ] || [ "$DRY_RUN" = 1 ] || save_bundle_index
     rt_ok "Cell $CELL_ID installed (release $RELEASE, $(readlink "$OPT/current"))."
     rt_info "Verify: journalctl -u kodus-cell -f (cell.hello, alerts.source_available); the Runtime screens list the cell."
 }
@@ -896,6 +1152,8 @@ cmd_upgrade() {
     require_root
     [ -s "$ETC/cell.env" ] || rt_die "no cell installed here ($ETC_R/cell.env)"
     [ -z "$FROM" ] || [ -n "$RELEASE" ] || rt_die "--from needs --release: the release its signature must name"
+    # The bundle names the release; the installed one is not a default for it.
+    [ -z "$RELEASE_BUNDLE" ] || prepare_release_bundle upgrade
     CELL_ID=$(rt_env_get "$ETC/cell.env" CELL_ID)
     settings_defaults from-installed
     load_bundle
@@ -907,6 +1165,7 @@ cmd_upgrade() {
     OPENBAO_ADDR=$(printf '%s' "$inj" | sed -n 's/.*-openbao-addr \([^ ]*\).*/\1/p')
     run_checks docker-gvisor
     report docker-gvisor || exit 1
+    load_bundle_images
     resolve_images
     if [ -n "$FROM" ]; then
         cell_update_release "$FROM"

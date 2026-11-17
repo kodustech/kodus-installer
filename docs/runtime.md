@@ -325,6 +325,25 @@ sudo -E scripts/runtime/cell-host.sh install ... --gvisor-archive kodus-runtime-
 Each image lands at `<registry>/<its source repository>` with the same digest; the import verifies every one. The
 Runtime images must be published first; the bundle refuses an unpublished one.
 
+### A cell host with no network and no registry
+
+A cell host can instead install and upgrade from the cell release's signed bundle (kodus-ai `release-sign bundle`;
+format in kodus-ai `docs/runtime/self-hosted.md`, "Air-gapped host"): the signed release, every image the host runs
+as an OCI archive by digest, and the gVisor archive, each listed with its sha256 in `BUNDLE`, signed with the release
+key.
+
+```bash
+sudo scripts/runtime/cell-host.sh install --bundle runtime/state/cell-host --release-bundle kodus-cell-v1.4.0.tar --token-file token --upstream-dns <your resolver>
+sudo scripts/runtime/cell-host.sh upgrade --release-bundle kodus-cell-v1.5.0.tar
+```
+
+Before anything is loaded, `BUNDLE.sig` is verified with `runtime/cell/cell-release.pub` (OpenSSL 3) and every
+artifact hashed; the bundle's release index must be current, admit the release, not revoke its key and be no older
+than the one the host accepted. Images are `docker load`ed and must resolve by digest, which needs Docker's containerd
+image store (`daemon.json`: `"features": {"containerd-snapshotter": true}`); `--registry-mirror <host:port>` also
+pushes them to the registry this host pulls through, digest compared. The upgrade then runs `cell update -from` on the
+bundle's release, with its preflight and automatic rollback. Tests: `scripts/runtime/test-cell-host-bundle.sh`.
+
 ## Kubernetes
 
 `charts/kodus-runtime` installs the control plane, a cell, or both, on a cluster you run (design and trade-offs:

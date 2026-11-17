@@ -1,0 +1,14 @@
+kodus-cell-bundle v1
+release v1.4.0
+8249f9b77ee2070d15e76dfa882a923cbdfa776a447b054eff89d5685a327fd1	runsc	x86_64	gvisor/x86_64/gvisor.tar.bz2	-
+ab9e7479ee58fb4ebbc27194f0562097e2c9b9448dadf8b46f5a68acf328551b	image	holder	images/holder.oci.tar	docker.io/library/alpine:3.20@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc
+f251ddc12234e0da8d3b778bd0f7463fb477f16f47757f5617dc8b4ff4d4f14a	release	PROTOCOL	release/PROTOCOL	-
+550c26956e0b07f24e6be41aafadfe560627877224712be58532573a3da1fd72	release	RELEASE-INDEX	release/RELEASE-INDEX	-
+b18b3ff279fef4695e089e153f1e47c0d489d30a4f29791e55b4c3e03cc5810c	release	RELEASE-INDEX.sig	release/RELEASE-INDEX.sig	-
+a71ac3f423ecc3e861585ec2e30727a6ea817122735f6fcc448c152614325ad9	release	SHA256SUMS	release/SHA256SUMS	-
+1fd76e0d46fee7a9b072420c0a217b8405e385413197fb89b290f0162f34cb4d	release	SHA256SUMS.sig	release/SHA256SUMS.sig	-
+39d02b42938b2b75d027ebeb25c9d1fd0b71b6e0453e217a2e85cedc7e4637b4	release	cell-linux-amd64	release/cell-linux-amd64	-
+a3083687ee111912f7daf2d0bfb3647c7a4ec90a05984cbdebac4203036a9735	release	egress-linux-amd64	release/egress-linux-amd64	-
+3dcb7cdffbf132655b288253e8e769e4b094a6b64c106bd7fd4da43627567749	release	injector-linux-amd64	release/injector-linux-amd64	-
+e41f1d834710df8c7bc2befedb7b92339973a92288d8581b3696604c0d04c5f7	release	observer-linux-amd64	release/observer-linux-amd64	-
+fc8db96bab2a414d1db52c4177a15d3e292fb9d4354d0992f29bfc3f4715825e	release	reaper-linux-amd64	release/reaper-linux-amd64	-
