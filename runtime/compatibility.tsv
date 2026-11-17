@@ -10,7 +10,16 @@
 # A shared protocol version is necessary, not sufficient: a hub decodes hello
 # strictly, and a hub older than kodus-ai 0e6f8490c refuses the hello
 # `capabilities` field a newer cell sends (kodus-ai docs/runtime/deploy-2026-11-12.md,
-# "Hub before cells"). So each row names a cell release proven with that hub,
+# "Hub before cells"), and a hub older than kodus-ai 07f2e368e refuses a
+# hello with more than 32 features; the cell's list is at 32 (kodus-ai
+# apps/runtime-cell/internal/protocol constants_gen.go CellFeatures), so the
+# next feature needs that hub first.
+# Since kodus-ai 7b70cf2dc a hub of protocol H accepts a cell whose highest
+# version C is H-1 <= C <= H (cell_too_new / cell_too_old otherwise), and
+# since 754d88225 a release carries PROTOCOL ("<lowest> <highest>", signed in
+# SHA256SUMS) and `cell update` refuses one above what the hub last
+# acknowledged (hello feature cellProtocols, answered by the hub's ack).
+# So each row names a cell release proven with that hub,
 # and an upgrade moves the hub first, then the cells (scripts/runtime/upgrade.sh).
 #
 # scripts/runtime/lib.sh reads it (tab-separated, '#' comments). The release
@@ -29,4 +38,4 @@
 # PROTOCOL_VERSION, apps/runtime-cell/internal/protocol/types_gen.go
 # ProtocolVersion), backend gvisor (firecracker is refused until phase P2).
 #product	hub_protocol	cell_release	cell_protocols	backends	source
-unreleased	1	unreleased	1	gvisor	kodus-ai@149810842 kody-runtime/base
+unreleased	1	unreleased	1	gvisor	kodus-ai@07f2e368e kody-runtime/next-all
