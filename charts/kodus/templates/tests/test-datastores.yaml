@@ -67,20 +67,16 @@ spec:
             *)
               # Drop the userinfo before cutting the path, so credentials never reach
               # the probe log or DNS. Valid userinfo is percent-encoded: it ends at the
-              # first `@` and holds no `/` or `?`. An `@` after one of those is
-              # ambiguous (an `@` in the database name, or a password with a raw `/`),
-              # so skip the probe without printing the URI.
+              # first `@` and holds no `/` or `?`. Any `@` left after that means an
+              # unescaped character the app's driver rejects too, so fail without
+              # printing the URI.
               mgrest=${MONGODB_URI#*//}
-              mgskip=0
-              case "$mgrest" in
-                *@*)
-                  case "${mgrest%%@*}" in
-                    *[/?]*) mgskip=1 ;;
-                    *)      mgrest=${mgrest#*@} ;;
-                  esac ;;
+              case "${mgrest%%@*}" in
+                *[/?]*) ;;
+                *) mgrest=${mgrest#*@} ;;
               esac
-              if [ "$mgskip" = 1 ]; then
-                echo "  mongodb -> MONGODB_URI has '@' after its host (not TCP-probed)"
+              if [ "${mgrest#*@}" != "$mgrest" ]; then
+                echo "  mongodb -> MONGODB_URI has an unescaped '@', '/' or '?' (not printed)"; fail=1
               else
                 # First host of the list. An IPv6 literal is bracketed: [::1]:27017.
                 mghostport=$(echo "$mgrest" | sed -e 's|[/?].*$||' -e 's|,.*$||')

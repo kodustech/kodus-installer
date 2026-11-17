@@ -22,6 +22,9 @@ tests:
           pattern: 'MONGODB_URI is empty"; fail=1'
       - matchRegex:
           path: spec.containers[0].args[0]
+          pattern: 'unescaped .* \(not printed\)"; fail=1'
+      - matchRegex:
+          path: spec.containers[0].args[0]
           pattern: 'probe mongodb "\$mghost" "\$\{mgport:-27017\}"'
 
   - it: helm test probes host/port when there is no uriKey
