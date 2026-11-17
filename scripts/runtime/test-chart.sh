@@ -44,7 +44,7 @@ if helm unittest "$CHART" >"$WORK/ut" 2>&1; then ok "helm unittest charts/kodus-
 (cd "$ROOT/charts/kodus" && helm dependency build >/dev/null 2>&1) || true
 if helm unittest "$ROOT/charts/kodus" >"$WORK/ut2" 2>&1; then ok "helm unittest charts/kodus ($(grep -Eo 'Tests: +[0-9]+ passed' "$WORK/ut2"))"; else cat "$WORK/ut2"; bad "helm unittest charts/kodus"; fi
 
-for variant in default purge cell-only create-class; do
+for variant in default purge cell-only create-class environments; do
     args=(-f "$VALUES")
     case "$variant" in
         purge) args+=(--set controlPlane.purgeDataOnUninstall=true) ;;
@@ -52,6 +52,7 @@ for variant in default purge cell-only create-class; do
             --set cell.hub.url=wss://hub.example:3410/cells --set cell.openbao.addr=https://bao.example:8200
             --set-file cell.openbao.caPem="$CHART/files/openbao/initialize.hcl" --set cell.openbao.injectorRoleId=r --set cell.openbao.injectorSecretId=s) ;;
         create-class) args+=(--set cell.runtimeClass.create=true) ;;
+        environments) args+=(--set cell.environments.enabled=true) ;;
     esac
     out="$WORK/render-$variant.yaml"
     if ! helm template kr "$CHART" -n kodus "${args[@]}" >"$out" 2>"$WORK/err"; then cat "$WORK/err"; bad "helm template ($variant)"; continue; fi

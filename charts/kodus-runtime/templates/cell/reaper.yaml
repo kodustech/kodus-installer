@@ -42,7 +42,7 @@ spec:
             - name: reaper
               image: {{ include "kr.image" (dict "root" $ "name" "cell") }}
               imagePullPolicy: {{ .Values.images.pullPolicy }}
-              command: ["/usr/local/bin/reaper", "-once", "-driver", "k8s-sandbox", "-k8s-namespace", {{ $c.sandboxNamespace | quote }}, "-cell-cert", "/var/lib/kodus-cell/identity/cert.pem"]
+              command: ["/usr/local/bin/reaper", "-once", "-driver", "k8s-sandbox", "-k8s-namespace", {{ $c.sandboxNamespace | quote }}, "-cell-cert", "/var/lib/kodus-cell/identity/cert.pem"{{ if $c.environments.enabled }}, "-k8s-env-namespace", {{ $c.environments.namespace | quote }}{{ end }}]
               securityContext:
                 {{- include "kr.containerSecurity" . | nindent 16 }}
               resources:

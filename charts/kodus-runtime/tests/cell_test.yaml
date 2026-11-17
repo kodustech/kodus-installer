@@ -150,3 +150,43 @@ tests:
       - equal:
           path: spec.jobTemplate.spec.template.spec.containers[0].command
           value: ["/usr/local/bin/reaper", "-once", "-driver", "k8s-sandbox", "-k8s-namespace", "kodus-runtime-sandboxes", "-cell-cert", "/var/lib/kodus-cell/identity/cert.pem"]
+  - it: renders no environment namespace by default
+    templates: [templates/cell/environments.yaml]
+    asserts:
+      - hasDocuments: { count: 0 }
+  - it: renders the environment namespace, gate, default deny and Roles when enabled
+    templates: [templates/cell/environments.yaml]
+    set:
+      cell.environments.enabled: true
+    asserts:
+      - hasDocuments: { count: 8 }
+      - equal: { path: metadata.name, value: kodus-runtime-environments }
+        documentIndex: 0
+      - equal: { path: "metadata.labels[\"pod-security.kubernetes.io/enforce\"]", value: privileged }
+        documentIndex: 0
+      - isKind: { of: ValidatingAdmissionPolicy }
+        documentIndex: 1
+      - equal: { path: "spec.validations[0].expression", value: "has(object.spec.runtimeClassName) && object.spec.runtimeClassName in ['gvisor']" }
+        documentIndex: 1
+      - equal: { path: spec.matchResources.namespaceSelector.matchLabels, value: { kubernetes.io/metadata.name: kodus-runtime-environments } }
+        documentIndex: 2
+      - equal: { path: spec.policyTypes, value: [Ingress, Egress] }
+        documentIndex: 3
+      - equal: { path: "subjects[0].name", value: kr-kodus-runtime-cell-reaper }
+        documentIndex: 7
+  - it: refuses an environment namespace shared with the sandboxes
+    templates: [templates/cell/environments.yaml]
+    set:
+      cell.environments.enabled: true
+      cell.environments.namespace: kodus-runtime-sandboxes
+    asserts:
+      - failedTemplate:
+          errorPattern: "must differ"
+  - it: gives the reaper the environment namespace only when enabled
+    templates: [templates/cell/reaper.yaml]
+    set:
+      cell.environments.enabled: true
+    asserts:
+      - contains:
+          path: spec.jobTemplate.spec.template.spec.containers[0].command
+          content: -k8s-env-namespace

@@ -112,6 +112,17 @@ cell:
   # Only claim pods: Pod Security restricted, the admission policy, default-deny
   # NetworkPolicies, the ResourceQuota and the LimitRange below.
   sandboxNamespace: kodus-runtime-sandboxes
+  # Environment Runs (kodus-ai apps/runtime-cell/deploy/kubernetes/
+  # environment-namespace.yaml): a namespace with Pod Security privileged, an
+  # admission gate (RuntimeClass, no hostPath, no host namespaces or ports, no
+  # service account token, privileged only on kata), default deny, the cell's
+  # and the reaper's Roles there, and the reaper's -k8s-env-namespace.
+  # Off: the cell does not run environment Runs yet.
+  environments:
+    enabled: false
+    namespace: kodus-runtime-environments
+    # RuntimeClasses an environment pod may use. Empty: runtimeClass.name.
+    runtimeClasses: []
   # The hub this cell registers with. Empty: this release's control plane.
   hub:
     url: ""          # wss://<host>:3410/cells
