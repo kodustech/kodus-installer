@@ -55,7 +55,7 @@ export KODUS_RUNTIME_COMPOSE_EXTRA="$TMP/isolate.yml"
 d() { printf 'example.invalid/kodus-runtime-%s@sha256:%064d' "$1" 0; }
 export KODUS_RUNTIME_HUB_IMAGE KODUS_RUNTIME_WORKER_IMAGE
 KODUS_RUNTIME_HUB_IMAGE=$(d hub) KODUS_RUNTIME_WORKER_IMAGE=$(d worker)
-./scripts/runtime/install.sh --check --cell-profile docker-gvisor --release unreleased --hub-host hub.example.internal >/dev/null
+./scripts/runtime/install.sh --check --cell-profile docker-gvisor --release unreleased --hub-host hub.example.internal --evidence-url https://runtime-evidence.example.internal >/dev/null
 C=./scripts/runtime/compose.sh
 
 pass=0 fail=0
