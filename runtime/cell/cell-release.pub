@@ -1,4 +1,4 @@
-# Vendored from kodustech/kodus-ai@002359871 (kody-runtime/next-all) apps/runtime-cell/internal/releasesig/keys/cell-release.pub.
+# Vendored from kodustech/kodus-ai@2516b4a1c (kody-runtime/pr) apps/runtime-cell/internal/releasesig/keys/cell-release.pub.
 # Re-sync with scripts/runtime/sync-from-kodus-ai.sh; do not edit by hand.
 # The public keys a cell release must be signed with (S-17 (a),
 # docs/runtime/isolation-p3-snapshots.md), one "kodus-cell-release-key

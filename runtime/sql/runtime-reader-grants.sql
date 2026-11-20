@@ -1,4 +1,4 @@
--- Vendored from kodustech/kodus-ai@002359871 (kody-runtime/next-all) scripts/runtime/runtime-reader-grants.sql.
+-- Vendored from kodustech/kodus-ai@2516b4a1c (kody-runtime/pr) scripts/runtime/runtime-reader-grants.sql.
 -- Re-sync with scripts/runtime/sync-from-kodus-ai.sh; do not edit by hand.
 -- What the product API's read-only role (kodus_runtime_reader, RUNTIME_DATABASE_READ_URL)
 -- may read in the Runtime database (ADR-025): SELECT on these tables and views only, and
@@ -29,7 +29,9 @@ BEGIN
       -- The org's egress switch and who may add, and the approvals' audit (v32): Settings, Runtime, Outbound access.
       'runtime_egress_settings', 'runtime_egress_audit',
       -- The org's own daily machine minutes (v35): Settings, Runtime, machine minutes.
-      'runtime_org_machine_budget'
+      'runtime_org_machine_budget',
+      -- Each Run's outcome of the kept checks (v37; ids, outcome and reason code): the kept checks list and its metric.
+      'runtime_kept_check_results'
     ] LOOP
       IF to_regclass(format('runtime.%I', t)) IS NOT NULL THEN
         EXECUTE format('GRANT SELECT ON runtime.%I TO kodus_runtime_reader', t);

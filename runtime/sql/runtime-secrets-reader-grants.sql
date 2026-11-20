@@ -1,4 +1,4 @@
--- Vendored from kodustech/kodus-ai@002359871 (kody-runtime/next-all) scripts/runtime/runtime-secrets-reader-grants.sql.
+-- Vendored from kodustech/kodus-ai@2516b4a1c (kody-runtime/pr) scripts/runtime/runtime-secrets-reader-grants.sql.
 -- Re-sync with scripts/runtime/sync-from-kodus-ai.sh; do not edit by hand.
 -- What the Runtime hub's read-only role on the product database
 -- (kodus_runtime_secrets_reader, RUNTIME_PRODUCT_SECRETS_READ_URL) may read: the
