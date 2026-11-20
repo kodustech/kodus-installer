@@ -69,6 +69,7 @@ t "api: OpenBao AppRole files mounted read-only" j '[.services.api.volumes[] | s
 t "worker: Runtime env present, no OpenBao" j '.services.worker.environment.RUNTIME_ENABLED == "true" and (.services.worker.environment | has("RUNTIME_OPENBAO_ADDR") | not)'
 t "SANDBOX_PROVIDER left to .env by default" j '.services.api.environment.SANDBOX_PROVIDER == "local"'
 t "hub: production mTLS settings" j '.services["runtime-hub"].environment | .RUNTIME_TLS_WORKER_CA and .RUNTIME_WORKER_ALLOWED_CNS == "runtime-worker" and (has("RUNTIME_DEV_ALLOW_INSECURE_CELLS") | not)'
+t "worker: a fixed DBOS executor id and a release version (the production image refuses to start without them)" j '.services["runtime-worker"].environment | (.RUNTIME_EXECUTOR_ID | test("^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$") and . != "local") and (.RUNTIME_RELEASE_VERSION | length > 0)'
 t "worker: no CA key mounted" j '[.services["runtime-worker"].volumes[] | select(.target == "/runtime/pki/ca.key")] | length == 0'
 t "hub, worker, openbao: images by digest" j '[.services["runtime-hub","runtime-worker","runtime-openbao"].image | test("@sha256:[0-9a-f]{64}$")] | all'
 t "openbao: IPC_LOCK, bound to loopback by default" j '(.services["runtime-openbao"].cap_add | index("IPC_LOCK")) and .services["runtime-openbao"].ports[0].host_ip == "127.0.0.1"'

@@ -157,6 +157,10 @@ services:
     environment:
       # Immutable per image: DBOS resumes only workflows of the same release.
       RUNTIME_RELEASE_VERSION: ${KODUS_RUNTIME_RELEASE_VERSION:?run scripts/runtime/install.sh}
+      # This replica's DBOS executor id, required by the production image: a
+      # restart recovers the workflows recorded under it. One replica here, so
+      # a fixed id; never `local`, and never shared with a second worker.
+      RUNTIME_EXECUTOR_ID: runtime-worker-1
       RUNTIME_ENV_DRIVER: hub
       RUNTIME_HUB_URL: https://runtime-hub:3411
       RUNTIME_METRICS_PORT: "9465"

@@ -70,3 +70,11 @@ tests:
       - contains:
           path: "spec.template.spec.containers[0].env"
           content: { name: RUNTIME_WORKER_TLS_CERT, value: /runtime/worker-tls/worker.pem }
+  - it: gives the worker a fixed DBOS executor id, which the production image refuses to start without
+    templates: [templates/control-plane/hub-worker.yaml]
+    documentIndex: 4
+    asserts:
+      - isKind: { of: Deployment }
+      - contains:
+          path: "spec.template.spec.containers[0].env"
+          content: { name: RUNTIME_EXECUTOR_ID, value: kr-kodus-runtime-worker-1 }

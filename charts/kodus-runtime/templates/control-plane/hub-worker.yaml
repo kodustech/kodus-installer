@@ -181,6 +181,10 @@ spec:
               valueFrom: { secretKeyRef: { name: {{ include "kr.fullname" $ }}-env, key: {{ $k }} } }
             {{- end }}
             - { name: RUNTIME_RELEASE_VERSION, value: {{ $release | quote }} }
+            # This replica's DBOS executor id, required by the production image:
+            # a restart recovers the workflows recorded under it. The worker is
+            # one pod (replicas: 1, Recreate), so a fixed id; never `local`.
+            - { name: RUNTIME_EXECUTOR_ID, value: {{ printf "%s-1" (include "kr.worker" .) | quote }} }
             - { name: RUNTIME_ENV_DRIVER, value: hub }
             - { name: RUNTIME_HUB_URL, value: {{ printf "https://%s:3411" (include "kr.hubInternal" .) | quote }} }
             - { name: RUNTIME_METRICS_PORT, value: "9465" }
