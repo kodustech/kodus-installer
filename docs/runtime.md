@@ -42,7 +42,7 @@ No product release carries the Runtime yet and no cell release has run, so **no 
 |---|---|---|---|
 | `hub`, `worker` | Control plane (`docker-bake.hcl` targets `runtime-hub`, `runtime-worker`) | `ghcr.io/kodustech/kodus-runtime-hub`, `-worker` | Built by no workflow |
 | `cell` | Every cell binary, distroless (`apps/runtime-cell/Dockerfile`) | `ghcr.io/kodustech/kodus-runtime-cell` | Release workflow written, never run |
-| `builder` | Rootless BuildKit with the gVisor overlay fix; digest pinned in the cell | `ghcr.io/kodustech/kodus-runtime-builder` | Digest known (`f4c8f1e1…`), not pushed |
+| `builder` | Rootless BuildKit with the gVisor overlay fix; digest pinned in the cell | `ghcr.io/kodustech/kodus-runtime-builder` | Digest known (`07f92635…`, the one `apps/runtime-cell/cmd/cell/config.go` pins), not pushed |
 | `sandbox` | Code sandbox tool image with the guest agent | not decided | Built by no workflow |
 | `browser` | Browser runner for browser probes | not decided | Built by no workflow |
 | `microvm-kit` | Firecracker, jailer, guest kernel, rootfs | not decided | Not built (phase P2) |
@@ -52,7 +52,7 @@ holder and the egress/injector containers) and BusyBox 1.36.
 
 ### Pointing at local builds meanwhile
 
-Build from a `kodus-ai` checkout that has `apps/runtime` (branch `kody-runtime/base` today), then name each image with
+Build from a `kodus-ai` checkout that has `apps/runtime` (branch `kody-runtime/pr` today, kodus-ai PR 2641), then name each image with
 `KODUS_RUNTIME_<COMPONENT>_IMAGE` and use the release `unreleased`:
 
 ```bash
