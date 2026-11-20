@@ -384,6 +384,8 @@ wait_for_postgres() {
 # services sit behind the `runtime` profile and are left as they are here.
 if [ -f runtime/state/compose.env ] && [ "$DOCKER_COMPOSE" = "docker compose" ]; then
     DOCKER_COMPOSE="docker compose --env-file .env --env-file runtime/state/compose.env -f docker-compose.yml -f docker-compose.runtime.yml"
+    # Compose loads docker-compose.override.yml only when no -f is given.
+    [ ! -f docker-compose.override.yml ] || DOCKER_COMPOSE="$DOCKER_COMPOSE -f docker-compose.override.yml"
     echo -e "${YELLOW}Kody Runtime is installed: the API and the worker keep its env (scripts/runtime/compose.sh manages its services).${NC}"
 fi
 

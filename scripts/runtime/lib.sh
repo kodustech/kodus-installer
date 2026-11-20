@@ -143,13 +143,19 @@ rt_require_cmds() {
 # rt_compose ARGS...: docker compose over the product stack plus the Runtime,
 # with the generated non-secret settings (images, binds, public URLs).
 # KODUS_RUNTIME_COMPOSE_EXTRA adds one more compose file (the tests use it to
-# isolate networks and names).
+# isolate networks and names). docker-compose.override.yml, which Compose loads
+# only when no -f is given, is added last when present, as scripts/install.sh
+# does: an operator's image pins for the API and the worker (for example a
+# build of the product that carries the Runtime) hold here too.
 rt_compose() {
+    local override=()
+    [ ! -f "$RT_ROOT/docker-compose.override.yml" ] || override=(-f "$RT_ROOT/docker-compose.override.yml")
     [ -f "$RT_STATE/compose.env" ] || rt_die "$RT_STATE/compose.env is missing: run scripts/runtime/install.sh first"
     KODUS_RUNTIME_STATE="$RT_STATE" docker compose \
         --project-directory "$RT_ROOT" \
         --env-file "$RT_ROOT/.env" --env-file "$RT_STATE/compose.env" \
         -f "$RT_ROOT/docker-compose.yml" -f "$RT_ROOT/docker-compose.runtime.yml" \
         ${KODUS_RUNTIME_COMPOSE_EXTRA:+-f "$KODUS_RUNTIME_COMPOSE_EXTRA"} \
+        ${override[@]+"${override[@]}"} \
         --profile runtime "$@"
 }

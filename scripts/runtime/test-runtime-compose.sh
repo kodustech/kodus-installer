@@ -78,6 +78,14 @@ t "openbao: IPC_LOCK, bound to loopback by default" j '(.services["runtime-openb
 ./scripts/runtime/compose.sh config --format json >"$TMP/config2.json"
 t "--sandbox-provider runtime overrides .env" jq -e '.services.api.environment.SANDBOX_PROVIDER == "runtime" and .services.worker.environment.SANDBOX_PROVIDER == "runtime"' "$TMP/config2.json"
 
+# Compose loads docker-compose.override.yml only without -f: an operator's pin of
+# the API image (a product build that carries the Runtime) must still hold.
+printf 'services:\n  api:\n    image: example.invalid/kodus-api-pin:test\n' >docker-compose.override.yml
+./scripts/runtime/compose.sh config --format json >"$TMP/config3.json"
+t "docker-compose.override.yml pins the API image in the Runtime layering" jq -e '.services.api.image == "example.invalid/kodus-api-pin:test" and .services.api.environment.RUNTIME_ENABLED == "true"' "$TMP/config3.json"
+rm -f docker-compose.override.yml
+./scripts/runtime/compose.sh config --format json | jq -e '.services.api.image != "example.invalid/kodus-api-pin:test"' >/dev/null || { echo "FAIL override leaked"; exit 1; }
+
 no_secret_tracked() {
     local v
     while IFS='=' read -r _ v; do
