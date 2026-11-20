@@ -116,7 +116,7 @@ fi
 t "install --dry-run succeeds" sh -c "$CH install --profile docker-gvisor --bundle $BUNDLE ${BIN_ARGS[*]} --min-free-gb 1 --dry-run >/tmp/install.log 2>&1"
 sed "s/^/      | /" /tmp/install.log | head -60
 t "gVisor archive verified against the pin" has "SHA-512 verified" /tmp/install.log
-t "runsc registered with Docker (dry run)" has "[dry-run] /usr/local/bin/runsc install --runtime runsc" /tmp/install.log
+t "runsc registered with Docker, applying the containers' seccomp profile (dry run)" has "[dry-run] /usr/local/bin/runsc install --runtime runsc -- --oci-seccomp" /tmp/install.log
 t "Docker reloaded, not restarted (dry run)" has "[dry-run] systemctl reload docker" /tmp/install.log
 t "cell register with the token in the env and the token's topology" has "[dry-run] KODUS_CELL_REGISTRATION_TOKEN=<token> /opt/kodus-cell/current/bin/cell register -hub https://hub.example.internal:3410 -ca /etc/kodus/cell/hub-ca.pem -out /etc/kodus/cell/identity" /tmp/install.log
 t "no --profile: the host's profile, docker-gvisor without KVM, and says why" sh -c "$CH install --bundle $BUNDLE ${BIN_ARGS[*]} --min-free-gb 1 --dry-run 2>&1 | grep -q 'Profile: docker-gvisor (no usable /dev/kvm)'"

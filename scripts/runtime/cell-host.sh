@@ -538,8 +538,10 @@ install_gvisor() {
     install -m 0755 "$tmp/x/containerd-shim-runsc-v1" "$LOCAL_BIN/containerd-shim-runsc-v1"
     rt_ok "gVisor $rel installed in /usr/local/bin: runsc, containerd-shim-runsc-v1, gvisor-bin/ (SHA-512 verified)."
     # Adds "runsc" to /etc/docker/daemon.json's runtimes, then Docker reloads
-    # its runtimes on SIGHUP without restarting containers.
-    run "$LOCAL_BIN/runsc" install --runtime runsc
+    # its runtimes on SIGHUP without restarting containers. --oci-seccomp: runsc
+    # otherwise ignores the containers' seccomp profile, and a sandbox command
+    # could unshare a user namespace; the cell refuses a runsc without it.
+    run "$LOCAL_BIN/runsc" install --runtime runsc -- --oci-seccomp
     run "$SYSTEMCTL" reload docker
 }
 
