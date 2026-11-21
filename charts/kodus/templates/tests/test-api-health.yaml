@@ -18,6 +18,10 @@ spec:
     {{- end }}                {{/* openshift: SCC assigns the UID; 65534 would be rejected by restricted-v2 */}}
     seccompProfile:
       type: RuntimeDefault
+  {{- /* the chart-wide scheduling, or a test pod cannot land on a dedicated (tainted) pool */}}
+  {{- with include "kodus-common.scheduling" (dict "root" .) | trim }}
+  {{- . | nindent 2 }}
+  {{- end }}
   containers:
     - name: check
       image: {{ include "kodus-common.regPrefix" . }}{{ .Values.waitForDeps.image | default "busybox:1.37.0" }}
