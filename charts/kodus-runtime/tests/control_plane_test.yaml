@@ -78,3 +78,37 @@ tests:
       - contains:
           path: "spec.template.spec.containers[0].env"
           content: { name: RUNTIME_EXECUTOR_ID, value: kr-kodus-runtime-worker-1 }
+  - it: puts the listed organizations on the alpha track with a Job per release
+    templates: [templates/control-plane/jobs.yaml]
+    release: { revision: 1 }
+    set:
+      controlPlane.alphaOrganizations: [7e1f16b2-64fa-4b67-919f-aeed90bd8961, all]
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: { name: RUNTIME_INIT_MODE, value: release-track }
+        documentSelector: { path: metadata.name, value: kr-kodus-runtime-release-track-1 }
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: { name: RUNTIME_ORGS, value: 7e1f16b2-64fa-4b67-919f-aeed90bd8961 all }
+        documentSelector: { path: metadata.name, value: kr-kodus-runtime-release-track-1 }
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: { name: RUNTIME_INIT_TRACK, value: alpha }
+        documentSelector: { path: metadata.name, value: kr-kodus-runtime-release-track-1 }
+  - it: renders no release-track Job by default
+    templates: [templates/control-plane/jobs.yaml]
+    asserts:
+      - hasDocuments: { count: 5 }
+  - it: adds exactly the release-track Job when organizations are listed
+    templates: [templates/control-plane/jobs.yaml]
+    set:
+      controlPlane.alphaOrganizations: [all]
+    asserts:
+      - hasDocuments: { count: 6 }
+  - it: refuses an entry that is neither an organization id nor all
+    templates: [templates/control-plane/jobs.yaml]
+    set:
+      controlPlane.alphaOrganizations: ["x' OR true"]
+    asserts:
+      - failedTemplate: { errorPattern: "is neither an organization id nor all" }

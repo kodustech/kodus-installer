@@ -140,13 +140,8 @@ spec:
       {{- include "kr.pullSecrets" . | nindent 6 }}
       securityContext:
         {{- include "kr.podSecurity" (dict "uid" 65532) | nindent 8 }}
-      {{- with $c.nodeSelector }}
-      nodeSelector:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}
-      {{- with $c.tolerations }}
-      tolerations:
-        {{- toYaml . | nindent 8 }}
+      {{- with include "kr.scheduling" (dict "root" $ "cfg" $c) | trim }}
+      {{- . | nindent 6 }}
       {{- end }}
       initContainers:
         - name: register

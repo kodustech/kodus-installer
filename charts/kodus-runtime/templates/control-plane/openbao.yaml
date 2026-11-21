@@ -98,6 +98,9 @@ spec:
       {{- include "kr.pullSecrets" . | nindent 6 }}
       securityContext:
         {{- include "kr.podSecurity" (dict "uid" 1000) | nindent 8 }}
+      {{- with include "kr.scheduling" (dict "root" $ "cfg" $.Values.controlPlane.openbao) | trim }}
+      {{- . | nindent 6 }}
+      {{- end }}
       initContainers:
         {{- include "kr.waitForDb" (dict "root" $ "key" "OPENBAO_DATABASE_URL" "what" "the openbao role (the db-roles Job)") | nindent 8 }}
       containers:

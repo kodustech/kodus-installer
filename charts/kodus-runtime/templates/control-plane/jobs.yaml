@@ -51,6 +51,32 @@ spec:
       labels:
         {{- include "kr.selector" (dict "root" $ "component" "db") | nindent 8 }}
     {{- include "kr.dbJobPod" (dict "root" $ "mode" "grants" "script" "for i in $(seq 1 180); do bash /runtime/db-init.sh && exit 0; rc=$?; [ \"$rc\" = 3 ] || exit \"$rc\"; sleep 10; done; exit 1") | nindent 4 }}
+{{- with .Values.controlPlane.alphaOrganizations }}
+{{- range . }}
+{{- if not (or (eq (toString .) "all") (regexMatch "^[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$" (toString .))) }}
+{{- fail (printf "controlPlane.alphaOrganizations: %q is neither an organization id nor all" (toString .)) }}
+{{- end }}
+{{- end }}
+---
+# Kody Runtime shows for organizations on the alpha release track; a new one
+# starts on stable and self-hosted has no screen for it. Each upgrade puts the
+# organizations listed (or all) on alpha (db-init.sh release-track, as
+# scripts/runtime/release-track.sh does on Compose). Exits 4 on an id that does
+# not exist yet: sign up first, then helm upgrade.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "kr.fullname" $ }}-release-track-{{ $.Release.Revision }}
+  labels:
+    {{- include "kr.labels" (dict "root" $ "component" "db") | nindent 4 }}
+spec:
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        {{- include "kr.selector" (dict "root" $ "component" "db") | nindent 8 }}
+    {{- include "kr.dbJobPod" (dict "root" $ "mode" "release-track" "env" (dict "RUNTIME_INIT_TRACK" "alpha" "RUNTIME_ORGS" (join " " .)) "script" "for o in $RUNTIME_ORGS; do RUNTIME_INIT_ORG=$o bash /runtime/db-init.sh || exit $?; done") | nindent 4 }}
+{{- end }}
 {{- if .Values.controlPlane.purgeDataOnUninstall }}
 ---
 # helm uninstall with purgeDataOnUninstall: the Runtime database, the vault
@@ -137,6 +163,9 @@ spec:
       {{- include "kr.pullSecrets" . | nindent 6 }}
       securityContext:
         {{- include "kr.podSecurity" (dict "uid" 1000) | nindent 8 }}
+      {{- with include "kr.scheduling" (dict "root" $ "cfg" $.Values.controlPlane.jobs) | trim }}
+      {{- . | nindent 6 }}
+      {{- end }}
       containers:
         - name: mq-user
           image: {{ include "kr.image" (dict "root" $ "name" "worker") }}

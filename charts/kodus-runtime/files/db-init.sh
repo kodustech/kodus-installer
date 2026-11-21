@@ -14,6 +14,12 @@
 #   RUNTIME_INIT_MODE=dump         pg_dump -Fc of RUNTIME_INIT_DB to stdout
 #   RUNTIME_INIT_MODE=restore      pg_restore of stdin into RUNTIME_INIT_DB
 #   RUNTIME_INIT_MODE=uninstall    drops the Runtime and OpenBao databases and roles
+#   RUNTIME_INIT_MODE=release-track  prints each organization's id, release
+#                             track and name (tab-separated); with
+#                             RUNTIME_INIT_ORG (an organization id, or `all`)
+#                             and RUNTIME_INIT_TRACK (stable, beta or alpha)
+#                             first sets that track. Kody Runtime is released
+#                             to organizations on `alpha`.
 # Never prints a password.
 set -euo pipefail
 
@@ -76,6 +82,28 @@ case "${RUNTIME_INIT_MODE:-roles}" in
         db=$(runtime_db)
         pg_restore --clean --if-exists --exit-on-error -d "$db"
         echo "runtime-init: $db restored" >&2
+        ;;
+    release-track)
+        org=${RUNTIME_INIT_ORG:-} track=${RUNTIME_INIT_TRACK:-}
+        if [ -n "$org$track" ]; then
+            case "$track" in stable | beta | alpha) ;; *) echo "runtime-init: RUNTIME_INIT_TRACK must be stable, beta or alpha" >&2; exit 2 ;; esac
+            if [ "$org" = all ]; then
+                n=$(psql_q -d "$API_PG_DB_DATABASE" -v track="$track" -At <<'SQL'
+WITH u AS (UPDATE public.organizations SET release_track = :'track' RETURNING 1) SELECT count(*) FROM u
+SQL
+                )
+            elif printf '%s' "$org" | grep -Eqx '[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}'; then
+                n=$(psql_q -d "$API_PG_DB_DATABASE" -v org="$org" -v track="$track" -At <<'SQL'
+WITH u AS (UPDATE public.organizations SET release_track = :'track' WHERE uuid = :'org' RETURNING 1) SELECT count(*) FROM u
+SQL
+                )
+                [ "$n" = 1 ] || { echo "runtime-init: no organization $org" >&2; exit 4; }
+            else
+                echo "runtime-init: RUNTIME_INIT_ORG must be an organization id or all" >&2; exit 2
+            fi
+            echo "runtime-init: $n organization(s) now on $track" >&2
+        fi
+        psql_q -d "$API_PG_DB_DATABASE" -At -F "$(printf '\t')" -c "SELECT uuid, release_track, name FROM public.organizations ORDER BY \"createdAt\""
         ;;
     uninstall)
         psql_q -d "$API_PG_DB_DATABASE" -c "DO \$\$ BEGIN

@@ -55,6 +55,16 @@ rabbitmq:
     usernameKey: username
     passwordKey: password
 
+# Pod scheduling for every pod of the chart, as in charts/kodus: rendered
+# verbatim. controlPlane.{hub,worker,openbao,jobs} and cell take the same keys;
+# a non-empty one replaces the value here for that workload (no merge). The
+# reaper follows the cell's nodeSelector and tolerations (it runs on its node).
+# Code sandboxes are placed by the RuntimeClass (cell.runtimeClass), not here.
+nodeSelector: {}
+tolerations: []
+affinity: {}
+topologySpreadConstraints: []
+
 controlPlane:
   enabled: true
   # Immutable per image: DBOS resumes only workflows of the same release.
@@ -98,6 +108,13 @@ controlPlane:
   # uninstalled (runtime/sql/runtime-uninstall.sql): every Run, every org secret.
   # Off by default; take a backup first (scripts/runtime/backup.sh).
   purgeDataOnUninstall: false
+  # The database and broker Jobs (db-roles, db-grants, db-purge, mq-user):
+  # nodeSelector, tolerations, affinity, topologySpreadConstraints.
+  jobs: {}
+  # Organizations to put on the alpha release track, the one Kody Runtime shows
+  # for (ids from the product's organizations table, or "all"). A new
+  # organization starts on stable: sign up, then helm upgrade with its id.
+  alphaOrganizations: []
   # The product (charts/kodus) reads <release>-product (env) through
   # services.{api,worker}.extraEnvFrom and <release>-product-files (OpenBao's
   # CA and the API's AppRole) through services.api.extraVolumes.

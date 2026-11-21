@@ -28,6 +28,9 @@ spec:
       {{- include "kr.pullSecrets" . | nindent 6 }}
       securityContext:
         {{- include "kr.podSecurity" (dict "uid" 1000) | nindent 8 }}
+      {{- with include "kr.scheduling" (dict "root" $ "cfg" $.Values.controlPlane.hub) | trim }}
+      {{- . | nindent 6 }}
+      {{- end }}
       initContainers:
         {{- include "kr.waitForDb" (dict "root" $ "key" "RUNTIME_DATABASE_URL" "what" "the kodus_runtime role (the db-roles Job)") | nindent 8 }}
       containers:
@@ -153,6 +156,9 @@ spec:
       {{- include "kr.pullSecrets" . | nindent 6 }}
       securityContext:
         {{- include "kr.podSecurity" (dict "uid" 1000) | nindent 8 }}
+      {{- with include "kr.scheduling" (dict "root" $ "cfg" $.Values.controlPlane.worker) | trim }}
+      {{- . | nindent 6 }}
+      {{- end }}
       initContainers:
         {{- include "kr.waitForDb" (dict "root" $ "key" "RUNTIME_DATABASE_URL" "what" "the kodus_runtime role (the db-roles Job)") | nindent 8 }}
         # The hub admits a worker certificate of the worker CA with OU=worker

@@ -7,6 +7,9 @@ spec:
   {{- include "kr.pullSecrets" .root | nindent 2 }}
   securityContext:
     {{- include "kr.podSecurity" (dict "uid" 70) | nindent 4 }}
+  {{- with include "kr.scheduling" (dict "root" .root "cfg" .root.Values.controlPlane.jobs) | trim }}
+  {{- . | nindent 2 }}
+  {{- end }}
   containers:
     - name: runtime-init
       image: {{ include "kr.image" (dict "root" .root "name" "psql") }}
@@ -14,6 +17,9 @@ spec:
       command: ["bash", "-c", {{ .script | quote }}]
       env:
         - { name: RUNTIME_INIT_MODE, value: {{ .mode | quote }} }
+        {{- range $k, $v := (.env | default dict) }}
+        - { name: {{ $k }}, value: {{ $v | quote }} }
+        {{- end }}
         - { name: RUNTIME_INIT_PGSSLMODE, value: {{ .root.Values.postgres.sslMode | quote }} }
         - { name: API_PG_DB_HOST, value: {{ include "kr.pgHost" .root | quote }} }
         - { name: API_PG_DB_PORT, value: {{ .root.Values.postgres.port | quote }} }

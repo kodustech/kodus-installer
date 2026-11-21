@@ -31,6 +31,10 @@ spec:
           {{- include "kr.pullSecrets" . | nindent 10 }}
           securityContext:
             {{- include "kr.podSecurity" (dict "uid" 65532) | nindent 12 }}
+          {{- /* It runs next to the cell (podAffinity below): the cell's node selector and tolerations, or it cannot land there. */}}
+          {{- with include "kr.scheduling" (dict "root" $ "cfg" .Values.cell "keys" (list "nodeSelector" "tolerations")) | trim }}
+          {{- . | nindent 10 }}
+          {{- end }}
           affinity:
             podAffinity:
               requiredDuringSchedulingIgnoredDuringExecution:

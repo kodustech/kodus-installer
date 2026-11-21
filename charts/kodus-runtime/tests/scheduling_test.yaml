@@ -1,0 +1,79 @@
+suite: Pod scheduling
+values:
+  - values/ci.yaml
+release:
+  name: kr
+  namespace: kodus
+tests:
+  - it: renders no scheduling key by default
+    templates:
+      - templates/control-plane/hub-worker.yaml
+      - templates/control-plane/openbao.yaml
+      - templates/cell/cell.yaml
+    asserts:
+      - notExists: { path: spec.template.spec.nodeSelector }
+        documentSelector: { path: kind, value: Deployment, matchMany: true }
+      - notExists: { path: spec.template.spec.tolerations }
+        documentSelector: { path: kind, value: Deployment, matchMany: true }
+
+  - it: puts every control-plane pod on the chart-wide pool
+    templates:
+      - templates/control-plane/hub-worker.yaml
+      - templates/control-plane/openbao.yaml
+    set:
+      nodeSelector: { agentpool: kodus }
+      tolerations: [{ key: dedicated, operator: Equal, value: kodus, effect: NoSchedule }]
+      topologySpreadConstraints: [{ maxSkew: 1, topologyKey: topology.kubernetes.io/zone, whenUnsatisfiable: ScheduleAnyway, matchLabelKeys: [app.kubernetes.io/name] }]
+    asserts:
+      - equal: { path: spec.template.spec.nodeSelector, value: { agentpool: kodus } }
+        documentSelector: { path: kind, value: Deployment, matchMany: true }
+      - equal: { path: "spec.template.spec.tolerations[0].key", value: dedicated }
+        documentSelector: { path: kind, value: Deployment, matchMany: true }
+      - equal: { path: "spec.template.spec.topologySpreadConstraints[0].matchLabelKeys[0]", value: app.kubernetes.io/name }
+        documentSelector: { path: kind, value: Deployment, matchMany: true }
+
+  - it: lets one workload replace a key, not merge it
+    templates: [templates/control-plane/hub-worker.yaml]
+    set:
+      nodeSelector: { agentpool: kodus }
+      controlPlane.worker.nodeSelector: { pool: workers }
+    asserts:
+      - equal: { path: spec.template.spec.nodeSelector, value: { agentpool: kodus } }
+        documentIndex: 0   # the hub Deployment
+      - equal: { path: spec.template.spec.nodeSelector, value: { pool: workers } }
+        documentIndex: 4   # the runtime-worker Deployment
+
+  - it: schedules the database and broker Jobs from controlPlane.jobs, else the chart-wide value
+    templates: [templates/control-plane/jobs.yaml]
+    set:
+      tolerations: [{ key: dedicated, operator: Exists }]
+      controlPlane.jobs.nodeSelector: { pool: jobs }
+    asserts:
+      - equal: { path: spec.template.spec.nodeSelector, value: { pool: jobs } }
+        documentSelector: { path: kind, value: Job, matchMany: true }
+      - equal: { path: "spec.template.spec.tolerations[0].key", value: dedicated }
+        documentSelector: { path: kind, value: Job, matchMany: true }
+
+  - it: keeps the cell's own nodeSelector and tolerations ahead of the chart-wide ones
+    templates: [templates/cell/cell.yaml]
+    set:
+      nodeSelector: { agentpool: kodus }
+      cell.nodeSelector: { sandbox.gvisor: "true" }
+      cell.tolerations: [{ key: sandbox, operator: Exists, effect: NoSchedule }]
+    asserts:
+      - equal: { path: spec.template.spec.nodeSelector, value: { sandbox.gvisor: "true" } }
+        documentSelector: { path: kind, value: Deployment, matchMany: true }
+      - equal: { path: "spec.template.spec.tolerations[0].key", value: sandbox }
+        documentSelector: { path: kind, value: Deployment, matchMany: true }
+
+  - it: lands the reaper on the cell's tainted node and keeps its affinity to the cell
+    templates: [templates/cell/reaper.yaml]
+    set:
+      affinity: { nodeAffinity: { requiredDuringSchedulingIgnoredDuringExecution: { nodeSelectorTerms: [{ matchExpressions: [{ key: x, operator: Exists }] }] } } }
+      cell.nodeSelector: { sandbox.gvisor: "true" }
+      cell.tolerations: [{ key: sandbox, operator: Exists, effect: NoSchedule }]
+    asserts:
+      - equal: { path: spec.jobTemplate.spec.template.spec.nodeSelector, value: { sandbox.gvisor: "true" } }
+      - equal: { path: "spec.jobTemplate.spec.template.spec.tolerations[0].key", value: sandbox }
+      - exists: { path: spec.jobTemplate.spec.template.spec.affinity.podAffinity }
+      - notExists: { path: spec.jobTemplate.spec.template.spec.affinity.nodeAffinity }

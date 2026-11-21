@@ -200,3 +200,21 @@ template has no cluster, so it renders fresh values.
     requests: { cpu: 10m, memory: 16Mi }
     limits: { memory: 64Mi }
 {{- end -}}
+
+{{/*
+Pod scheduling (nodeSelector, affinity, tolerations, topologySpreadConstraints),
+as charts/kodus does it: per key, a non-empty value of the workload REPLACES the
+chart-wide top-level one (no merge); empty falls back to it. "keys" narrows the
+keys (the reaper keeps its own affinity). Emits nothing when all are empty.
+Call with (dict "root" $ "cfg" <workload values> ["keys" (list ...)]).
+*/}}
+{{- define "kr.scheduling" -}}
+{{- $cfg := .cfg | default dict }}
+{{- $top := .root.Values }}
+{{- range $k := (.keys | default (list "nodeSelector" "affinity" "tolerations" "topologySpreadConstraints")) }}
+{{- with (get $cfg $k) | default (get $top $k) }}
+{{ $k }}:
+  {{- toYaml . | nindent 2 }}
+{{- end }}
+{{- end }}
+{{- end }}

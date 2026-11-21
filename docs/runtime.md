@@ -414,6 +414,15 @@ helm install kodus-runtime charts/kodus-runtime -n kodus \
 kubectl -n kodus-runtime-cell logs deploy/kodus-runtime-cell -c cell | grep -E 'k8s.preflight|cell.start'
 ```
 
+Kody Runtime shows only for organizations on the `alpha` release track: once the owner has signed up,
+`helm upgrade ... --set 'controlPlane.alphaOrganizations={<organization id>}'` (or `{all}`) runs a Job that puts them
+there (the Compose path is `scripts/runtime/release-track.sh`).
+
+Scheduling follows `charts/kodus`: top-level `nodeSelector`, `tolerations`, `affinity` and
+`topologySpreadConstraints` reach every pod of the chart, and `controlPlane.{hub,worker,openbao,jobs}` and `cell`
+take the same keys to replace them per workload. The reaper follows the cell's `nodeSelector` and `tolerations` (it
+runs on the cell's node); code sandboxes are placed by the RuntimeClass (`cell.runtimeClass`).
+
 Images are by digest only; none is published yet ([Status](#status-images-that-do-not-exist-yet)).
 `scripts/runtime/test-chart.sh` runs the static checks; `scripts/runtime/test-kubernetes.sh --kodus-ai <checkout>`
 installs on a throwaway kind cluster with gVisor and proves registration, the preflight, a sandbox claim under
