@@ -209,9 +209,12 @@ fi
 echo "== upgrade"
 R='{"runc":{},"runsc":{"path":"/usr/local/bin/runsc"}}'
 t "a registered runsc of the pinned release without gvisor-bin/ is reinstalled" sh -c "rm -rf /usr/local/bin/gvisor-bin && STUB_RUNTIMES='$R' $CH install --profile docker-gvisor --bundle $BUNDLE ${BIN_ARGS[*]} --min-free-gb 1 --dry-run >/tmp/reinstall.log 2>&1 && grep -q 'gvisor-bin/ is missing' /tmp/reinstall.log && test -x /usr/local/bin/gvisor-bin/gvisor_sentry"
-t "install --egress-allow sets the allow-list" sh -c "STUB_RUNTIMES='$R' $CH install --profile docker-gvisor --bundle $BUNDLE ${BIN_ARGS[*]} --min-free-gb 1 --egress-allow registry.example.com --dry-run >/dev/null && grep -qx KODUS_CELL_EGRESS_ALLOW=registry.example.com /etc/kodus/cell/cell.env"
+t "install --sandbox-memory-mb refuses a size that is not a number" sh -c "! STUB_RUNTIMES='$R' $CH install --profile docker-gvisor --bundle $BUNDLE ${BIN_ARGS[*]} --min-free-gb 1 --sandbox-memory-mb 4g --dry-run >/tmp/badsize.log 2>&1 && grep -q 'sandbox-memory-mb 4g: a whole number' /tmp/badsize.log"
+t "install --egress-allow sets the allow-list" sh -c "STUB_RUNTIMES='$R' $CH install --profile docker-gvisor --bundle $BUNDLE ${BIN_ARGS[*]} --min-free-gb 1 --egress-allow registry.example.com --sandbox-memory-mb 4096 --sandbox-cpus 3 --dry-run >/dev/null && grep -qx KODUS_CELL_EGRESS_ALLOW=registry.example.com /etc/kodus/cell/cell.env"
+t "install --sandbox-memory-mb/--sandbox-cpus size the cell's sandboxes" sh -c 'grep -qx KODUS_CELL_SANDBOX_MEMORY_MB=4096 /etc/kodus/cell/cell.env && grep -qx KODUS_CELL_SANDBOX_CPUS=3 /etc/kodus/cell/cell.env && grep -q -- "-sandbox-memory-mb 4096 -sandbox-cpus 3" /etc/kodus/cell/cell.env'
 t "upgrade --dry-run succeeds" sh -c "STUB_RUNTIMES='$R' $CH upgrade ${BIN_ARGS[*]} --min-free-gb 1 --dry-run >/tmp/upgrade.log 2>&1 || { tail -20 /tmp/upgrade.log; exit 1; }"
 t "upgrade keeps the allow-list" sh -c "grep -qx KODUS_CELL_EGRESS_ALLOW=registry.example.com /etc/kodus/cell/cell.env && grep -q 'egress-allow registry.example.com' /etc/kodus/cell/cell.env && grep -q '\[dry-run\] systemctl restart kodus-cell.target' /tmp/upgrade.log"
+t "upgrade keeps the sandbox size" sh -c 'grep -q -- "-sandbox-memory-mb 4096 -sandbox-cpus 3" /etc/kodus/cell/cell.env'
 t "each release keeps the settings it ran with" sh -c 'test -s "$(readlink /opt/kodus-cell/current)/cell.env"'
 
 echo "== backup and uninstall"

@@ -54,6 +54,9 @@
 #                       npm and the Debian, Ubuntu and Alpine mirrors)
 #   --upstream-dns ADDR resolver the egress forwards to (default 1.1.1.1:53)
 #   --sandbox-pool N    blank sandboxes kept ready (default 0)
+#   --sandbox-memory-mb N  memory of each code sandbox, MB (default: the
+#                       cell's, 2048); counted in the memory admission
+#   --sandbox-cpus N    CPUs of each code sandbox (default: the cell's, 2)
 #   --gvisor-archive F  gvisor.tar.bz2 already downloaded (offline); still
 #                       checked against runtime/gvisor.tsv
 #   --reinstall-runsc   replace a runsc that is already registered
@@ -136,7 +139,7 @@ DEFAULT_EGRESS_ALLOW=registry-1.docker.io,auth.docker.io,production.cloudfront.d
 COMMAND=${1:-}
 [ $# -gt 0 ] && shift
 PROFILE=auto BUNDLE='' TOKEN_FILE='' RELEASE='' CELL_IMAGE_ARG='' CELL_BIN_DIR='' WORKDIR_R=/var/lib/kodus-cell
-EGRESS_ALLOW='' UPSTREAM_DNS='' SANDBOX_POOL='' GVISOR_ARCHIVE='' REINSTALL_RUNSC=0
+EGRESS_ALLOW='' UPSTREAM_DNS='' SANDBOX_POOL='' SANDBOX_MEMORY_MB='' SANDBOX_CPUS='' GVISOR_ARCHIVE='' REINSTALL_RUNSC=0
 ENFORCERS_SUBNET='' EGRESS_ENFORCER_IP='' INJECTOR_ENFORCER_IP=''
 DRY_RUN=0 HUB_URL='' HUB_CA='' OUT='' PURGE=0 REMOVE_RUNSC=0 THIN_POOL='' RUNTIME_CLASS=gvisor MIN_FREE_GB=20
 FROM='' ROLLBACK_WINDOW=10m RELEASE_BUNDLE='' REGISTRY_MIRROR=''
@@ -159,6 +162,8 @@ while [ $# -gt 0 ]; do
         --egress-allow) EGRESS_ALLOW=${2:?}; shift 2 ;;
         --upstream-dns) UPSTREAM_DNS=${2:?}; shift 2 ;;
         --sandbox-pool) SANDBOX_POOL=${2:?}; shift 2 ;;
+        --sandbox-memory-mb) SANDBOX_MEMORY_MB=${2:?}; shift 2 ;;
+        --sandbox-cpus) SANDBOX_CPUS=${2:?}; shift 2 ;;
         --gvisor-archive) GVISOR_ARCHIVE=${2:?}; shift 2 ;;
         --reinstall-runsc) REINSTALL_RUNSC=1; shift ;;
         --min-free-gb) MIN_FREE_GB=${2:?}; shift 2 ;;
@@ -183,6 +188,8 @@ settings_defaults() {
         [ -n "$EGRESS_ALLOW" ] || EGRESS_ALLOW=$(rt_env_get "$ETC/cell.env" KODUS_CELL_EGRESS_ALLOW)
         [ -n "$UPSTREAM_DNS" ] || UPSTREAM_DNS=$(rt_env_get "$ETC/cell.env" UPSTREAM_DNS)
         [ -n "$SANDBOX_POOL" ] || SANDBOX_POOL=$(rt_env_get "$ETC/cell.env" KODUS_CELL_SANDBOX_POOL)
+        [ -n "$SANDBOX_MEMORY_MB" ] || SANDBOX_MEMORY_MB=$(rt_env_get "$ETC/cell.env" KODUS_CELL_SANDBOX_MEMORY_MB)
+        [ -n "$SANDBOX_CPUS" ] || SANDBOX_CPUS=$(rt_env_get "$ETC/cell.env" KODUS_CELL_SANDBOX_CPUS)
         [ -n "$RELEASE" ] || RELEASE=$(rt_env_get "$ETC/cell.env" KODUS_CELL_RELEASE)
         [ -n "$ENFORCERS_SUBNET" ] || ENFORCERS_SUBNET=$(rt_env_get "$ETC/cell.env" ENFORCERS_SUBNET)
         [ -n "$EGRESS_ENFORCER_IP" ] || EGRESS_ENFORCER_IP=$(rt_env_get "$ETC/cell.env" EGRESS_ENFORCER_IP)
@@ -194,6 +201,19 @@ settings_defaults() {
     EGRESS_ALLOW=${EGRESS_ALLOW:-$DEFAULT_EGRESS_ALLOW}
     UPSTREAM_DNS=${UPSTREAM_DNS:-1.1.1.1:53}
     SANDBOX_POOL=${SANDBOX_POOL:-0}
+    # Empty sizes leave the cell's defaults (cmd/cell/sandbox.go). The cell
+    # refuses a size its host cannot hold; these only catch a typo early.
+    case "$SANDBOX_POOL" in '' | *[!0-9]*) rt_die "--sandbox-pool $SANDBOX_POOL: a whole number" ;; esac
+    case "$SANDBOX_MEMORY_MB" in
+        '') ;;
+        *[!0-9]*) rt_die "--sandbox-memory-mb $SANDBOX_MEMORY_MB: a whole number of MB" ;;
+        *) [ "$SANDBOX_MEMORY_MB" -ge 512 ] || rt_die "--sandbox-memory-mb $SANDBOX_MEMORY_MB: at least 512 (a review's clone and tools)" ;;
+    esac
+    case "$SANDBOX_CPUS" in
+        '') ;;
+        *[!0-9]*) rt_die "--sandbox-cpus $SANDBOX_CPUS: a whole number" ;;
+        *) [ "$SANDBOX_CPUS" -ge 1 ] || rt_die "--sandbox-cpus $SANDBOX_CPUS: at least 1" ;;
+    esac
 }
 
 run() { # run CMD...: changes the host; printed instead under --dry-run
@@ -973,7 +993,11 @@ EOF
     if [ -n "$OPENBAO_ADDR" ]; then
         injector_args="-openbao-addr $OPENBAO_ADDR -openbao-ca /etc/kodus/injector/openbao-ca.pem -openbao-role-id-file /etc/kodus/injector/openbao-injector-role-id -openbao-secret-id-file /etc/kodus/injector/openbao-injector-secret-id"
     fi
-    [ -n "$SANDBOX_IMAGE" ] && sandbox_args="-gvisor-sandbox-image $SANDBOX_IMAGE -sandbox-pool $SANDBOX_POOL"
+    if [ -n "$SANDBOX_IMAGE" ]; then
+        sandbox_args="-gvisor-sandbox-image $SANDBOX_IMAGE -sandbox-pool $SANDBOX_POOL"
+        [ -n "$SANDBOX_MEMORY_MB" ] && sandbox_args="$sandbox_args -sandbox-memory-mb $SANDBOX_MEMORY_MB"
+        [ -n "$SANDBOX_CPUS" ] && sandbox_args="$sandbox_args -sandbox-cpus $SANDBOX_CPUS"
+    fi
     [ -n "$BROWSER_IMAGE" ] && browser_args="-gvisor-browser-image $BROWSER_IMAGE"
     cat >"$ETC/cell.env" <<EOF
 # Written by kodus-installer scripts/runtime/cell-host.sh; read by the kodus-cell units.
@@ -981,6 +1005,8 @@ CELL_ID=$CELL_ID
 KODUS_CELL_RELEASE=$RELEASE
 KODUS_CELL_EGRESS_ALLOW=$EGRESS_ALLOW
 KODUS_CELL_SANDBOX_POOL=$SANDBOX_POOL
+KODUS_CELL_SANDBOX_MEMORY_MB=$SANDBOX_MEMORY_MB
+KODUS_CELL_SANDBOX_CPUS=$SANDBOX_CPUS
 HOLDER_IMAGE=$HOLDER_IMAGE
 UPSTREAM_DNS=$UPSTREAM_DNS
 MIRROR_CACHE_GB=20

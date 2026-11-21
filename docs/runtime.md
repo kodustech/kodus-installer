@@ -221,7 +221,8 @@ secrets, so an HTTPS call to a secret's host trusts the injector. Java services 
 
 Options: `--egress-allow` (the hosts every claim may reach; default the image registry, npm and the Debian, Ubuntu and
 Alpine mirrors), `--upstream-dns` (default `1.1.1.1:53`; set your resolver on a closed network), `--sandbox-pool N`
-(blank sandboxes kept ready, counted in the memory admission), `--workdir`, `--gvisor-archive` (offline),
+(blank sandboxes kept ready, counted in the memory admission), `--sandbox-memory-mb N` and `--sandbox-cpus N` (each code
+sandbox's size; default 2048 MB and 2 CPUs, kept across upgrades), `--workdir`, `--gvisor-archive` (offline),
 `--dry-run` (prints what would change Docker, systemd and the enrollment instead of doing it).
 
 ## Verify

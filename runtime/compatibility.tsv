@@ -12,7 +12,7 @@
 # `capabilities` field a newer cell sends (kodus-ai docs/runtime/deploy-2026-11-12.md,
 # "Hub before cells"), and a hub older than kodus-ai 07f2e368e refuses a
 # hello with more than 32 features (the hub takes up to 64 since then);
-# the cell's list is at 34 (kodus-ai apps/runtime-cell/internal/protocol
+# the cell's list is at 35 (kodus-ai apps/runtime-cell/internal/protocol
 # constants_gen.go CellFeatures), so every cell of this tree needs that hub
 # first.
 # Since kodus-ai 7b70cf2dc a hub of protocol H accepts a cell whose highest
@@ -39,4 +39,4 @@
 # PROTOCOL_VERSION, apps/runtime-cell/internal/protocol/types_gen.go
 # ProtocolVersion), backend gvisor (firecracker is refused until phase P2).
 #product	hub_protocol	cell_release	cell_protocols	backends	source
-unreleased	1	unreleased	1	gvisor	kodus-ai@da970ed16 kody-runtime/pr
+unreleased	1	unreleased	1	gvisor	kodus-ai@cdb3073d8 kody-runtime/pr
