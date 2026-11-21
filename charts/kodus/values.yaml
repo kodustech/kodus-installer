@@ -230,8 +230,11 @@ image:
 imagePullSecrets: []
 # - name: ghcr-credentials
 
-# Init container image used to wait for data deps (TCP probe).
+# Init container that waits for data deps (TCP probe) before app pods and the
+# migration Job start. enabled: false drops it (e.g. when an external store's port
+# is not reachable by a plain TCP check); the app then retries on its own.
 waitForDeps:
+  enabled: true
   image: busybox:1.37.0
 
 # Limits for chart-created emptyDir volumes. Empty default preserves each volume's
@@ -242,6 +245,17 @@ waitForDeps:
 emptyDir:
   defaultSizeLimit: ""
   sizeLimits: {}
+
+# Pod scheduling defaults for every chart-managed pod: app Deployments, the
+# migration Job and the bundled datastore StatefulSets (operator CRs are not
+# covered — configure those through the operator). Override per workload with the
+# same keys under services.<name>, migrations or <store>.bundled; a non-empty
+# override REPLACES the value here (no merge). Rendered verbatim, so
+# topologySpreadConstraints may use matchLabelKeys.
+nodeSelector: {}
+tolerations: []
+affinity: {}
+topologySpreadConstraints: []
 
 # Additional environment for chart-managed containers (services, migrations and bundled stores).
 # extraEnv: Kubernetes EnvVar list (value or valueFrom); extraEnvFrom: EnvFromSource list.
@@ -386,6 +400,12 @@ migrations:
   extraEnv: []
   extraEnvFrom: []
   enabled: true
+  # Annotations on the Job. For Argo CD (which renders with `helm template`, where
+  # Release.Revision is always 1, so the Job name never changes and the immutable
+  # Job cannot be updated) run it as a hook instead:
+  #   argocd.argoproj.io/hook: Sync
+  #   argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+  annotations: {}
   image:
     repository: ghcr.io/kodustech/kodus-ai-api
     tag: ""                            # REQUIRED — should match services.api.tag
@@ -567,6 +587,10 @@ postgres:
     database: kodus_db
     username: kodusdev
     password: ""                    # auto-generated when empty
+    # Use a pre-created Secret (key `password`) instead of the generated one, e.g.
+    # managed by External Secrets. GitOps tools render without cluster access, so
+    # the generated password changes on every render; this avoids that churn.
+    existingSecret: ""
     # Passed as `-c max_connections=`. The image default (100) is not enough once
     # api/worker/webhooks each run several replicas with their own pools; the
     # failure mode is "sorry, too many clients already" from every service at once.
@@ -617,6 +641,10 @@ mongodb:
     database: kodus_db
     username: kodusdev              # root user
     password: ""                    # auto-generated when empty
+    # Use a pre-created Secret (key `password`) instead of the generated one, e.g.
+    # managed by External Secrets. GitOps tools render without cluster access, so
+    # the generated password changes on every render; this avoids that churn.
+    existingSecret: ""
     storage:
       size: 10Gi
       storageClass: ""
@@ -632,6 +660,11 @@ mongodb:
     database: kodus_db
     existingSecret: ""
     passwordKey: password
+    # Key in existingSecret holding a full connection string (e.g. Atlas
+    # mongodb+srv://user:pass@cluster.example.mongodb.net/?retryWrites=true).
+    # When set, host/port/username/passwordKey are ignored and wait-for-deps
+    # skips Mongo. database above still selects the DB.
+    uriKey: ""
   operator:
     version: "8.0.4"
     members: 3
@@ -651,6 +684,15 @@ rabbitmq:
     image: ghcr.io/kodustech/kodus-rabbitmq:4.2.2-kodus.1
     username: kodus
     password: ""                    # auto-generated when empty
+    # Use a pre-created Secret (key `password`) instead of the generated one, e.g.
+    # managed by External Secrets. GitOps tools render without cluster access, so
+    # the generated password changes on every render; this avoids that churn.
+    existingSecret: ""
+    # The app gets amqp://<username>:<password>@... with the password unescaped, so
+    # a password from existingSecret must be URI-safe (alphanumeric). Otherwise set
+    # this to a key in existingSecret holding the full, percent-encoded URI
+    # (amqp://kodus:<encoded>@<release>-rabbitmq:5672/kodus-ai).
+    uriKey: ""
     storage:
       size: 8Gi
       storageClass: ""

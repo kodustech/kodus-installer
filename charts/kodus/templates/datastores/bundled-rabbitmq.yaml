@@ -69,6 +69,9 @@ spec:
       automountServiceAccountToken: false   # DB doesn't call the k8s API
       securityContext:
         {{- include "kodus-common.datastorePodSecurityContext" . | nindent 8 }}
+      {{- with include "kodus-common.scheduling" (dict "root" . "cfg" $b) | trim }}
+      {{- . | nindent 6 }}
+      {{- end }}
       initContainers:
         # fsGroup makes the kubelet add group rw to every file on the PVC at each
         # mount, turning the persisted .erlang.cookie into 0660. Erlang refuses to
@@ -115,7 +118,7 @@ spec:
             - name: RABBITMQ_DEFAULT_PASS
               valueFrom:
                 secretKeyRef:
-                  name: {{ $name }}-secret
+                  name: {{ include "kodus-common.bundledSecretName" (dict "root" . "store" "rabbitmq") }}
                   key: password
             - name: RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS
               value: "-rabbit heartbeat 60"
