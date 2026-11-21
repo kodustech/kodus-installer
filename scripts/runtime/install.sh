@@ -175,6 +175,11 @@ rt_compose up -d --wait runtime-worker
 rt_ok "Kody Runtime control plane is up."
 cat <<EOF
 
+Kody Runtime shows for organizations on the alpha release track. Once the
+owner has signed up:
+  scripts/runtime/release-track.sh                      (lists them)
+  scripts/runtime/release-track.sh --org <id> --track alpha
+
 Next, on each cell host (docs/runtime.md, "Cell host"):
   1. Copy $RT_STATE/cell-host/ to the host (it holds the injector's OpenBao
      credential: transfer it privately, 0600).

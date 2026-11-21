@@ -92,6 +92,21 @@ t "secrets reader: id, name and hosts" sql kodus_runtime_secrets_reader "$RUNTIM
 t "secrets reader: no other column" refused sql kodus_runtime_secrets_reader "$RUNTIME_SECRETS_READER_PG_PASSWORD" "$PRODUCT_DB" "SELECT created_by FROM runtime_secrets"
 t "Runtime owner: no product table" refused sql kodus_runtime "$RUNTIME_PG_PASSWORD" "$PRODUCT_DB" "SELECT name FROM runtime_secrets"
 t "openbao role: no Runtime database" refused sql openbao "$RUNTIME_OPENBAO_PG_PASSWORD" kodus_runtime "SELECT 1"
+# The product's organizations, as its migrations leave them.
+admin "$PRODUCT_DB" "CREATE TYPE organizations_release_track_enum AS ENUM ('stable','beta','alpha'); CREATE TABLE public.organizations (uuid uuid PRIMARY KEY, name text, release_track organizations_release_track_enum NOT NULL DEFAULT 'stable', \"createdAt\" timestamp NOT NULL DEFAULT now()); INSERT INTO public.organizations (uuid, name) VALUES ('11111111-1111-4111-8111-111111111111','one'), ('22222222-2222-4222-8222-222222222222','two')" >/dev/null
+rt() { $C run --rm -T -e RUNTIME_INIT_MODE=release-track -e RUNTIME_INIT_ORG="${1:-}" -e RUNTIME_INIT_TRACK="${2:-}" runtime-init; }
+track_of() { admin "$PRODUCT_DB" "SELECT release_track FROM public.organizations WHERE uuid = '$1'"; }
+ORG1=11111111-1111-4111-8111-111111111111 ORG2=22222222-2222-4222-8222-222222222222
+lists_stable() { [ "$(rt 2>/dev/null | cut -f2 | sort -u)" = stable ] && [ "$(rt 2>/dev/null | grep -c .)" = 2 ]; }
+sets_one() { rt "$ORG1" alpha 2>/dev/null | grep -qx "$ORG1	alpha	one" && [ "$(track_of "$ORG1")" = alpha ] && [ "$(track_of "$ORG2")" = stable ]; }
+says_missing() { ! rt 33333333-3333-4333-8333-333333333333 alpha >"$TMP/missing" 2>&1 && grep -q 'no organization 33333333' "$TMP/missing"; }
+sets_all() { rt all alpha >/dev/null 2>&1 && [ "$(track_of "$ORG2")" = alpha ]; }
+t "release-track lists the organizations, on stable" lists_stable
+t "release-track puts one organization on alpha, the other keeps stable" sets_one
+t "release-track refuses an unknown track" refused rt "$ORG1" gamma
+t "release-track refuses an id that is not one" refused rt "x' OR true --" alpha
+t "release-track says an organization does not exist" says_missing
+t "release-track --all puts every organization on alpha" sets_all
 t "live-claims mode counts claims" sh -c "[ \"\$(RUNTIME_INIT_MODE=live-claims $C run --rm -T runtime-init | tr -d '[:space:]')\" = 0 ]"
 
 echo "== OpenBao"

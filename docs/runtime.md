@@ -166,7 +166,22 @@ grants once the tables exist, and starts the runtime-worker.
 From then on `scripts/install.sh` keeps the Runtime env on the API and the worker, and
 `scripts/runtime/compose.sh` is `docker compose` over both files (`compose.sh ps`, `compose.sh logs -f runtime-hub`).
 
-### 2. A registration token
+### 2. Release Kody Runtime to your organization
+
+Kody Runtime shows only for organizations on the `alpha` release track, in cloud and self-hosted alike. A new
+organization starts on `stable`, and a self-hosted install has no screen for the track, so once the owner has signed
+up:
+
+```bash
+scripts/runtime/release-track.sh                                   # id, track and name of each organization
+sudo -E scripts/runtime/release-track.sh --org <organization id> --track alpha   # or --all
+```
+
+It runs as the product's Postgres admin through `runtime-init` (bundled or external Postgres) and prints no
+credential. The owner sees **Kody Runtime** in the sidebar on the next page load; before it, `/runtime/...` answers
+404.
+
+### 3. A registration token
 
 Single use, valid 15 minutes, bound to your organization and to where the cell runs (`self_hosted`, the default on a
 self-hosted install). As the org owner, in Kodus: **Kody Runtime → Settings → Cells → Create registration token**. The
@@ -182,7 +197,7 @@ scripts/runtime/cell-token.sh --api-url https://api.example.com --email owner@ex
 
 (or `KODUS_ACCESS_TOKEN=<owner access token>` instead of `--email`).
 
-### 3. Cell host
+### 4. Cell host
 
 Copy `runtime/state/cell-host/` from the Kodus host to the cell host privately: it holds the injector's OpenBao
 credential (no CA key). Clone this repository there too, then:
