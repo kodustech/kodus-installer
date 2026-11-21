@@ -587,6 +587,23 @@ ensure_image() { # ensure_image REF: present locally, pulled when not
     run "$DOCKER" pull -q "$1" >/dev/null
 }
 
+# pinned REF: REF as the cell takes it. The cell refuses an image named by a
+# tag (a tag can be moved under it): a digest stays as it is, a tag becomes
+# the id of the image this Docker holds under it now (sha256:<64 hex>). Under
+# --dry-run nothing was built or pulled, so a tag stays.
+pinned() {
+    local id
+    if [[ $1 =~ @sha256:[0-9a-f]{64}$ || $1 =~ ^sha256:[0-9a-f]{64}$ ]]; then
+        printf '%s\n' "$1"
+    elif id=$("$DOCKER" image inspect --format '{{.Id}}' "$1" 2>/dev/null) && [[ $id =~ ^sha256:[0-9a-f]{64}$ ]]; then
+        printf '%s\n' "$id"
+    elif [ "$DRY_RUN" = 1 ]; then
+        printf '%s\n' "$1"
+    else
+        rt_die "image $1 is not in this host's Docker, and the cell takes an image only by digest or id"
+    fi
+}
+
 release_id() { # a short, stable id of what is installed
     local ref=$1 id
     case "$ref" in
@@ -896,6 +913,7 @@ build_observer_image() { # the observer image: cmd/observer at /observer, nothin
     printf 'FROM scratch\nCOPY observer /observer\n' >"$ctx/Dockerfile"
     run "$DOCKER" build -q -t "$OBSERVER_IMAGE" "$ctx" >/dev/null
     rm -rf "$ctx"
+    OBSERVER_IMAGE=$(pinned "$OBSERVER_IMAGE")
 }
 
 # --- PKI on the cell host ---------------------------------------------------
@@ -1110,6 +1128,10 @@ resolve_images() {
     for i in "$HOLDER_IMAGE" "$HELPER_IMAGE" "$REGISTRY_IMAGE" "$BUILDER_IMAGE" $SANDBOX_IMAGE $BROWSER_IMAGE; do
         ensure_image "$i"
     done
+    HOLDER_IMAGE=$(pinned "$HOLDER_IMAGE") HELPER_IMAGE=$(pinned "$HELPER_IMAGE")
+    REGISTRY_IMAGE=$(pinned "$REGISTRY_IMAGE") BUILDER_IMAGE=$(pinned "$BUILDER_IMAGE")
+    [ -z "$SANDBOX_IMAGE" ] || SANDBOX_IMAGE=$(pinned "$SANDBOX_IMAGE")
+    [ -z "$BROWSER_IMAGE" ] || BROWSER_IMAGE=$(pinned "$BROWSER_IMAGE")
 }
 
 require_root() {
