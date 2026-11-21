@@ -113,7 +113,9 @@ controlPlane:
   jobs: {}
   # Organizations to put on the alpha release track, the one Kody Runtime shows
   # for (ids from the product's organizations table, or "all"). A new
-  # organization starts on stable: sign up, then helm upgrade with its id.
+  # organization starts on stable: sign up, then helm upgrade with its id. The
+  # list is authoritative: every upgrade puts them back on alpha (a hook Job;
+  # an unknown id fails the upgrade, naming it).
   alphaOrganizations: []
   # The product (charts/kodus) reads <release>-product (env) through
   # services.{api,worker}.extraEnvFrom and <release>-product-files (OpenBao's

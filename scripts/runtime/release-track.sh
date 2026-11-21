@@ -20,7 +20,7 @@ while [ $# -gt 0 ]; do
         --org) ORG=${2:?}; shift 2 ;;
         --all) ORG=all; shift ;;
         --track) TRACK=${2:?}; shift 2 ;;
-        -h | --help) sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h | --help) sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) rt_die "unknown option $1 (see --help)" ;;
     esac
 done

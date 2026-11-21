@@ -59,16 +59,24 @@ spec:
 {{- end }}
 ---
 # Kody Runtime shows for organizations on the alpha release track; a new one
-# starts on stable and self-hosted has no screen for it. Each upgrade puts the
-# organizations listed (or all) on alpha (db-init.sh release-track, as
-# scripts/runtime/release-track.sh does on Compose). Exits 4 on an id that does
-# not exist yet: sign up first, then helm upgrade.
+# starts on stable and self-hosted has no screen for it. After each install and
+# upgrade this hook puts the organizations listed (or all) on alpha (db-init.sh
+# release-track, as scripts/runtime/release-track.sh does on Compose). The list
+# is authoritative: an organization in it is put back on alpha even if someone
+# moved it. An id that does not exist yet fails the hook, and with it the
+# upgrade, naming the id: sign up first, then helm upgrade. A hook, not a
+# revision-named Job, so GitOps renderers (helm template: Revision is always 1)
+# run it again when the list changes instead of patching an immutable Job.
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: {{ include "kr.fullname" $ }}-release-track-{{ $.Release.Revision }}
+  name: {{ include "kr.fullname" $ }}-release-track
   labels:
     {{- include "kr.labels" (dict "root" $ "component" "db") | nindent 4 }}
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+    checksum/organizations: {{ join "," . | sha256sum | trunc 16 }}
 spec:
   backoffLimit: 3
   template:

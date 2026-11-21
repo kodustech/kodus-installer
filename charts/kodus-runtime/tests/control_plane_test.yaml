@@ -80,22 +80,23 @@ tests:
           content: { name: RUNTIME_EXECUTOR_ID, value: kr-kodus-runtime-worker-1 }
   - it: puts the listed organizations on the alpha track with a Job per release
     templates: [templates/control-plane/jobs.yaml]
-    release: { revision: 1 }
     set:
       controlPlane.alphaOrganizations: [7e1f16b2-64fa-4b67-919f-aeed90bd8961, all]
     asserts:
+      - equal: { path: "metadata.annotations[\"helm.sh/hook\"]", value: "post-install,post-upgrade" }
+        documentSelector: { path: metadata.name, value: kr-kodus-runtime-release-track }
       - contains:
           path: spec.template.spec.containers[0].env
           content: { name: RUNTIME_INIT_MODE, value: release-track }
-        documentSelector: { path: metadata.name, value: kr-kodus-runtime-release-track-1 }
+        documentSelector: { path: metadata.name, value: kr-kodus-runtime-release-track }
       - contains:
           path: spec.template.spec.containers[0].env
           content: { name: RUNTIME_ORGS, value: 7e1f16b2-64fa-4b67-919f-aeed90bd8961 all }
-        documentSelector: { path: metadata.name, value: kr-kodus-runtime-release-track-1 }
+        documentSelector: { path: metadata.name, value: kr-kodus-runtime-release-track }
       - contains:
           path: spec.template.spec.containers[0].env
           content: { name: RUNTIME_INIT_TRACK, value: alpha }
-        documentSelector: { path: metadata.name, value: kr-kodus-runtime-release-track-1 }
+        documentSelector: { path: metadata.name, value: kr-kodus-runtime-release-track }
   - it: renders no release-track Job by default
     templates: [templates/control-plane/jobs.yaml]
     asserts:

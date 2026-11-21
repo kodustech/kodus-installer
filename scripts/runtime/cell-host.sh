@@ -595,7 +595,12 @@ pinned() {
     local id
     if [[ $1 =~ @sha256:[0-9a-f]{64}$ || $1 =~ ^sha256:[0-9a-f]{64}$ ]]; then
         printf '%s\n' "$1"
-    elif id=$("$DOCKER" image inspect --format '{{.Id}}' "$1" 2>/dev/null) && [[ $id =~ ^sha256:[0-9a-f]{64}$ ]]; then
+    elif id=$("$DOCKER" image inspect --format '{{.Id}}' "$1" 2>/dev/null) &&
+        { [[ $id =~ ^[0-9a-f]{64}$ ]] && id="sha256:$id"; [[ $id =~ ^sha256:[0-9a-f]{64}$ ]]; }; then
+        # A tag that moves later (a rebuilt :local) leaves this id untagged, and
+        # an image prune would delete what a rollback to this release needs:
+        # keep a tag of its own on it.
+        [ "$DRY_RUN" = 1 ] || "$DOCKER" tag "$id" "kodus-cell-pinned:${id:7:12}" >/dev/null 2>&1 || true
         printf '%s\n' "$id"
     elif [ "$DRY_RUN" = 1 ]; then
         printf '%s\n' "$1"
@@ -1010,6 +1015,9 @@ observer:
 EOF
     if [ -n "$OPENBAO_ADDR" ]; then
         injector_args="-openbao-addr $OPENBAO_ADDR -openbao-ca /etc/kodus/injector/openbao-ca.pem -openbao-role-id-file /etc/kodus/injector/openbao-injector-role-id -openbao-secret-id-file /etc/kodus/injector/openbao-injector-secret-id"
+    fi
+    if [ -z "$SANDBOX_IMAGE" ] && [ -n "$SANDBOX_MEMORY_MB$SANDBOX_CPUS" ]; then
+        rt_warn "--sandbox-memory-mb/--sandbox-cpus are kept but not used: this release has no sandbox image"
     fi
     if [ -n "$SANDBOX_IMAGE" ]; then
         sandbox_args="-gvisor-sandbox-image $SANDBOX_IMAGE -sandbox-pool $SANDBOX_POOL"
