@@ -213,6 +213,10 @@ services:
   db_kodus_postgres:
     image: docker.io/pgvector/pgvector:pg16
     container_name: db_kodus_postgres
+    # Like every other service: a host reboot (kernel update, power loss, cloud
+    # maintenance) must bring the databases back, or the API and the workers
+    # come up without them and Kodus stays down until someone starts them.
+    restart: unless-stopped
     ports:
       - "5432"
     environment:
@@ -247,6 +251,7 @@ services:
     # Such hosts never ran 8.3, so they have no 8.3 data to lose.
     image: ${KODUS_MONGO_IMAGE:-docker.io/mongo:8.3.13}
     container_name: db_kodus_mongodb
+    restart: unless-stopped
     ports:
       - "27017"
     volumes:
@@ -270,10 +275,10 @@ services:
       # `start_period` absorbs a slow first boot (a fresh volume has to create
       # the root user before it answers); failures inside it do not consume a
       # retry. `retries` absorbs flakiness, which a database does not have: it
-      # is either serving or dead. Neither database declares a restart policy,
-      # so a mongod that exits is reported to the dependent service in about a
-      # second; this ladder only bounds how long a database that is merely slow
-      # gets to become ready.
+      # is either serving or dead. A mongod that exits is restarted (restart:
+      # unless-stopped, so a reboot brings it back), and while it is down the
+      # dependent services see it unhealthy; this ladder only bounds how long a
+      # database that is merely slow gets to become ready.
       interval: 5s
       timeout: 5s
       retries: 5
