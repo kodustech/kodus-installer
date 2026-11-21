@@ -7,6 +7,9 @@ templates:
   - templates/datastores/bundled-postgres.yaml
   - templates/datastores/bundled-mongodb.yaml
   - templates/datastores/bundled-rabbitmq.yaml
+  - templates/tests/test-api-health.yaml
+  - templates/tests/test-webhooks-health.yaml
+  - templates/tests/test-datastores.yaml
 release:
   name: kodus
 tests:
@@ -117,3 +120,27 @@ tests:
         documentSelector:
           path: kind
           value: StatefulSet
+
+  - it: puts the helm test pods on the chart-wide pool
+    templates:
+      - templates/tests/test-api-health.yaml
+      - templates/tests/test-webhooks-health.yaml
+      - templates/tests/test-datastores.yaml
+    set:
+      nodeSelector: { agentpool: kodus }
+      tolerations: [{ key: dedicated, operator: Equal, value: kodus, effect: NoSchedule }]
+    asserts:
+      - equal: { path: spec.nodeSelector, value: { agentpool: kodus } }
+        documentSelector: { path: kind, value: Pod, matchMany: true }
+      - equal: { path: "spec.tolerations[0].key", value: dedicated }
+        documentSelector: { path: kind, value: Pod, matchMany: true }
+
+  - it: renders the helm test pods without scheduling by default
+    templates:
+      - templates/tests/test-api-health.yaml
+      - templates/tests/test-datastores.yaml
+    asserts:
+      - notExists: { path: spec.nodeSelector }
+        documentSelector: { path: kind, value: Pod, matchMany: true }
+      - notExists: { path: spec.tolerations }
+        documentSelector: { path: kind, value: Pod, matchMany: true }
