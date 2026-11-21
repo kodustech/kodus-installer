@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Creates a one-time cell registration token (single use, 15 minutes, bound to
 # the org and the topology `self_hosted`) through the API, as the org owner:
-# POST /runtime/cells/registration-tokens. The web app has no screen for it
-# yet. The token goes to stdout or to --out (0600), never to a log.
+# POST /runtime/cells/registration-tokens. In the web app the same token is
+# Kody Runtime -> Settings -> Cells -> Connect cell; this script is for a host
+# without a browser. The token goes to stdout or to --out (0600), never to a log.
 #
 # Usage: scripts/runtime/cell-token.sh --api-url <url> [--email <owner email>] [--out <file>]
 #   KODUS_ACCESS_TOKEN  an owner's access token; without it the script signs

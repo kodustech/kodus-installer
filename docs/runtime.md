@@ -60,7 +60,8 @@ Build from a `kodus-ai` checkout that has `apps/runtime` (branch `kody-runtime/p
 docker buildx bake runtime-hub runtime-worker --load                     # kodus-runtime-hub:local, kodus-runtime-worker:local
 docker buildx build --load -t kodus-runtime-cell:local -f apps/runtime-cell/Dockerfile apps/runtime-cell
 docker buildx bake runtime-sandbox --set runtime-sandbox.platform=linux/$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/') --load
-docker buildx bake runtime-builder --set runtime-builder.platform=linux/amd64 --load   # or push it to your registry
+docker buildx bake runtime-builder --set runtime-builder.platform=linux/amd64 \
+  --set runtime-builder.tags=<your registry>/kodus-runtime-builder:local --push   # its reproducible output cannot be --load-ed
 
 # in kodus-installer, control plane
 export KODUS_RUNTIME_HUB_IMAGE=kodus-runtime-hub:local KODUS_RUNTIME_WORKER_IMAGE=kodus-runtime-worker:local
@@ -73,10 +74,14 @@ sudo -E scripts/runtime/cell-host.sh install --profile docker-gvisor --bundle ./
 ```
 
 The product images must also carry the Runtime (its API routes and migrations): until a product release does, build
-`api`, `worker` and `web` from the same checkout and set `KODUS_REGISTRY`/`IMAGE_TAG` to them. The builder image's
+`api`, `worker` and `web` from the same checkout and set `KODUS_REGISTRY`/`IMAGE_TAG` to them. `KODUS_REGISTRY` also
+names the RabbitMQ image, so tag `ghcr.io/kodustech/kodus-rabbitmq:4.2.2-kodus.1` into that registry as well
+(`docker tag ghcr.io/kodustech/kodus-rabbitmq:4.2.2-kodus.1 <registry>/kodus-rabbitmq:4.2.2-kodus.1`). The builder image's
 digest must be the one the cell pins (`cmd/cell/config.go`); a local `docker build` gives another digest, so either
 push the reproducible build to a registry of your own under that digest or pass the digest you built with
-`KODUS_RUNTIME_BUILDER_IMAGE`.
+`KODUS_RUNTIME_BUILDER_IMAGE`. Without a registry, `docker buildx build --load -t kodus-runtime-builder:local
+apps/runtime-cell/builder-image` loads it on the cell host (bake's `--load` fails there: its `rewrite-timestamp` output
+conflicts with `unpack`).
 
 ## Profiles
 
