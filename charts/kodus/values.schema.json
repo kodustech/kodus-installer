@@ -111,10 +111,33 @@
         }
       }
     },
+    "scheduling": {
+      "type": "object",
+      "properties": {
+        "nodeSelector": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        },
+        "tolerations": { "type": "array", "items": { "type": "object" } },
+        "affinity": { "type": "object" },
+        "topologySpreadConstraints": { "type": "array", "items": { "type": "object" } }
+      }
+    },
     "store": {
       "type": "object",
       "properties": {
-        "bundled": { "$ref": "#/definitions/extraEnvironment" },
+        "bundled": {
+          "allOf": [
+            { "$ref": "#/definitions/extraEnvironment" },
+            { "$ref": "#/definitions/scheduling" }
+          ],
+          "properties": {
+            "existingSecret": {
+              "type": "string",
+              "description": "Pre-created Secret (key `password`) used instead of the chart-generated <release>-<store>-secret."
+            }
+          }
+        },
         "mode": {
           "enum": ["bundled", "external", "operator"],
           "description": "bundled (StatefulSet run by this chart) | external (managed/your own) | operator (CNPG/RabbitMQ/Mongo operator)"
@@ -123,8 +146,16 @@
       "required": ["mode"]
     }
   },
+  "allOf": [{ "$ref": "#/definitions/scheduling" }],
   "properties": {
     "emptyDir": { "$ref": "#/definitions/emptyDir" },
+    "waitForDeps": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "image": { "type": "string" }
+      }
+    },
     "platform": {
       "enum": ["kubernetes", "openshift"]
     },
@@ -157,8 +188,34 @@
       }
     },
     "postgres": { "$ref": "#/definitions/store" },
-    "mongodb": { "$ref": "#/definitions/store" },
-    "rabbitmq": { "$ref": "#/definitions/store" },
+    "mongodb": {
+      "allOf": [{ "$ref": "#/definitions/store" }],
+      "properties": {
+        "external": {
+          "type": "object",
+          "properties": {
+            "uriKey": {
+              "type": "string",
+              "description": "Key in existingSecret holding a full MongoDB connection string (mongodb:// or mongodb+srv://). When set, host/port/username/passwordKey are ignored."
+            }
+          }
+        }
+      }
+    },
+    "rabbitmq": {
+      "allOf": [{ "$ref": "#/definitions/store" }],
+      "properties": {
+        "bundled": {
+          "type": "object",
+          "properties": {
+            "uriKey": {
+              "type": "string",
+              "description": "Key in bundled.existingSecret holding the full, percent-encoded AMQP URI. Needed when the password has URI-reserved characters, since the chart interpolates it unescaped."
+            }
+          }
+        }
+      }
+    },
     "services": {
       "type": "object",
       "additionalProperties": {
@@ -166,6 +223,9 @@
         "allOf": [
           {
             "$ref": "#/definitions/extraEnvironment"
+          },
+          {
+            "$ref": "#/definitions/scheduling"
           }
         ],
         "properties": {
@@ -177,9 +237,16 @@
     },
     "migrations": {
       "type": "object",
-      "allOf": [{ "$ref": "#/definitions/extraEnvironment" }],
+      "allOf": [
+        { "$ref": "#/definitions/extraEnvironment" },
+        { "$ref": "#/definitions/scheduling" }
+      ],
       "properties": {
         "enabled": { "type": "boolean" },
+        "annotations": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        },
         "emptyDir": { "$ref": "#/definitions/emptyDir" }
       }
     },

@@ -65,6 +65,9 @@ spec:
       automountServiceAccountToken: false   # DB doesn't call the k8s API
       securityContext:
         {{- include "kodus-common.datastorePodSecurityContext" . | nindent 8 }}
+      {{- with include "kodus-common.scheduling" (dict "root" . "cfg" $b) | trim }}
+      {{- . | nindent 6 }}
+      {{- end }}
       containers:
         - name: postgres
           image: {{ include "kodus-common.regPrefix" . }}{{ $b.image }}
@@ -90,7 +93,7 @@ spec:
             - name: POSTGRES_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ $name }}-secret
+                  name: {{ include "kodus-common.bundledSecretName" (dict "root" . "store" "postgres") }}
                   key: password
             - name: PGDATA
               value: /var/lib/postgresql/data/pgdata

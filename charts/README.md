@@ -289,6 +289,31 @@ kubectl -n kodus create secret generic kodus-pg    --from-literal=password='...'
 kubectl -n kodus create secret generic kodus-rabbit --from-literal=uri='amqps://user:pass@host:5671/kodus-ai'
 ```
 
+**MongoDB connection string (Atlas `mongodb+srv://`).** An SRV host has no A
+record, so `host`/`port` cannot describe it. Store the full URI in the Secret and
+point `mongodb.external.uriKey` at it:
+
+```bash
+kubectl -n kodus create secret generic kodus-mongo \
+  --from-literal=uri='mongodb+srv://kodus:...@cluster0.abcde.mongodb.net/?retryWrites=true&w=majority&authSource=admin'
+```
+
+```yaml
+mongodb:
+  mode: external
+  external:
+    existingSecret: kodus-mongo
+    uriKey: uri
+    database: kodus_db       # still selects the database (API_MG_DB_DATABASE)
+```
+
+The pods then get `MONGODB_URI` (which the app prefers) instead of
+`API_MG_DB_HOST/PORT/USERNAME/PASSWORD`, so the Secret needs no `password` key,
+and the `wait-for-deps` init container skips the Mongo TCP check. To drop that
+init container entirely (for example when an external port is not reachable by a
+plain TCP probe), set `waitForDeps.enabled: false`; the app retries its
+connections on its own.
+
 ### Datastore security in closed / high-security environments
 
 The **bundled** stores are hardened for the common threat model — verified live on
@@ -842,3 +867,89 @@ The writable-N name corresponds to the zero-based index in writablePaths; update
 limits when reordering that list. These settings size existing volumes, without
 creating new ones. Limits do not reserve node disk space and remain subject to
 available node storage and Pod ephemeral-storage limits.
+
+## Pod scheduling
+
+`nodeSelector`, `tolerations`, `affinity` and `topologySpreadConstraints` set at
+the top level apply to every chart-managed pod: the app Deployments, the
+migration Job and the bundled datastore StatefulSets. Override them per workload
+with the same keys under `services.<name>`, `migrations` or `<store>.bundled`. A
+non-empty override **replaces** the top-level value for that key (no merge);
+empty falls back to it. Operator-mode datastores are configured through the
+operator, not here.
+
+```yaml
+# Pin everything to a dedicated node pool
+nodeSelector:
+  agentpool: kodus
+tolerations:
+  - key: dedicated
+    operator: Equal
+    value: kodus
+    effect: NoSchedule
+# Spread each service's replicas across zones
+topologySpreadConstraints:
+  - maxSkew: 1
+    topologyKey: topology.kubernetes.io/zone
+    whenUnsatisfiable: ScheduleAnyway
+    matchLabelKeys: [app.kubernetes.io/name]
+services:
+  worker:
+    nodeSelector:           # replaces the top-level nodeSelector for the worker only
+      agentpool: kodus-workers
+```
+
+Values are rendered verbatim. Without `labelSelector`, a constraint's
+`matchLabelKeys` scopes the spread to pods with the same label value (here, the
+same service); `matchLabelKeys` needs Kubernetes 1.27+.
+
+## GitOps (Argo CD, Flux)
+
+GitOps tools render the chart with `helm template`, which has no cluster access
+and no release history. Two chart defaults behave differently there:
+
+- **The migration Job name** is `<release>-migrations-<Release.Revision>`, and the
+  revision is always `1` under `helm template`. The name never changes, and a Job
+  is immutable, so the next sync cannot update it. Run it as a sync hook through
+  `migrations.annotations`, so Argo CD deletes and recreates it on each sync:
+
+  ```yaml
+  migrations:
+    annotations:
+      argocd.argoproj.io/hook: Sync
+      argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+  ```
+
+- **Bundled datastore passwords** are generated with `lookup` + random. Without
+  cluster access the lookup returns nothing, so every render produces a new
+  password. Point each bundled store at a Secret you manage, for example with
+  External Secrets (key `password`). The chart then skips its own Secret, and both
+  the StatefulSet and the app pods read the existing one:
+
+  ```yaml
+  postgres:
+    bundled:
+      existingSecret: kodus-postgres     # key: password
+  mongodb:
+    bundled:
+      existingSecret: kodus-mongodb
+  rabbitmq:
+    bundled:
+      existingSecret: kodus-rabbitmq
+  ```
+
+  Set this before the first install. The datastores read the password only when
+  they initialize their volume, so changing the Secret later does not change the
+  password the database already uses.
+
+  The app reaches RabbitMQ through a URI that the chart builds with the password
+  unescaped, so keep that password alphanumeric. If it has URI-reserved characters
+  (`@ : / # %`), add the full percent-encoded URI to the same Secret and set
+  `rabbitmq.bundled.uriKey` to its key:
+
+  ```yaml
+  rabbitmq:
+    bundled:
+      existingSecret: kodus-rabbitmq     # keys: password, uri
+      uriKey: uri                        # amqp://kodus:<encoded>@<release>-rabbitmq:5672/kodus-ai
+  ```
