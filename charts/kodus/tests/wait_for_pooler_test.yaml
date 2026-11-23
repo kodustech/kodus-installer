@@ -1,0 +1,46 @@
+suite: Pods wait for every Postgres endpoint they open
+# Behind a pooler the app queries through it and runs migrations/LISTEN on the
+# direct host. Turning the pooler on in an upgrade creates it alongside the new
+# pods; a pod that waited only for the direct host would start against a
+# pooler that does not exist yet.
+templates:
+  - templates/deployment.yaml
+  - templates/configmap.yaml
+  - templates/secrets.yaml
+  - templates/migration-job.yaml
+release:
+  name: kodus
+tests:
+  - it: with the CNPG Pooler on, waits for the pooler as well as the -rw service
+    template: templates/deployment.yaml
+    set:
+      postgres:
+        mode: operator
+        operator:
+          image: ghcr.io/example/cnpg-pgvector:16
+          pooler: { enabled: true }
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.initContainers[0].command[2]
+          pattern: nc -z kodus-postgres-pooler-rw 5432
+      - matchRegex:
+          path: spec.template.spec.initContainers[0].command[2]
+          pattern: nc -z kodus-postgres-rw 5432
+
+  - it: with an external pooler, the migration Job waits for the pooler and for the direct host
+    template: templates/migration-job.yaml
+    set:
+      postgres:
+        mode: external
+        external:
+          host: pgbouncer.db
+          port: 6432
+          existingSecret: pg
+          directHost: pg-primary.db
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.initContainers[0].command[2]
+          pattern: nc -z pgbouncer.db 6432
+      - matchRegex:
+          path: spec.template.spec.initContainers[0].command[2]
+          pattern: nc -z pg-primary.db 5432

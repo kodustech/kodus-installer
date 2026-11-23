@@ -63,6 +63,36 @@ spec:
             matchLabels:
               app.kubernetes.io/part-of: kodus
               app.kubernetes.io/instance: {{ .Release.Name }}
+{{- if eq .Values.postgres.mode "operator" }}
+---
+{{/*
+The CloudNativePG operator reads each instance's status on port 8000
+(GET /pg/status) from its own namespace. Its pods do not carry part-of: kodus,
+so without this the default-deny above hides every instance from the operator:
+status turns unknown and it can no longer promote a replica when the primary
+fails. https://cloudnative-pg.io/documentation/current/security/#exposed-ports
+*/}}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "kodus.fullname" . }}-cnpg-operator
+  labels:
+    {{- include "kodus.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      cnpg.io/cluster: {{ .Release.Name }}-postgres
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.postgres.operator.operatorNamespace | default "cnpg-system" | quote }}
+      ports:
+        - port: 8000
+          protocol: TCP
+{{- end }}
 {{/*
 External ingress → web/api/webhooks (the only pods that take traffic from outside
 the app). Set networkPolicy.ingressControllerLabels to your ingress controller's

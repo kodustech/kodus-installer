@@ -92,10 +92,18 @@ before the app container starts — prevents CrashLoopBackOff during the DB/queu
 warm-up race. Call with root ctx. Callers skip it when waitForDeps.enabled=false.
 */}}
 {{- define "kodus-common.waitForDeps" -}}
-{{- $pgHost := "" }}{{- $pgPort := "5432" }}
-{{- if eq .Values.postgres.mode "bundled" }}{{- $pgHost = printf "%s-postgres" .Release.Name }}
-{{- else if eq .Values.postgres.mode "operator" }}{{- $pgHost = printf "%s-postgres-rw" .Release.Name }}
-{{- else }}{{- $pgHost = .Values.postgres.external.host | toString }}{{- $pgPort = .Values.postgres.external.port | default 5432 | toString }}{{- end }}
+{{- /* Every Postgres endpoint the app opens: with a pooler in front, the app
+       queries through it and migrations/LISTEN use the direct host, so a pod
+       that waited for only one of them starts against the other cold. */}}
+{{- $pg := list }}
+{{- if eq .Values.postgres.mode "bundled" }}{{- $pg = append $pg (printf "%s-postgres 5432" .Release.Name) }}
+{{- else if eq .Values.postgres.mode "operator" }}
+{{- $pg = append $pg (printf "%s-postgres-rw 5432" .Release.Name) }}
+{{- if and .Values.postgres.operator.pooler .Values.postgres.operator.pooler.enabled }}{{- $pg = append $pg (printf "%s-postgres-pooler-rw 5432" .Release.Name) }}{{- end }}
+{{- else }}
+{{- $pg = append $pg (printf "%s %s" (.Values.postgres.external.host | toString) (.Values.postgres.external.port | default 5432 | toString)) }}
+{{- with .Values.postgres.external.directHost }}{{- $pg = append $pg (printf "%s %s" (. | toString) ($.Values.postgres.external.directPort | default 5432 | toString)) }}{{- end }}
+{{- end }}
 {{- $mgHost := "" }}{{- $mgPort := "27017" }}
 {{- if eq .Values.mongodb.mode "bundled" }}{{- $mgHost = printf "%s-mongodb" .Release.Name }}
 {{- else if eq .Values.mongodb.mode "operator" }}{{- $mgHost = printf "%s-mongodb-svc" .Release.Name }}
@@ -106,7 +114,9 @@ warm-up race. Call with root ctx. Callers skip it when waitForDeps.enabled=false
     - sh
     - -c
     - |
-      until nc -z {{ $pgHost }} {{ $pgPort }}; do echo "waiting for postgres..."; sleep 2; done
+      {{- range $pg }}
+      until nc -z {{ . }}; do echo "waiting for postgres ({{ . }})..."; sleep 2; done
+      {{- end }}
       {{- /* URI mode (e.g. mongodb+srv://) has no TCP-resolvable host to probe */}}
       {{- if not (and (eq .Values.mongodb.mode "external") .Values.mongodb.external.uriKey) }}
       until nc -z {{ $mgHost }} {{ $mgPort }}; do echo "waiting for mongodb..."; sleep 2; done

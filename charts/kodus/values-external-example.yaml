@@ -50,6 +50,9 @@ postgres:
     database: kodus_db               # dedicated DB, pgvector-enabled
     existingSecret: kodus-pg
     passwordKey: password
+    # Behind PgBouncer / RDS Proxy? host/port above = the pooler, and:
+    # directHost: postgres-primary.internal   # PostgreSQL itself: migrations + LISTEN
+    # directPort: 5432
 
 mongodb:
   mode: external
@@ -63,7 +66,7 @@ mongodb:
     # MongoDB Atlas (mongodb+srv://): the SRV host has no A record, so give the
     # full connection string instead of host/port. Put it in the same Secret:
     #   kubectl -n kodus create secret generic kodus-mongo \
-    #     --from-literal=uri='mongodb+srv://kodus:...@cluster0.abcde.mongodb.net/?retryWrites=true&w=majority&authSource=admin'
+    #     --from-literal=uri='mongodb+srv://<user>:<password>@<cluster-host>/?retryWrites=true&w=majority&authSource=admin'
     # then set uriKey (host/port/username/passwordKey are then ignored, and
     # wait-for-deps skips the Mongo TCP check):
     # uriKey: uri

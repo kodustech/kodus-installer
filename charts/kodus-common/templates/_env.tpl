@@ -31,10 +31,19 @@ Call with root ctx.
 - name: API_PG_DB_DATABASE
   value: {{ .Values.postgres.bundled.database | quote }}
 {{- else if eq .Values.postgres.mode "operator" }}
+{{- $pooled := and .Values.postgres.operator.pooler .Values.postgres.operator.pooler.enabled }}
+{{- /* With the CNPG Pooler on, queries go through PgBouncer while migrations
+       and the LISTEN connection stay on the -rw service (direct). */}}
 - name: API_PG_DB_HOST
-  value: {{ printf "%s-postgres-rw" .Release.Name | quote }}
+  value: {{ printf (ternary "%s-postgres-pooler-rw" "%s-postgres-rw" $pooled) .Release.Name | quote }}
 - name: API_PG_DB_PORT
   value: "5432"
+{{- if $pooled }}
+- name: API_PG_DB_DIRECT_HOST
+  value: {{ printf "%s-postgres-rw" .Release.Name | quote }}
+- name: API_PG_DB_DIRECT_PORT
+  value: "5432"
+{{- end }}
 - name: API_PG_DB_USERNAME
   value: {{ .Values.postgres.operator.owner | quote }}
 - name: API_PG_DB_PASSWORD
@@ -58,6 +67,21 @@ Call with root ctx.
       key: {{ .Values.postgres.external.passwordKey | default "password" }}
 - name: API_PG_DB_DATABASE
   value: {{ .Values.postgres.external.database | quote }}
+{{- with .Values.postgres.external.directHost }}
+{{- /* host/port is a pooler or proxy: migrations and LISTEN go direct. */}}
+- name: API_PG_DB_DIRECT_HOST
+  value: {{ . | quote }}
+- name: API_PG_DB_DIRECT_PORT
+  value: {{ $.Values.postgres.external.directPort | default 5432 | quote }}
+{{- end }}
+{{- with .Values.postgres.external.directUrlKey }}
+{{- /* Full direct URL (own database, user, sslmode); the app prefers it. */}}
+- name: DATABASE_DIRECT_URL
+  valueFrom:
+    secretKeyRef:
+      name: {{ $.Values.postgres.external.existingSecret }}
+      key: {{ . }}
+{{- end }}
 {{- end }}
 {{/* ---- Mongo ---- */}}
 {{- if eq .Values.mongodb.mode "bundled" }}

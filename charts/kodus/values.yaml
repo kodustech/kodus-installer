@@ -615,16 +615,54 @@ postgres:
     database: kodus_db
     existingSecret: ""              # holds the password under passwordKey
     passwordKey: password
+    # Behind a connection pooler (PgBouncer, RDS Proxy) or an HA endpoint?
+    # Point host/port at the pooler and directHost at PostgreSQL itself (the
+    # primary). Kodus runs its migrations and its LISTEN connection (live
+    # events between api and worker) on the direct host: neither works through
+    # a pooler in transaction mode. Empty = everything uses host.
+    # PgBouncer must also list Kodus's connect-time timeouts:
+    #   track_extra_parameters = statement_timeout,idle_in_transaction_session_timeout
+    # See https://docs.kodus.io/how_to_deploy/en/deploy_kodus/postgres_pooler
+    directHost: ""
+    directPort: 5432
+    # Key in existingSecret holding a full connection string for the direct
+    # connection (postgres://user:pass@primary:5432/db?sslmode=...). Use it
+    # instead of directHost when the pooler exposes the database under another
+    # name or user, or when TLS differs between the pooler and PostgreSQL:
+    # the URL carries its own database, user and sslmode. Wins over directHost.
+    directUrlKey: ""
   operator:
-    # CloudNativePG Cluster. Image MUST ship pgvector (a stock CNPG image does
-    # NOT) — set a CNPG-compatible pgvector image here.
+    # CloudNativePG Cluster. The image MUST ship pgvector. The standard
+    # ghcr.io/cloudnative-pg/postgresql:16 image does; minimal variants do not.
     image: ""                       # REQUIRED for mode=operator
     instances: 2
+    # Namespace the CloudNativePG operator runs in. With networkPolicy.enabled
+    # the chart lets it reach each instance's status port (8000) from there;
+    # without that it cannot see the instances and cannot fail over.
+    operatorNamespace: cnpg-system
     database: kodus_db
     owner: kodusdev
     storage:
       size: 10Gi
       storageClass: ""
+    # CloudNativePG Pooler (PgBouncer) in front of the -rw service. The app's
+    # queries go through it; migrations and the LISTEN connection go straight
+    # to <release>-postgres-rw (API_PG_DB_DIRECT_HOST), which is what makes
+    # transaction mode safe. The chart always adds the track_extra_parameters
+    # Kodus needs, on top of `parameters`.
+    pooler:
+      enabled: false
+      instances: 2
+      poolMode: transaction         # transaction | session
+      # Any CNPG-allowed PgBouncer parameter. Each api/worker/webhooks replica
+      # opens its own pool (30/60/30 by default, see DB_POOL_MAX_*), so size
+      # max_client_conn for every replica at autoscaling.maxReplicas.
+      parameters:
+        max_client_conn: "1000"
+        default_pool_size: "40"
+      resources:
+        requests: { cpu: 50m, memory: 64Mi }
+        limits:   { cpu: 500m, memory: 256Mi }
 
 mongodb:
   mode: bundled

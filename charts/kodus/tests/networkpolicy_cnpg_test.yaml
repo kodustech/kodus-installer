@@ -1,0 +1,53 @@
+suite: NetworkPolicy lets the CloudNativePG operator see its instances
+# The default-deny covers the CNPG pods (they carry part-of: kodus). The
+# operator runs in its own namespace and reads each instance's status on port
+# 8000; blocked, it cannot tell the primary is down and never promotes a replica.
+templates:
+  - templates/networkpolicy.yaml
+release:
+  name: kodus
+set:
+  postgres:
+    mode: operator
+    operator:
+      image: ghcr.io/example/cnpg-pgvector:16
+tests:
+  - it: admits the operator namespace to the instances' status port, and nothing else
+    documentSelector:
+      path: metadata.name
+      value: kodus-cnpg-operator
+    asserts:
+      - equal:
+          path: spec.podSelector.matchLabels
+          value:
+            cnpg.io/cluster: kodus-postgres
+      - equal:
+          path: spec.ingress
+          value:
+            - from:
+                - namespaceSelector:
+                    matchLabels:
+                      kubernetes.io/metadata.name: cnpg-system
+              ports:
+                - port: 8000
+                  protocol: TCP
+
+  - it: follows the operator to a non-default namespace
+    set:
+      postgres.operator.operatorNamespace: databases
+    documentSelector:
+      path: metadata.name
+      value: kodus-cnpg-operator
+    asserts:
+      - equal:
+          path: spec.ingress[0].from[0].namespaceSelector.matchLabels
+          value:
+            kubernetes.io/metadata.name: databases
+
+  - it: opens nothing for an operator when Postgres is not run by CloudNativePG
+    set:
+      postgres.mode: bundled
+    asserts:
+      - notEqual:
+          path: metadata.name
+          value: kodus-cnpg-operator

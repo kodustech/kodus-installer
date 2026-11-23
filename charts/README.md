@@ -242,11 +242,52 @@ Each store (`postgres`, `mongodb`, `rabbitmq`) has a `mode`:
 Operators for `mode: operator`:
 
 - PostgreSQL → **CloudNativePG** (`postgresql.cnpg.io`). The image **must** ship
-  the `vector` extension — a stock CNPG image does not; set
-  `postgres.operator.image` to a pgvector-enabled CNPG image.
+  the `vector` extension. The standard `ghcr.io/cloudnative-pg/postgresql:16`
+  image does; minimal variants do not. With `networkPolicy.enabled` the chart
+  lets the operator reach each instance's status port (8000) from
+  `postgres.operator.operatorNamespace` (default `cnpg-system`). Set it to
+  where your operator runs: an operator that cannot read instance status
+  cannot fail over.
 - RabbitMQ → **RabbitMQ Cluster Operator** (`rabbitmq.com`). Uses the pre-built
   `kodus-rabbitmq` image (plugin + vhosts baked in).
 - MongoDB → **MongoDB Community Operator** (`mongodbcommunity.mongodb.com`).
+
+### PostgreSQL behind a connection pooler (PgBouncer)
+
+Kodus works behind PgBouncer in session or transaction mode, with two
+connections: queries go through the pooler, while migrations and the LISTEN
+connection (live events between api and worker) go straight to PostgreSQL —
+neither works through a transaction-mode pooler. The chart wires both:
+
+- **`operator` mode** — `postgres.operator.pooler.enabled: true` adds a
+  CloudNativePG `Pooler` (PgBouncer, `transaction` by default) in front of
+  `<release>-postgres-rw`. The app connects to `<release>-postgres-pooler-rw`;
+  migrations and LISTEN keep `<release>-postgres-rw` (`API_PG_DB_DIRECT_HOST`).
+  The chart always sets `track_extra_parameters =
+  statement_timeout,idle_in_transaction_session_timeout`: Kodus sends both
+  when it connects and PgBouncer refuses the connection otherwise.
+  ```yaml
+  postgres:
+    mode: operator
+    operator:
+      image: <cnpg-image-with-pgvector>
+      pooler:
+        enabled: true
+        parameters:
+          max_client_conn: "1000"   # every api/worker/webhooks replica's pool
+          default_pool_size: "40"
+  ```
+- **`external` mode** — point `host`/`port` at your pooler and
+  `directHost`/`directPort` (default 5432) at the PostgreSQL primary. Your
+  PgBouncer needs the same `track_extra_parameters` line. When the pooler
+  exposes the database under another name or user, or TLS differs between
+  the pooler and PostgreSQL, put a full direct connection string in
+  `existingSecret` and name its key in `directUrlKey` instead of `directHost`.
+
+For an HA cluster, both hosts must always reach the current primary (CNPG's
+`-rw`, a VIP, HAProxy with Patroni checks). `./scripts/doctor-k8s.sh` reports
+`database.locks` and `database.listen`. Full reference:
+[PostgreSQL behind a connection pooler](https://docs.kodus.io/how_to_deploy/en/deploy_kodus/postgres_pooler).
 
 ### Reusing datastores you already run
 
@@ -292,7 +333,7 @@ point `mongodb.external.uriKey` at it:
 
 ```bash
 kubectl -n kodus create secret generic kodus-mongo \
-  --from-literal=uri='mongodb+srv://kodus:...@cluster0.abcde.mongodb.net/?retryWrites=true&w=majority&authSource=admin'
+  --from-literal=uri='mongodb+srv://<user>:<password>@<cluster-host>/?retryWrites=true&w=majority&authSource=admin'
 ```
 
 ```yaml
