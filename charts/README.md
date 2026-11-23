@@ -632,16 +632,24 @@ artifact.
 
 ### Releasing the chart
 
-The chart is published to ghcr.io as an OCI artifact, tag-driven:
+The chart is published to ghcr.io as an OCI artifact. **Merging a bump of
+`version` in `charts/kodus/Chart.yaml` to `main` is the release**:
+`.github/workflows/chart-release.yml` publishes that version, signs it, and tags
+the commit `chart-vX.Y.Z`. Nothing else to run after the merge.
+
+A push to `main` that changes `appVersion` but not `version` fails the workflow
+on purpose: that is a Kodus release Helm users would never receive. A change to
+`Chart.yaml` that moves neither (a comment, an annotation) publishes nothing.
+
+To publish a commit `main` has already moved past, push its tag by hand:
 
 ```bash
-# bump charts/kodus/Chart.yaml version in the same commit
-git tag chart-v0.2.0 && git push origin chart-v0.2.0
+git tag chart-v0.2.0 <sha> && git push origin chart-v0.2.0
 ```
 
-`.github/workflows/chart-release.yml` refuses to publish if the tag and
-`Chart.yaml`'s `version` disagree, if that version is **already in the registry**,
-or if lint, the unit tests or the schema anti-drift check fail — a bad render is
+Either way the workflow refuses to publish if a tag and `Chart.yaml`'s
+`version` disagree, if that version is **already in the registry**, or if lint,
+the unit tests or the schema anti-drift check fail — a bad render is
 recoverable, a bad artifact in a registry is not, since consumers may have pulled
 it before anyone notices.
 

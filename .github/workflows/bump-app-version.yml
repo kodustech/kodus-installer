@@ -217,10 +217,8 @@ jobs:
             echo "GitHub does not run workflows on a PR opened by \`GITHUB_TOKEN\`, so the checks"
             echo "below will stay empty. The validation happened in [this run]($RUN_URL)."
             echo
-            echo "After merging, publish with:"
-            echo '```bash'
-            echo "git tag chart-v$CHART && git push origin chart-v$CHART"
-            echo '```'
+            echo "Merging publishes chart \`$CHART\` to the registry and tags the commit"
+            echo "\`chart-v$CHART\` (chart-release.yml). Nothing to run by hand."
           } > /tmp/pr-body.md
           gh pr create --base main --head "$BRANCH" \
             --title "chore(chart): Kodus $V (chart $CHART)" \
