@@ -39,10 +39,10 @@ _kodus_redact_patterns() {
         -e 's#(^|[^A-Za-z0-9_-])(sk-[A-Za-z0-9_-]{8,}|gh[pousr]_[A-Za-z0-9]{8,}|github_pat_[A-Za-z0-9_]{8,}|glpat-[A-Za-z0-9_-]{8,}|xox[baprs]-[A-Za-z0-9-]{8,}|AIza[A-Za-z0-9_-]{20,}|kodus_[A-Za-z0-9_-]{20,})#\1<redacted>#g' \
         -e 's#[A-Za-z0-9_-]*[*]{4,}[A-Za-z0-9_-]*#<redacted>#g' \
         -e "s#${_KR_PRE}(\"${_KR_NAME}\"[[:space:]]*:[[:space:]]*)\"([^\"\\\\]|\\\\.)*\"#\\1\\2\"<redacted>\"#g" \
-        -e "s#${_KR_PRE}(${_KR_NAME}=)\"[^\"]*\"#\\1\\2\"<redacted>\"#g" \
-        -e "s#${_KR_PRE}(${_KR_NAME}=)'[^']*'#\\1\\2'<redacted>'#g" \
-        -e "s#${_KR_PRE}(${_KR_NAME}=)[^[:space:]]+#\\1\\2<redacted>#g" \
-        -e "s#${_KR_PRE}(${_KR_NAME}:[[:space:]]+)[^[:space:]<].*\$#\\1\\2<redacted>#"
+        -e "s#${_KR_PRE}(${_KR_NAME}[[:space:]]*=[[:space:]]*)\"[^\"]*\"#\\1\\2\"<redacted>\"#g" \
+        -e "s#${_KR_PRE}(${_KR_NAME}[[:space:]]*=[[:space:]]*)'[^']*'#\\1\\2'<redacted>'#g" \
+        -e "s#${_KR_PRE}(${_KR_NAME}[[:space:]]*=[[:space:]]*)[^[:space:]]+#\\1\\2<redacted>#g" \
+        -e "s#${_KR_PRE}(${_KR_NAME}:[[:space:]]*)[^[:space:]<].*\$#\\1\\2<redacted>#"
 }
 
 # Replaces every literal occurrence of the values in <file> (longest first).

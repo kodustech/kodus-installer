@@ -660,6 +660,10 @@ API_RABBITMQ_URI: amqp://kodus:LEAK30@rabbitmq:5672/kodus-ai
 masked sk-svcac****LEAK32VeAA
 query ?client_secret=LEAK33&x=1
 API_PG_DB_PASSWORD=ab&LEAK34tail API_KEY=<LEAK35> DB_PASSWORD=x;LEAK36,y API_TOKEN=ab"LEAK37
+password = hunter2LEAK44hunter2
+aws_secret_access_key = wJalrXUtnFEMILEAK45EXAMPLEKEY
+password:nospaceLEAK46
+PASSWORD= leadingspaceLEAK47
 EOF
 cat > "$WORK/keep.txt" <<'EOF'
 Schema kodus_workflow exists.
