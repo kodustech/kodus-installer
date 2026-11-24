@@ -377,30 +377,36 @@ echo "API_RABBITMQ_URI=amqp://kodus:kodus@[::1]:5672/kodus-ai" >> "$WORK/install
 EXTRA_NEEDLES=("i RabbitMQ is external (API_RABBITMQ_URI host ::1)")
 check "IPv6 broker URI: host parsed with its brackets" 0 "Reviews: OK" STUB_APP_TSV="$APP_OK"
 cp "$WORK/env.orig" "$WORK/install/.env"
-# An @ after the host reads two ways: an unencoded / in a generated password
-# (common) or an @ in the vhost (rare). One ? that is right either way, and the
-# bundled broker keeps its checks when either reading names it.
+# API_RABBITMQ_URI is read as the client reads it: the authority ends at the
+# first / ? #, the user info at the last @ in it, and host[:port] must be valid.
+# A generated password with an unencoded / is rejected by the client: ✘.
 echo "API_RABBITMQ_URI=amqp://kodus:pa/ss@rabbitmq:5672/kodus-ai" >> "$WORK/install/.env"
-EXTRA_NEEDLES=("? API_RABBITMQ_URI has an @ after its host, so it can be read two ways." "write any / ? # in them as %2F %3F %23" "the app connects to 'kodus'" "✔ The message queue lets jobs run up to 120 minutes.")
-ABSENT_NEEDLES=("RabbitMQ is external")
-check "unencoded / in the broker password: ?, bundled broker still checked" 0 "Reviews: OK" STUB_APP_TSV="$APP_OK" DOCTOR_TEST_VERBOSE=1
+EXTRA_NEEDLES=("✘ API_RABBITMQ_URI cannot be parsed: percent-encode / ? # @ in the user name or password." "Impact: The api, worker and webhooks cannot connect" "Write / as %2F")
+ABSENT_NEEDLES=("RabbitMQ is external" "read two ways")
+check "unencoded / in the broker password: ✘, the client rejects the URI" 1 "Reviews: NOT RUNNING" STUB_APP_TSV="$APP_OK"
 cp "$WORK/env.orig" "$WORK/install/.env"
+echo "API_RABBITMQ_URI=amqp://kodus:kodus@rabbitmq:99999/kodus-ai" >> "$WORK/install/.env"
+EXTRA_NEEDLES=("✘ API_RABBITMQ_URI cannot be parsed")
+check "broker port out of range: ✘" 1 "Reviews: NOT RUNNING" STUB_APP_TSV="$APP_OK"
+cp "$WORK/env.orig" "$WORK/install/.env"
+# An @ after a valid host:port belongs to the vhost, and the client accepts it.
 echo "API_RABBITMQ_URI=amqp://rabbitmq:5672/kodus@ai" >> "$WORK/install/.env"
-EXTRA_NEEDLES=("? API_RABBITMQ_URI has an @ after its host, so it can be read two ways." "write it as %40" "the app connects to 'rabbitmq'" "✔ The message queue lets jobs run up to 120 minutes.")
-ABSENT_NEEDLES=("RabbitMQ is external" "host ai")
-check "@ in the vhost: ?, the bundled broker is not called external" 0 "Reviews: OK" STUB_APP_TSV="$APP_OK" DOCTOR_TEST_VERBOSE=1
+EXTRA_NEEDLES=("✔ The message queue lets jobs run up to 120 minutes.")
+ABSENT_NEEDLES=("cannot be parsed" "read two ways" "RabbitMQ is external")
+check "@ in the vhost: no line, the bundled broker is checked" 0 "Reviews: OK" STUB_APP_TSV="$APP_OK" DOCTOR_TEST_VERBOSE=1
 cp "$WORK/env.orig" "$WORK/install/.env"
-# An @ inside the password itself: the driver dials 'ss'; the bundled broker is still checked.
+# User info ends at the last @ in the authority, as in the client: here the
+# client dials "ss", so that is the host the doctor judges.
 echo "API_RABBITMQ_URI=amqp://kodus:p@ss/word@rabbitmq:5672/kodus-ai" >> "$WORK/install/.env"
-EXTRA_NEEDLES=("? API_RABBITMQ_URI has an @ after its host, so it can be read two ways." "the app connects to 'ss'" "✔ The message queue lets jobs run up to 120 minutes.")
-ABSENT_NEEDLES=("RabbitMQ is external")
-check "@ and / in the broker password: ?, bundled broker still checked" 0 "Reviews: OK" STUB_APP_TSV="$APP_OK" DOCTOR_TEST_VERBOSE=1
+EXTRA_NEEDLES=("i RabbitMQ is external (API_RABBITMQ_URI host ss)")
+ABSENT_NEEDLES=("cannot be parsed")
+check "@ and / in the broker password: the host the client dials" 0 "Reviews: OK" STUB_APP_TSV="$APP_OK"
 cp "$WORK/env.orig" "$WORK/install/.env"
-# A well-formed external URI is still external, with no ? about it.
+# A well-formed external URI is still external, with no other line about it.
 echo "API_RABBITMQ_URI=amqps://kodus:secret@broker.internal:5671/kodus-ai" >> "$WORK/install/.env"
 EXTRA_NEEDLES=("i RabbitMQ is external (API_RABBITMQ_URI host broker.internal)")
-ABSENT_NEEDLES=("read two ways")
-check "well-formed external broker URI: external, no ?" 0 "Reviews: OK" STUB_APP_TSV="$APP_OK"
+ABSENT_NEEDLES=("cannot be parsed")
+check "well-formed external broker URI: external, no ✘" 0 "Reviews: OK" STUB_APP_TSV="$APP_OK"
 cp "$WORK/env.orig" "$WORK/install/.env"
 
 # The scheme is case-insensitive, and so is the host the doctor reads.
@@ -612,16 +618,25 @@ kcheck "webhooks: a mapped IPv6 loopback is loopback, a real IPv6 host is not" 1
     "K_CM_API_GITHUB_CODE_MANAGEMENT_WEBHOOK=https://[::ffff:127.0.0.1]/github/webhook" \
     "K_CM_GLOBAL_BITBUCKET_CODE_MANAGEMENT_WEBHOOK=https://[0:0:0:0:0:0:0:1]:3332/bitbucket/webhook" \
     "K_CM_API_FORGEJO_CODE_MANAGEMENT_WEBHOOK=https://[2001:db8::1]/forgejo/webhook"
-# Every spelling URL parsers accept for this machine, and look-alikes that are not.
+# Hosts read exactly as the WHATWG URL parser reads them (checked against
+# Node's URL): every spelling of this machine, and what the parser makes a
+# domain or rejects. 0x is 0.0.0.0 to the parser; 127.0.0.256 is an invalid URL.
 loop_bad=""
-for h in localhost a.localhost 127.0.0.1 127.1 0177.0.0.1 0x7f.1 2130706433 0 0.0.0.0 ::1 :: 0:0:0:0:0:0:0:1 0000::0001 ::ffff:127.0.0.1 ::ffff:7f00:1 ::127.0.0.1 ::1%lo; do
+for h in localhost a.localhost localhost. 127.0.0.1 127.1 127.0.0.1. 0177.0.0.1 0x7f.1 0x7f000001 127.0.0.0x1 \
+         2130706433 0 00 0x 0.0.0.0 ::1 :: 0:0:0:0:0:0:0:1 0000::0001 ::ffff:127.0.0.1 ::ffff:7f00:1 ::ffff:0.0.0.0; do
     (. "$ROOT/scripts/doctor-lib.sh"; rm -f "$DOCTOR_RESULTS" "$DOCTOR_DETAIL"; doctor_is_loopback_host "$h") || loop_bad+=" $h(missed)"
 done
-for h in example.com localhost.example.com 127.example.com 10.0.0.1 128.0.0.1 2001:db8::1 ::ffff:10.0.0.1 ::2 1::1 0x80000001 fe80::1%eth0 ::ffff:300.1.1.1; do
+for h in example.com example.com. localhost.example.com 127.example.com 10.0.0.1 128.0.0.1 127.0.0.256 127.0.0.1.. \
+         127.0.65536 127.16777216 4294967296 1.2.3.4.5 08.0.0.1 0x1g 0x.0.0.1 2001:db8::1 ::ffff:10.0.0.1 ::2 1::1 \
+         ::127.0.0.1 ::1%lo fe80::1%eth0 ::ffff:127.0.0.01 ::ffff:300.1.1.1; do
     (. "$ROOT/scripts/doctor-lib.sh"; rm -f "$DOCTOR_RESULTS" "$DOCTOR_DETAIL"; doctor_is_loopback_host "$h") && loop_bad+=" $h(false)"
 done
+# The host is split without pathname expansion: a file named 127 in the
+# working directory must not turn *.0.0.1 into 127.0.0.1.
+mkdir -p "$WORK/globdir" && touch "$WORK/globdir/127"
+(cd "$WORK/globdir" && . "$ROOT/scripts/doctor-lib.sh"; rm -f "$DOCTOR_RESULTS" "$DOCTOR_DETAIL"; doctor_is_loopback_host '*.0.0.1') && loop_bad+=" *.0.0.1(globbed)"
 if [ -z "$loop_bad" ]; then
-    pass=$((pass + 1)); echo "ok   loopback hosts: IPv4/IPv6 spellings, mapped addresses, no look-alikes"
+    pass=$((pass + 1)); echo "ok   loopback hosts: read as the WHATWG URL parser reads them, no globbing"
 else
     fail=$((fail + 1)); echo "FAIL loopback hosts:$loop_bad"
 fi

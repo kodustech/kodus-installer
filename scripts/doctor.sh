@@ -564,36 +564,23 @@ else
         *) [ -n "$mongo_source" ] || mongo_source="API_MG_DB_HOST=${API_MG_DB_HOST}" ;;
     esac
 fi
+# The URI is read as the client reads it (doctor_amqp_host): one the client
+# rejects means no service ever connects, whichever broker it names.
+rabbit_host=""
+if [ -n "${API_RABBITMQ_URI:-}" ] && ! rabbit_host=$(doctor_amqp_host "$API_RABBITMQ_URI"); then
+    rabbit_host=""
+    err "API_RABBITMQ_URI cannot be parsed: percent-encode / ? # @ in the user name or password." \
+        "The api, worker and webhooks cannot connect to the message queue, so no review runs." \
+        "Write / as %2F, ? as %3F, # as %23 and @ as %40 in the user name and password of API_RABBITMQ_URI, then run '$DOCKER_COMPOSE up -d'."
+fi
 if [ "$use_local_rabbitmq" != "true" ]; then
     rabbit_source="USE_LOCAL_RABBITMQ=false"
-elif [ -n "${API_RABBITMQ_URI:-}" ]; then
-    # The driver reads the host as doctor_url_host does: the authority ends at
-    # the first / ? or #. An @ after that point can be read two ways, and the
-    # text cannot tell which: a generated (base64) password with an unencoded
-    # / (kodus:pa/ss@rabbitmq:5672/kodus-ai, common) or an @ in the vhost
-    # (rabbitmq:5672/kodus@ai, rare). So, failing safe: one ? line that is
-    # right either way (encode it), and the broker counts as the bundled one if
-    # either reading names it, so its checks are not skipped on a guess.
-    rabbit_rest=${API_RABBITMQ_URI#*://}
-    rabbit_authority=${rabbit_rest%%[/?#]*}
-    rabbit_host=$(doctor_url_host "$API_RABBITMQ_URI")
-    rabbit_hosts=$rabbit_host
-    case "${rabbit_rest#"$rabbit_authority"}" in
-        *@*)
-            warnings=$((warnings + 1))
-            doctor_add unknown infra "" \
-                "API_RABBITMQ_URI has an @ after its host, so it can be read two ways." "" \
-                "If the @ ends the user name and password, write any / ? # in them as %2F %3F %23; if it is part of the vhost, write it as %40. As written, the app connects to '${rabbit_host}'."
-            rabbit_hosts="$rabbit_host $(doctor_url_host "amqp://${rabbit_rest##*@}")"
-            ;;
+elif [ -n "$rabbit_host" ]; then
+    # "rabbitmq." is the same name as "rabbitmq".
+    case "${rabbit_host%.}" in
+        rabbitmq|rabbitmq-prod|"$(printf '%s' "${RABBITMQ_HOSTNAME:-rabbitmq}" | tr '[:upper:]' '[:lower:]')") ;;
+        *) rabbit_source="API_RABBITMQ_URI host ${rabbit_host}" ;;
     esac
-    rabbit_bundled=""
-    for h in $rabbit_hosts; do
-        case "$h" in
-            rabbitmq|rabbitmq-prod|"$(printf '%s' "${RABBITMQ_HOSTNAME:-rabbitmq}" | tr '[:upper:]' '[:lower:]')") rabbit_bundled=1 ;;
-        esac
-    done
-    [ -n "$rabbit_bundled" ] || rabbit_source="API_RABBITMQ_URI host ${rabbit_host}"
 fi
 [ -n "$pg_source" ] && note "Postgres is external (${pg_source}): the review checks test it from inside the api, with the app's own settings."
 [ -n "$mongo_source" ] && note "MongoDB is external (${mongo_source}): the review checks test it from inside the api, with the app's own settings."

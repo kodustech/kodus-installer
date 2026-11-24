@@ -76,7 +76,8 @@ _doctor_on_exit() {
 
 # Host of a URL the way URL parsers (and the app's drivers) read it: the
 # authority ends at the first / ? or #, user:password@ ends at its last @, a
-# [bracketed] IPv6 host keeps its colons. Lowercased, no trailing dot.
+# [bracketed] IPv6 host keeps its colons. Lowercased; a trailing dot is kept
+# (the host parser below decides what it means).
 doctor_url_host() {
     local u=${1#*://} host
     u=${u%%[/?#]*}
@@ -85,62 +86,143 @@ doctor_url_host() {
         \[*\]*) host=${u#\[}; host=${host%%\]*} ;;
         *) host=${u%%:*} ;;
     esac
-    host=$(printf '%s' "$host" | tr '[:upper:]' '[:lower:]')
-    printf '%s' "${host%.}"
+    printf '%s' "$host" | tr '[:upper:]' '[:lower:]'
+}
+
+# The broker host of an AMQP URI, read as the client reads it: the authority
+# ends at the first / ? or #, the user info at the last @ inside it, and what
+# is left must be host[:port] with a port of 1-65535 ([IPv6] allowed). Prints
+# the host (lowercased), or fails when the client would reject the URI, as it
+# does for a password with an unencoded / (kodus:pa/ss@... reads as host
+# "kodus", port "pa"). An @ after the authority is part of the vhost.
+doctor_amqp_host() {
+    local rest=${1#*://} hostport host port=""
+    rest=${rest%%[/?#]*}
+    hostport=${rest##*@}
+    case "$hostport" in
+        \[*\]) host=${hostport#\[}; host=${host%\]} ;;
+        \[*\]:*) host=${hostport#\[}; host=${host%%\]*}; port=${hostport##*\]:}; [ -n "$port" ] || return 1 ;;
+        \[*) return 1 ;;
+        *:*) host=${hostport%%:*}; port=${hostport#*:}; [ -n "$port" ] || return 1 ;;
+        *) host=$hostport ;;
+    esac
+    [ -n "$host" ] || return 1
+    if [ -n "$port" ]; then
+        case "$port" in *[!0-9]*) return 1 ;; esac
+        [ ${#port} -le 5 ] && [ "$((10#$port))" -ge 1 ] && [ "$((10#$port))" -le 65535 ] || return 1
+    fi
+    printf '%s' "$host" | tr '[:upper:]' '[:lower:]'
 }
 
 # A host that only ever means "this machine": unreachable from a Git provider.
-# Takes a host from doctor_url_host. Every spelling URL parsers accept counts:
-# 127.0.0.1, 127.1, 0177.0.0.1, 0x7f.1, 2130706433, 0, ::1, 0:0:0:0:0:0:0:1,
-# ::ffff:127.0.0.1, ::ffff:7f00:1, and the unspecified 0.0.0.0 / ::.
+# Takes a host from doctor_url_host and reads it exactly as the WHATWG URL host
+# parser does (what browsers, Node and Git providers use): a host that ends in
+# a number is an IPv4 address in any spelling the parser accepts (127.1,
+# 0177.0.0.1, 0x7f.1, 2130706433, 0x, 127.0.0.1.) or an invalid URL
+# (127.0.0.256); anything else is a domain name. Loopback: 127.0.0.0/8,
+# 0.0.0.0, ::1, ::, ::ffff:127.x.y.z, localhost and *.localhost.
 doctor_is_loopback_host() {
-    local h=${1%%\%*}  # an IPv6 zone (%eth0) does not change the address
+    local h=$1 v
     case "$h" in
-        localhost|*.localhost) return 0 ;;
         *:*) _doctor_ipv6_is_loopback "$h"; return ;;
     esac
-    _doctor_ipv4_is_loopback "$h"
+    if _doctor_ends_in_number "$h"; then
+        v=$(_doctor_ipv4_parse "$h") || return 1    # invalid URL: not this machine either
+        [ $((v >> 24)) -eq 127 ] || [ "$v" -eq 0 ]
+        return
+    fi
+    # A domain: "localhost." is the same name as "localhost".
+    case "${h%.}" in
+        localhost|*.localhost) return 0 ;;
+    esac
+    return 1
 }
 
-# Value of one IPv4 part as URL parsers read it (0x.. hex, 0.. octal), or
-# nothing when it is not a number (then the host is a name).
-_doctor_ipv4_part() {
-    case "$1" in
-        0[xX]) echo 0 ;;
-        0[xX]*) case "${1#0[xX]}" in *[!0-9a-fA-F]*) ;; *) [ ${#1} -le 10 ] && echo $((16#${1#0[xX]})) ;; esac ;;
-        0*) case "$1" in *[!0-7]*) ;; *) [ ${#1} -le 12 ] && echo $((8#$1)) ;; esac ;;
-        [1-9]*) case "$1" in *[!0-9]*) ;; *) [ ${#1} -le 10 ] && echo $((10#$1)) ;; esac ;;
+# Splits $1 on "." into _DOCTOR_PARTS, keeping empty parts (no globbing, no IFS).
+_doctor_split_dots() {
+    local s=$1
+    _DOCTOR_PARTS=()
+    while :; do
+        case "$s" in
+            *.*) _DOCTOR_PARTS+=("${s%%.*}"); s=${s#*.} ;;
+            *) _DOCTOR_PARTS+=("$s"); return ;;
+        esac
+    done
+}
+
+# WHATWG "IPv4 number parser": prints the value, or fails. 0x/0X is hex (no
+# digits means 0), a leading 0 is octal. A value past 2^32 prints 4294967296,
+# which every range check below rejects.
+_doctor_ipv4_number() {
+    local s=$1 radix=10
+    [ -n "$s" ] || return 1
+    if [ ${#s} -ge 2 ] && { [ "${s:0:2}" = 0x ] || [ "${s:0:2}" = 0X ]; }; then
+        s=${s:2}; radix=16
+    elif [ ${#s} -ge 2 ] && [ "${s:0:1}" = 0 ]; then
+        s=${s:1}; radix=8
+    fi
+    [ -n "$s" ] || { echo 0; return 0; }
+    case "$radix:$s" in
+        16:*[!0-9a-fA-F]*|8:*[!0-7]*|10:*[!0-9]*) return 1 ;;
+    esac
+    s=${s#"${s%%[!0]*}"}
+    [ -n "$s" ] || { echo 0; return 0; }
+    case "$radix" in
+        16) [ ${#s} -le 8 ] || { echo 4294967296; return 0; }; echo $((16#$s)) ;;
+        8) [ ${#s} -le 11 ] || { echo 4294967296; return 0; }; echo $((8#$s)) ;;
+        *) [ ${#s} -le 10 ] || { echo 4294967296; return 0; }; echo $((10#$s)) ;;
     esac
 }
 
-_doctor_ipv4_is_loopback() {
-    local part first="" all_zero=1 count=0 v
-    local IFS=.
-    for part in $1; do
-        v=$(_doctor_ipv4_part "$part")
-        [ -n "$v" ] || return 1
-        count=$((count + 1))
-        [ -n "$first" ] || first=$v
-        [ "$v" -eq 0 ] || all_zero=0
-    done
-    [ "$count" -ge 1 ] && [ "$count" -le 4 ] || return 1
-    [ "$all_zero" = 1 ] && return 0          # 0.0.0.0, 0
-    # One part is the whole address; with more, the first part is the first octet.
-    [ "$count" -eq 1 ] && first=$((first >> 24))
-    [ "$first" -eq 127 ]
+# WHATWG "ends in a number checker".
+_doctor_ends_in_number() {
+    local last
+    _doctor_split_dots "$1"
+    if [ -z "${_DOCTOR_PARTS[${#_DOCTOR_PARTS[@]}-1]}" ]; then
+        [ "${#_DOCTOR_PARTS[@]}" -gt 1 ] || return 1
+        unset "_DOCTOR_PARTS[${#_DOCTOR_PARTS[@]}-1]"
+    fi
+    last=${_DOCTOR_PARTS[${#_DOCTOR_PARTS[@]}-1]}
+    case "$last" in
+        ""|*[!0-9]*) _doctor_ipv4_number "$last" >/dev/null ;;
+        *) return 0 ;;
+    esac
 }
 
-# a.b.c.d -> the two hex groups it occupies in an IPv6 address, or fails.
-_doctor_v4_hex_groups() {
-    local IFS=. g
-    # shellcheck disable=SC2086 # split on the dots on purpose
-    set -- $1
-    [ $# -eq 4 ] || return 1
-    for g in "$@"; do
-        case "$g" in ""|*[!0-9]*) return 1 ;; esac
-        [ ${#g} -le 3 ] && [ "$((10#$g))" -le 255 ] || return 1
+# WHATWG "IPv4 parser": prints the address as one number, or fails.
+_doctor_ipv4_parse() {
+    local n i v last addr=0
+    local -a nums=()
+    _doctor_split_dots "$1"
+    n=${#_DOCTOR_PARTS[@]}
+    if [ -z "${_DOCTOR_PARTS[n-1]}" ] && [ "$n" -gt 1 ]; then
+        unset "_DOCTOR_PARTS[n-1]"; n=$((n - 1))
+    fi
+    [ "$n" -le 4 ] || return 1
+    for ((i = 0; i < n; i++)); do
+        v=$(_doctor_ipv4_number "${_DOCTOR_PARTS[i]}") || return 1
+        nums+=("$v")
     done
-    printf '%x:%x' $((10#$1 * 256 + 10#$2)) $((10#$3 * 256 + 10#$4))
+    for ((i = 0; i < n - 1; i++)); do
+        [ "${nums[i]}" -le 255 ] || return 1
+        addr=$((addr + nums[i] * (1 << (8 * (3 - i)))))
+    done
+    last=${nums[n-1]}
+    [ "$last" -lt $((1 << (8 * (5 - n)))) ] || return 1
+    echo $((addr + last))
+}
+
+# a.b.c.d inside an IPv6 address -> its two hex groups, or fails. The IPv6
+# parser takes only plain decimal parts here, 0-255, without leading zeros.
+_doctor_v4_hex_groups() {
+    local g
+    _doctor_split_dots "$1"
+    [ "${#_DOCTOR_PARTS[@]}" -eq 4 ] || return 1
+    for g in "${_DOCTOR_PARTS[@]}"; do
+        case "$g" in ""|*[!0-9]*|0?*) return 1 ;; esac
+        [ ${#g} -le 3 ] && [ "$g" -le 255 ] || return 1
+    done
+    printf '%x:%x' $((_DOCTOR_PARTS[0] * 256 + _DOCTOR_PARTS[1])) $((_DOCTOR_PARTS[2] * 256 + _DOCTOR_PARTS[3]))
 }
 
 _doctor_ipv6_is_loopback() {
@@ -176,12 +258,10 @@ _doctor_ipv6_is_loopback() {
     if [ "${groups[5]}" -eq 0 ] && [ "${groups[6]}" -eq 0 ]; then
         [ "${groups[7]}" -le 1 ] && return 0       # ::1 and ::
     fi
-    # IPv4-mapped (::ffff:127.x.y.z) or IPv4-compatible (::127.x.y.z).
-    if [ "${groups[5]}" -eq 65535 ] || [ "${groups[5]}" -eq 0 ]; then
-        [ $((groups[6] >> 8)) -eq 127 ] && return 0
-        [ "${groups[6]}" -eq 0 ] && [ "${groups[7]}" -eq 0 ] && [ "${groups[5]}" -eq 65535 ] && return 0  # ::ffff:0.0.0.0
-    fi
-    return 1
+    # IPv4-mapped: ::ffff:127.x.y.z, or ::ffff:0.0.0.0.
+    [ "${groups[5]}" -eq 65535 ] || return 1
+    [ $((groups[6] >> 8)) -eq 127 ] && return 0
+    [ "${groups[6]}" -eq 0 ] && [ "${groups[7]}" -eq 0 ]
 }
 
 # Appends the API's results (doctor-client.mjs --format tsv) read from stdin.
