@@ -10,10 +10,16 @@ name: Release chart (OCI)
 # nothing to point an Application/HelmRelease at — a git path is not a chart
 # source they can pin or diff.
 #
-# Triggered by a tag, so publishing is always a deliberate act with a commit
-# behind it:
+# Publishing is a deliberate act with a commit behind it: merging a bump of
+# `version` in charts/kodus/Chart.yaml to main IS the release decision (the
+# `decide` job below; bump-app-version.yml opens such a PR for every Kodus
+# release). The run then tags that commit chart-vX.Y.Z itself. Before this, the
+# publish waited for someone to push the tag by hand after the merge, and charts
+# 0.3.5-0.3.7 sat in main without ever reaching the registry (kodus-ai#2673).
 #
-#   git tag chart-v0.2.0 && git push origin chart-v0.2.0
+# Pushing a tag by hand still works, for a commit that main has moved past:
+#
+#   git tag chart-v0.2.0 <sha> && git push origin chart-v0.2.0
 #
 # ── Supply chain ──────────────────────────────────────────────────────────────
 # A chart is executable infrastructure: it declares the images that run, the
@@ -40,6 +46,11 @@ name: Release chart (OCI)
 
 on:
   push:
+    branches:
+      - main
+    # Only evaluated for the branch push; tag pushes ignore path filters.
+    paths:
+      - 'charts/kodus/Chart.yaml'
     tags:
       - 'chart-v*'
   workflow_dispatch:
@@ -52,10 +63,52 @@ on:
 permissions:
   contents: read
 
+# One release at a time: a hand-pushed tag and the main push for the same bump
+# must not race to the registry. The loser then fails "already published",
+# which is the truth.
+concurrency:
+  group: chart-release
+  cancel-in-progress: false
+
 jobs:
+  # Whether this run publishes. Tags and dispatches always go on (the release
+  # job keeps its own checks); a main push only when `version` moved, and it
+  # FAILS when appVersion moved alone — a Kodus release no chart would carry.
+  # Logic and its cases live in scripts/chart-release-decide.sh.
+  decide:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      release: ${{ steps.decide.outputs.release }}
+      version: ${{ steps.decide.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
+
+      - name: Decide
+        id: decide
+        shell: bash
+        env:
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          # A push can carry several commits; make sure the one before it is here.
+          if [ -n "$BEFORE" ] && [ "$BEFORE" != "0000000000000000000000000000000000000000" ]; then
+            git cat-file -e "$BEFORE^{commit}" 2>/dev/null || git fetch -q --depth=1 origin "$BEFORE"
+          fi
+          ./scripts/chart-release-decide.sh
+
   release:
+    needs: decide
+    if: needs.decide.outputs.release == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    outputs:
+      published: ${{ steps.push.outcome == 'success' }}
+      version: ${{ needs.decide.outputs.version }}
     permissions:
       contents: read
       packages: write        # push to ghcr.io
@@ -263,3 +316,36 @@ jobs:
               echo 'package settings, or consumers need a pull secret.'
             fi
           } >> "$GITHUB_STEP_SUMMARY"
+
+  # Tag the released commit, so `chart-vX.Y.Z` keeps pointing at what was
+  # published, as when releases were tag-driven. Its own job because it is the
+  # only thing that writes to the repo. A tag created with GITHUB_TOKEN does not
+  # trigger workflows, so this does not start a second release run.
+  tag:
+    needs: release
+    if: >-
+      github.event_name == 'push' && github.ref == 'refs/heads/main' &&
+      needs.release.outputs.published == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - name: Tag chart-v${{ needs.release.outputs.version }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: chart-v${{ needs.release.outputs.version }}
+        run: |
+          set -euo pipefail
+          if EXISTING=$(gh api "repos/${{ github.repository }}/git/ref/tags/$TAG" --jq .object.sha 2>/dev/null); then
+            if [ "$EXISTING" = "$GITHUB_SHA" ]; then
+              echo "$TAG already points at $GITHUB_SHA"
+              exit 0
+            fi
+            echo "::warning::$TAG already exists at $EXISTING, not at the released commit $GITHUB_SHA. Left as is."
+            exit 0
+          fi
+          gh api -X POST "repos/${{ github.repository }}/git/refs" \
+            -f ref="refs/tags/$TAG" -f sha="$GITHUB_SHA" >/dev/null
+          echo "tagged $GITHUB_SHA as $TAG"
