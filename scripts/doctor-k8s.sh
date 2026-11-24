@@ -349,27 +349,24 @@ fi
 # is the NODE's RAM, not the pod limit, so on a small PVC the limit is unreachable
 # and the alarm never clears. Read-only check via a bundled RabbitMQ pod.
 section "RabbitMQ resource alarms"
+# Bundled mode runs <release>-rabbitmq-0; the RabbitMQ operator names its pods
+# <cluster>-server-N. Both run the Kodus image with a container named rabbitmq.
 RMQ_POD="${RELEASE}-rabbitmq-0"
+$K get pod "$RMQ_POD" >/dev/null 2>&1 || RMQ_POD="${RELEASE}-rabbitmq-server-0"
 if ! $K get pod "$RMQ_POD" >/dev/null 2>&1; then
-  echo -e "  ${BLUE}‣${NC} no bundled RabbitMQ pod ($RMQ_POD) — external/operator mode, skipping"
+  RMQ_POD=""
+  echo -e "  ${BLUE}‣${NC} no bundled or operator RabbitMQ pod (${RELEASE}-rabbitmq-0 / ${RELEASE}-rabbitmq-server-0) — external broker, skipping"
 else
-  alarm_out=$($K exec "$RMQ_POD" -c rabbitmq -- rabbitmqctl eval 'rabbit_alarm:get_alarms().' 2>&1)
+  alarm_out=$($K exec "$RMQ_POD" -c rabbitmq -- rabbitmq-diagnostics -q check_alarms 2>&1)
   alarm_rc=$?
-  alarm_clean=$(echo "$alarm_out" | tr -d '[:space:]')
-  if [ $alarm_rc -ne 0 ] && echo "$alarm_out" | grep -qiE "forbidden|cannot exec|not allowed|denied"; then
+  echo "     $alarm_out"
+  if [ $alarm_rc -ne 0 ] && ! echo "$alarm_out" | grep -qi 'alarm on node' \
+    && echo "$alarm_out" | grep -qiE "forbidden|cannot exec|not allowed|denied"; then
     warn "couldn't check RabbitMQ alarms (exec not permitted for this user)"
-  elif [ "$alarm_clean" = "[]" ]; then
-    ok "RabbitMQ: no resource alarms (publishers not blocked)"
-  elif [ $alarm_rc -ne 0 ] || [ -z "$alarm_clean" ]; then
-    warn "couldn't read RabbitMQ alarms: ${alarm_out}"
   else
-    bad "RabbitMQ resource ALARM active — publishers blocked; webhook & review jobs won't enqueue" \
-      "Webhooks and review jobs stop being enqueued while every pod still reports Running." \
-      "Likely disk_free_limit relative to the node's RAM on a small PVC: upgrade to a current chart (it sets total_memory_available_override_value). Inspect: $K exec $RMQ_POD -c rabbitmq -- rabbitmqctl status | grep -A3 Alarms"
-    echo "     alarms: $alarm_clean"
-    echo "     Likely disk_free_limit relative to host RAM on a small PVC (bundled mode sets"
-    echo "     total_memory_available_override_value to fix this — check you're on a current chart)."
-    echo "     Inspect: $K exec $RMQ_POD -c rabbitmq -- rabbitmqctl status | grep -A3 Alarms"
+    doctor_check_rabbit_alarms "$alarm_rc" "$alarm_out" \
+      "Free disk is below RabbitMQ's limit, which is relative to the RAM it detects: in a container that is the node's RAM, not the pod limit, so a small volume never has enough. Upgrade to a current chart (it sets total_memory_available_override_value) or grow the RabbitMQ volume. Inspect: $K exec $RMQ_POD -c rabbitmq -- rabbitmq-diagnostics status" \
+      "RabbitMQ is over its memory limit, usually jobs piling up in a queue nothing takes: $K exec $RMQ_POD -c rabbitmq -- rabbitmqctl list_queues -p kodus-ai name messages consumers; or raise its memory limit."
   fi
 fi
 
@@ -397,11 +394,9 @@ fi
 
 # --- Message queue job time limit ---
 section "RabbitMQ consumer_timeout"
-# The operator names its pods <cluster>-server-N; both modes run the Kodus image.
-TIMEOUT_POD="$RMQ_POD"
-$K get pod "$TIMEOUT_POD" >/dev/null 2>&1 || TIMEOUT_POD="${RELEASE}-rabbitmq-server-0"
-if $K get pod "$TIMEOUT_POD" >/dev/null 2>&1; then
-  doctor_check_consumer_timeout "$($K exec "$TIMEOUT_POD" -c rabbitmq -- rabbitmqctl eval 'application:get_env(rabbit, consumer_timeout).' 2>/dev/null)"
+# RMQ_POD: the bundled or operator pod found above.
+if [ -n "$RMQ_POD" ]; then
+  doctor_check_consumer_timeout "$($K exec "$RMQ_POD" -c rabbitmq -- rabbitmqctl eval 'application:get_env(rabbit, consumer_timeout).' 2>/dev/null)"
 else
   doctor_add unknown broker.consumer_timeout "" \
     "Could not check the message queue's job time limit (external RabbitMQ)." \

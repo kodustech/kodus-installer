@@ -77,6 +77,9 @@ case "$1" in
       db_kodus_mongodb) exit 0 ;;
       rabbitmq)
         case "$*" in
+          *check_alarms*)
+            [ -n "${STUB_RABBIT_ALARM:-}" ] && { printf '%b\n' "$STUB_RABBIT_ALARM"; exit 69; }
+            exit 0 ;;
           *consumer_timeout*)
             ct='{ok,7200000}'
             echo "${STUB_CONSUMER_TIMEOUT:-$ct}" ;;
@@ -237,6 +240,15 @@ cp "$WORK/env.orig" "$WORK/install/.env"
 # 7,200,000 ms (2 h) is what the docs ask for and what the fix line says.
 EXTRA_NEEDLES=("! The message queue stops any job that runs longer than 110 minutes." "consumer_timeout = 7200000")
 check "consumer_timeout below 2 h: DEGRADED" 0 "Reviews: RUNNING, DEGRADED" STUB_APP_TSV="$APP_OK" "STUB_CONSUMER_TIMEOUT={ok,6600000}"
+
+# A resource alarm blocks every publisher while check_running still passes (#1694).
+EXTRA_NEEDLES=("✘ The message queue is blocking new jobs (RabbitMQ disk alarm)." "1.2 times the machine's RAM" "disk_free_limit.relative = 1.2")
+ABSENT_NEEDLES=("vm_memory_high_watermark")
+check "RabbitMQ disk alarm: ✘" 1 "Reviews: NOT RUNNING" STUB_APP_TSV="$APP_OK" "STUB_RABBIT_ALARM=Free disk space alarm on node rabbit@rabbitmq"
+EXTRA_NEEDLES=("✘ The message queue is blocking new jobs (RabbitMQ disk and memory alarm)." "vm_memory_high_watermark.relative = 0.4")
+check "RabbitMQ disk and memory alarms: ✘ with both fixes" 1 "Reviews: NOT RUNNING" STUB_APP_TSV="$APP_OK" "STUB_RABBIT_ALARM=Free disk space alarm on node rabbit@rabbitmq\nMemory alarm on node rabbit@rabbitmq"
+EXTRA_NEEDLES=("? Could not check the message queue for resource alarms.")
+check "alarm check errors out: ?, not ✘" 0 "Reviews: OK" STUB_APP_TSV="$APP_OK" "STUB_RABBIT_ALARM=Error: unable to perform an operation on node"
 
 # Crash loop: running right now, but restarted again and again in the last minutes.
 NOW=$(date -u +%Y-%m-%dT%H:%M:%S.000000000Z)

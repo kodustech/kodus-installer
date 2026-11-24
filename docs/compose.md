@@ -192,6 +192,7 @@ and prints no secret, so the output can be pasted into a support thread.
 | Docker daemon not running | `docker info` |
 | Port already in use | Free the port or remap it in `.env` (see the table above) |
 | RabbitMQ connection errors | `API_RABBITMQ_URI` must match user/pass and use vhost `kodus-ai` |
+| Doctor: "The message queue is blocking new jobs" (`Error publishing message to RabbitMQ … timeout` in the logs) | A RabbitMQ resource alarm. The bundled broker stops taking jobs while free disk is below 1.2× the machine's RAM, or while it holds more than 40% of it: free disk space (or add RAM) and it resumes by itself |
 | DB errors | Check Postgres/Mongo credentials; Postgres needs the pgvector extension |
 | Service crash / boot loop | `docker compose logs -f api` (or `worker`, `webhooks`, `rabbitmq`) |
 | MongoDB exits with `SERVER-121912` | MongoDB 8.3 does not start on Linux kernels 6.19+. `install.sh` handles this by writing `KODUS_MONGO_IMAGE=docker.io/mongo:8.2.11` to `.env`; if you upgrade with `docker compose` directly, add that line yourself |

@@ -176,6 +176,36 @@ doctor_check_consumer_timeout() {
     fi
 }
 
+# Resource alarm on the broker (kodus-ai #1694). While a memory or disk alarm
+# is in effect RabbitMQ blocks every publisher: the node, its connections and
+# the consumers stay up, only publishing hangs, so Git events and review jobs
+# are never queued while every service reads "running". check_running passes.
+# doctor_check_rabbit_alarms <rc> <output of `rabbitmq-diagnostics -q check_alarms`> <disk fix> <memory fix>
+doctor_check_rabbit_alarms() {
+    local rc=$1 out=$2 disk_fix=$3 memory_fix=$4 kind="" fix=""
+    if [ "$rc" -eq 0 ]; then
+        doctor_add ok broker.alarms "" "The message queue has no resource alarm (publishers are not blocked)."
+        return
+    fi
+    # Exit 69 with "<Free disk space|Memory> alarm on node ..." per alarm;
+    # anything else (node down, CLI error) is not an answer.
+    if ! printf '%s' "$out" | grep -qi 'alarm on node'; then
+        doctor_add unknown broker.alarms "" "Could not check the message queue for resource alarms." "" \
+            "Run 'rabbitmq-diagnostics check_alarms' on the broker; an alarm there blocks every new review job."
+        return
+    fi
+    if printf '%s' "$out" | grep -qi 'disk.*alarm on node'; then
+        kind="disk"; fix=$disk_fix
+    fi
+    if printf '%s' "$out" | grep -qi 'memory.*alarm on node'; then
+        kind="${kind:+$kind and }memory"; fix="${fix:+$fix }$memory_fix"
+    fi
+    doctor_add fail broker.alarms "" \
+        "The message queue is blocking new jobs (RabbitMQ ${kind:-resource} alarm)." \
+        "No Git event or review job can be queued, so no review runs, while every service still reads as running." \
+        "${fix:-$disk_fix $memory_fix}"
+}
+
 doctor_has_fail() {
     if [ "$DOCTOR_SOFT_APP_FAILS" = "true" ]; then
         grep -q '^fail	' "$DOCTOR_RESULTS"

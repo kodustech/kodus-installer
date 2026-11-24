@@ -173,6 +173,7 @@ Common fixes:
 - **Ports already in use:** `3000`, `3001`, `3101`, `3332`, `5432`, `27017`, `5672`, `15672`, `15692`
 - **`.env` missing or invalid:** copy `.env.example` and fill the required vars
 - **RabbitMQ connection errors:** ensure `API_RABBITMQ_URI` matches `RABBITMQ_DEFAULT_USER`, `RABBITMQ_DEFAULT_PASS`, and vhost `kodus-ai`
+- **Doctor says the message queue is blocking new jobs:** a RabbitMQ resource alarm. The bundled broker needs free disk above 1.2× the machine's RAM; free disk space and it resumes by itself
 - **Database errors:** confirm Postgres / Mongo credentials, then rerun `./scripts/setup-db.sh`
 - **Service crash or boot loop:** check logs with `docker compose logs -f api` (or `worker`, `webhooks`, `rabbitmq`)
 - **Reviews never trigger:** no LLM key set, or the repo webhook can't reach the `webhooks` service — see [Your first review](#your-first-review)

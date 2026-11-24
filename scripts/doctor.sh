@@ -605,6 +605,7 @@ else
 fi
 
 rabbit_id=$($DOCKER_COMPOSE ps -q rabbitmq 2>/dev/null)
+is_down rabbitmq && rabbit_id=""
 if [ "$use_local_rabbitmq" = "true" ]; then
     if [ -z "$rabbit_id" ]; then
         # The service status section already reported it; saying it again
@@ -613,6 +614,15 @@ if [ "$use_local_rabbitmq" = "true" ]; then
     else
         if $DOCKER_COMPOSE exec -T rabbitmq rabbitmq-diagnostics -q check_running &> /dev/null; then
             ok "RabbitMQ is running."
+            # The bundled broker's rabbitmq.conf (kodus-ai docker/rabbitMQ)
+            # sets disk_free_limit.relative = 1.2 and
+            # vm_memory_high_watermark.relative = 0.4.
+            alarm_out=$($DOCKER_COMPOSE exec -T rabbitmq rabbitmq-diagnostics -q check_alarms 2>&1)
+            alarm_rc=$?
+            echo "$alarm_out"
+            doctor_check_rabbit_alarms "$alarm_rc" "$alarm_out" \
+                "Free disk space on this machine ('df -h /var/lib/docker'): the bundled RabbitMQ stops taking jobs while free disk is below 1.2 times the machine's RAM (disk_free_limit.relative = 1.2), and starts again by itself once there is room." \
+                "RabbitMQ is holding more than 40% of the machine's memory (vm_memory_high_watermark.relative = 0.4), usually jobs piling up in a queue nothing takes: check '$DOCKER_COMPOSE exec rabbitmq rabbitmqctl list_queues -p kodus-ai name messages consumers', or give the machine more memory."
         else
             err "RabbitMQ is not running."
         fi
