@@ -64,19 +64,6 @@ normalize_host() {
     printf '%s' "$host"
 }
 
-is_localhost() {
-    local host
-    host=$(normalize_host "$1")
-    case "$host" in
-        localhost|127.0.0.1|0.0.0.0)
-            return 0
-            ;;
-        *)
-            return 1
-            ;;
-    esac
-}
-
 extract_url_path() {
     local url=$1
     local without_scheme="${url#*://}"
@@ -94,7 +81,6 @@ validate_webhook_url() {
     local var_name=$2
     local url=$3
     local expected_path=$4
-    local expected_host=$5
 
     if [ -z "$url" ]; then
         return 0
@@ -117,20 +103,12 @@ validate_webhook_url() {
             ;;
     esac
 
+    # WEB_HOSTNAME_API is how the web reaches the api, not where Git providers
+    # send webhooks (the webhooks service), so the two hosts are not compared.
     local host
     host=$(normalize_host "$url")
     if [ -z "$host" ]; then
         err "${var_name} (${label}) must include a valid host."
-    elif [ -n "$expected_host" ] && [ "$host" != "$expected_host" ]; then
-        # A tunnel or reverse proxy in front of the webhooks service is a valid
-        # setup, so a different host is unverifiable here, not a failure. The
-        # mismatches are reported together in report_webhook_host_mismatch.
-        echo -e "${YELLOW}WARN${NC} ${var_name} (${label}) host ${host} differs from WEB_HOSTNAME_API (${expected_host})."
-        webhook_mismatch_labels+=("$label")
-        case " ${webhook_mismatch_hosts[*]-} " in
-            *" $host "*) ;;
-            *) webhook_mismatch_hosts+=("$host") ;;
-        esac
     fi
 
     local path
@@ -144,7 +122,7 @@ validate_webhook_url() {
         fi
     done
     if [ "$path_ok" != "true" ]; then
-        err "${var_name} (${label}) path must be one of ${expected_path} (example: https://${expected_host}${expected_paths[0]})."
+        err "${var_name} (${label}) path must be one of ${expected_path} (example: https://${host:-<webhooks-host>}${expected_paths[0]})."
     fi
 }
 
@@ -276,18 +254,21 @@ if [ "$env_loaded" = true ]; then
         warn "WEBHOOKS_PORT is deprecated; use API_WEBHOOKS_PORT."
     fi
 
-    if [ -n "$WEB_HOSTNAME_API" ]; then
-        case "$WEB_HOSTNAME_API" in
-            http://*|https://*)
-                err "WEB_HOSTNAME_API must be hostname only (no scheme). Example: api.kodus.io"
-                ;;
-        esac
-        if [[ "$WEB_HOSTNAME_API" == */* ]]; then
-            err "WEB_HOSTNAME_API must not include path or trailing slash."
-        fi
-        if is_localhost "$WEB_HOSTNAME_API"; then
-            warn "WEB_HOSTNAME_API is localhost; cloud Git webhooks will not reach it unless your Git server is on the same network."
-        fi
+    # WEB_HOSTNAME_API is how the web's server reaches the api, not a public
+    # address: `localhost` (the default) means the api container, by
+    # GLOBAL_API_CONTAINER_NAME (apps/web/src/core/utils/helpers.ts), and a
+    # scheme is honoured. Whether the web really reaches the api is tested
+    # from inside the web container under "HTTP checks".
+    web_api_host="${WEB_HOSTNAME_API#http://}"
+    web_api_host="${web_api_host#https://}"
+    if [ -z "$WEB_HOSTNAME_API" ]; then
+        err "WEB_HOSTNAME_API is empty: the web cannot reach the api." \
+            "Nobody can sign in, and every page fails." \
+            "Set WEB_HOSTNAME_API=localhost and WEB_PORT_API=3001 in .env (the web then calls the api container), and run '$DOCKER_COMPOSE up -d kodus-web'."
+    elif [[ "$web_api_host" == */* ]]; then
+        err "WEB_HOSTNAME_API must not include a path or a trailing slash." \
+            "The web builds a broken api address: nobody can sign in, and every page fails." \
+            "Set WEB_HOSTNAME_API to a host name only (the default is localhost), and run '$DOCKER_COMPOSE up -d kodus-web'."
     fi
 
     if [ -n "$NEXTAUTH_URL" ]; then
@@ -325,27 +306,11 @@ if [ "$env_loaded" = true ]; then
     if [ ${#webhook_providers[@]} -eq 0 ]; then
         err "At least one Git webhook URL must be configured (GitHub, GitLab, Bitbucket, Azure Repos, or Forgejo). See https://docs.kodus.io/how_to_deploy/en/deploy_kodus/generic_vm#git-provider-configuration"
     else
-        if [ -z "$WEB_HOSTNAME_API" ]; then
-            err "WEB_HOSTNAME_API is required when configuring Git webhooks."
-        else
-            expected_host=$(normalize_host "$WEB_HOSTNAME_API")
-            webhook_mismatch_labels=()
-            webhook_mismatch_hosts=()
-            validate_webhook_url "GitHub" "API_GITHUB_CODE_MANAGEMENT_WEBHOOK" "$API_GITHUB_CODE_MANAGEMENT_WEBHOOK" "/github/webhook" "$expected_host"
-            validate_webhook_url "GitLab" "API_GITLAB_CODE_MANAGEMENT_WEBHOOK" "$API_GITLAB_CODE_MANAGEMENT_WEBHOOK" "/gitlab/webhook" "$expected_host"
-            validate_webhook_url "Bitbucket" "GLOBAL_BITBUCKET_CODE_MANAGEMENT_WEBHOOK" "$GLOBAL_BITBUCKET_CODE_MANAGEMENT_WEBHOOK" "/bitbucket/webhook" "$expected_host"
-            validate_webhook_url "Azure Repos" "GLOBAL_AZURE_REPOS_CODE_MANAGEMENT_WEBHOOK" "$GLOBAL_AZURE_REPOS_CODE_MANAGEMENT_WEBHOOK" "/azdevops/webhook|/azure-repos/webhook" "$expected_host"
-            validate_webhook_url "Forgejo" "API_FORGEJO_CODE_MANAGEMENT_WEBHOOK" "$API_FORGEJO_CODE_MANAGEMENT_WEBHOOK" "/forgejo/webhook" "$expected_host"
-            if [ ${#webhook_mismatch_labels[@]} -gt 0 ]; then
-                mismatch_hosts=$(IFS=,; echo "${webhook_mismatch_hosts[*]}" | sed 's/,/, /g')
-                mismatch_labels=$(IFS=,; echo "${webhook_mismatch_labels[*]}" | sed 's/,/, /g')
-                warnings=$((warnings + 1))
-                doctor_add unknown infra "" \
-                    "Git webhook URLs point to ${mismatch_hosts}, not WEB_HOSTNAME_API (${expected_host}): ${mismatch_labels}." \
-                    "" \
-                    "Nothing to do if your Git provider reaches that host (a tunnel or reverse proxy in front of the webhooks service). Otherwise use https://${expected_host}/<provider>/webhook."
-            fi
-        fi
+        validate_webhook_url "GitHub" "API_GITHUB_CODE_MANAGEMENT_WEBHOOK" "$API_GITHUB_CODE_MANAGEMENT_WEBHOOK" "/github/webhook"
+        validate_webhook_url "GitLab" "API_GITLAB_CODE_MANAGEMENT_WEBHOOK" "$API_GITLAB_CODE_MANAGEMENT_WEBHOOK" "/gitlab/webhook"
+        validate_webhook_url "Bitbucket" "GLOBAL_BITBUCKET_CODE_MANAGEMENT_WEBHOOK" "$GLOBAL_BITBUCKET_CODE_MANAGEMENT_WEBHOOK" "/bitbucket/webhook"
+        validate_webhook_url "Azure Repos" "GLOBAL_AZURE_REPOS_CODE_MANAGEMENT_WEBHOOK" "$GLOBAL_AZURE_REPOS_CODE_MANAGEMENT_WEBHOOK" "/azdevops/webhook|/azure-repos/webhook"
+        validate_webhook_url "Forgejo" "API_FORGEJO_CODE_MANAGEMENT_WEBHOOK" "$API_FORGEJO_CODE_MANAGEMENT_WEBHOOK" "/forgejo/webhook"
     fi
 
     if [ "$api_mcp_enabled" = "true" ]; then
@@ -721,6 +686,69 @@ done
 
 if [ "$api_mcp_enabled" = "true" ]; then
     http_check_optional "kodus-mcp-manager" "http://localhost:${mcp_manager_port}/health"
+fi
+
+# The web's server calls the api for sign-in and every page. Ask the web
+# container itself, so its own env, DNS and networks are what is tested, and
+# resolve the address exactly as pathToApiUrl/createUrl do
+# (apps/web/src/core/utils/helpers.ts): WEB_HOSTNAME_API, where `localhost`
+# means GLOBAL_API_CONTAINER_NAME (default kodus_api), a scheme in it is kept,
+# and WEB_PORT_API. Any HTTP answer means the api is reachable; its health is
+# checked on its own. Prints: url, host, 1 if localhost was mapped, result.
+WEB_API_PROBE_JS=$(cat <<'JS'
+const e = process.env;
+let host = e.WEB_HOSTNAME_API || "";
+let mapped = 0;
+if (host === "localhost") { host = e.GLOBAL_API_CONTAINER_NAME || "kodus_api"; mapped = 1; }
+let scheme = "";
+if (host.startsWith("http://")) { scheme = "http"; host = host.slice(7); }
+else if (host.startsWith("https://")) { scheme = "https"; host = host.slice(8); }
+const port = e.WEB_PORT_API || "";
+let base;
+if (port) base = (scheme || "http") + "://" + host + ":" + port;
+else if (scheme) base = scheme + "://" + host;
+else if (e.WEB_NODE_ENV === "production" || (e.WEB_NODE_ENV === "self-hosted" && host !== "localhost")) base = "https://" + host;
+else base = "http://" + host;
+const url = base + "/health/simple";
+const out = (r) => console.log([url, host, mapped, r].join("\t"));
+fetch(url, { signal: AbortSignal.timeout(8000), redirect: "manual" })
+  .then((res) => out(res.status))
+  .catch((err) => out("ERR:" + ((err && err.cause && err.cause.code) || (err && err.name) || "error")));
+JS
+)
+
+if [ -z "$WEB_HOSTNAME_API" ] || is_down kodus-web || [ -z "$($DOCKER_COMPOSE ps -q kodus-web 2>/dev/null)" ]; then
+    echo -e "${YELLOW}NOTE${NC} Skipping the web-to-api check (kodus-web not running, or WEB_HOSTNAME_API empty; reported above)."
+else
+    probe=$($DOCKER_COMPOSE exec -T kodus-web node -e "$WEB_API_PROBE_JS" 2>/dev/null | tail -1)
+    echo "web -> api: $probe"
+    IFS=$'\t' read -r probe_url probe_host probe_mapped probe_result <<< "$probe"
+    api_cname=$(docker inspect -f '{{.Name}}' "$($DOCKER_COMPOSE ps -q api 2>/dev/null | head -1)" 2>/dev/null)
+    api_cname=${api_cname#/}
+    case "$probe_result" in
+        [0-9]*)
+            ok "The web reaches the api at ${probe_url} (HTTP ${probe_result})."
+            ;;
+        ERR:TimeoutError|ERR:AbortError|ERR:UND_ERR_CONNECT_TIMEOUT|ERR:UND_ERR_HEADERS_TIMEOUT)
+            warnings=$((warnings + 1))
+            doctor_add unknown infra "" "The web's call to the api at ${probe_url} timed out." "" \
+                "Check that the api is up ('$DOCKER_COMPOSE logs --tail 200 api'), then run this again."
+            ;;
+        ERR:*)
+            if [ "$probe_mapped" = "1" ] && [ -n "$api_cname" ] && [ "$probe_host" != "$api_cname" ] && [ "$probe_host" != "api" ]; then
+                web_api_fix="With WEB_HOSTNAME_API=localhost the web calls the api container by GLOBAL_API_CONTAINER_NAME ('${probe_host}'), but the api container is named '${api_cname}'. Set GLOBAL_API_CONTAINER_NAME=${probe_host} in .env and run '$DOCKER_COMPOSE up -d' (it recreates the api under that name)."
+            else
+                web_api_fix="Set WEB_HOSTNAME_API=localhost and WEB_PORT_API=3001 in .env (the web then calls the api container directly), and run '$DOCKER_COMPOSE up -d kodus-web'."
+            fi
+            err "The web cannot reach the api at ${probe_url} (${probe_result#ERR:})." \
+                "Nobody can sign in, and every page fails." "$web_api_fix"
+            ;;
+        *)
+            warnings=$((warnings + 1))
+            doctor_add unknown infra "" "Could not check whether the web reaches the api." "" \
+                "Run '$DOCKER_COMPOSE exec kodus-web node -v' to see that the web container answers, then run this again."
+            ;;
+    esac
 fi
 
 section "Database structure checks"

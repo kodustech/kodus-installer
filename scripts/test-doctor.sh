@@ -46,6 +46,7 @@ case "$1" in
     fmt=$3; svc=${4#id-}
     var="STUB_STATE_$(printf '%s' "$svc" | tr -- '-' '_')"
     case "$fmt" in
+      '{{.Name}}') echo "/${STUB_API_CNAME:-kodus_api}" ;;
       *ExitCode*) echo "${!var:-running|0|healthy}" ;;
       *Health*) echo "healthy" ;;
       *) echo "running" ;;
@@ -75,6 +76,9 @@ case "$1" in
           *) echo 1 ;;
         esac ;;
       db_kodus_mongodb) exit 0 ;;
+      kodus-web)
+        # node -e <probe>: url, host, 1 if localhost was mapped, HTTP status or ERR:<code>
+        printf '%b\n' "${STUB_WEB_PROBE:-http://kodus_api:3001/health/simple\tkodus_api\t1\t200}" ;;
       rabbitmq)
         case "$*" in
           *check_alarms*)
@@ -195,18 +199,35 @@ check "legacy infra check still fails the run" 1 "Reviews: NOT RUNNING" STUB_APP
 EXTRA_NEEDLES=("✘ .env has missing or invalid variables.")
 check "env schema failure is reported" 1 "Reviews: NOT RUNNING" STUB_APP_TSV="$APP_OK" STUB_VALIDATE_ENV_RC=1
 
-# A tunnel or reverse proxy in front of the webhooks service is a valid setup:
-# a webhook host other than WEB_HOSTNAME_API cannot be verified from here, it is
-# not a failure, and it is one cause, so one line (#2021).
+# A tunnel or reverse proxy in front of the webhooks service is a valid setup,
+# and WEB_HOSTNAME_API (how the web reaches the api) is not where webhooks go:
+# a webhook host other than WEB_HOSTNAME_API is not reported at all.
 cp "$WORK/install/.env" "$WORK/env.orig"
 cat >> "$WORK/install/.env" <<'EOF'
 API_GITHUB_CODE_MANAGEMENT_WEBHOOK=https://hooks.tunnel.example/github/webhook
 API_GITLAB_CODE_MANAGEMENT_WEBHOOK=https://hooks.tunnel.example/gitlab/webhook
 EOF
-EXTRA_NEEDLES=("? Git webhook URLs point to hooks.tunnel.example, not WEB_HOSTNAME_API (api.example.com): GitHub, GitLab." "Fix:")
-ABSENT_NEEDLES=("✘ API_GITHUB_CODE_MANAGEMENT_WEBHOOK" "host must match WEB_HOSTNAME_API")
-check "webhook behind a tunnel: one ? line, verdict stays OK" 0 "Reviews: OK" STUB_APP_TSV="$APP_OK"
+ABSENT_NEEDLES=("✘ API_GITHUB_CODE_MANAGEMENT_WEBHOOK" "WEB_HOSTNAME_API" "? Git webhook URLs point to")
+check "webhook behind a tunnel: nothing reported, verdict OK" 0 "Reviews: OK" STUB_APP_TSV="$APP_OK"
 cp "$WORK/env.orig" "$WORK/install/.env"
+
+# WEB_HOSTNAME_API=localhost is the documented default (the web maps it to the
+# api container): no line about it.
+sed -i.bak 's/^WEB_HOSTNAME_API=.*/WEB_HOSTNAME_API=localhost/' "$WORK/install/.env" && rm -f "$WORK/install/.env.bak"
+ABSENT_NEEDLES=("localhost;" "WEB_HOSTNAME_API is localhost" "? Git webhook URLs point to")
+EXTRA_NEEDLES=("✔ The web reaches the api at http://kodus_api:3001/health/simple (HTTP 200).")
+check "WEB_HOSTNAME_API=localhost: no warning, web reaches the api" 0 "Reviews: OK" STUB_APP_TSV="$APP_OK" DOCTOR_TEST_VERBOSE=1
+# The web maps localhost to GLOBAL_API_CONTAINER_NAME (default kodus_api); a
+# .env without it names the api container kodus-api, and the web finds nothing.
+EXTRA_NEEDLES=("✘ The web cannot reach the api at http://kodus_api:3001/health/simple (ENOTFOUND)." "Impact: Nobody can sign in" "the api container is named 'kodus-api'" "GLOBAL_API_CONTAINER_NAME=kodus_api")
+check "web cannot reach the api (container name mismatch): ✘" 1 "Reviews: NOT RUNNING" STUB_APP_TSV="$APP_OK" STUB_API_CNAME=kodus-api 'STUB_WEB_PROBE=http://kodus_api:3001/health/simple\tkodus_api\t1\tERR:ENOTFOUND'
+cp "$WORK/env.orig" "$WORK/install/.env"
+EXTRA_NEEDLES=("✘ The web cannot reach the api at http://api.example.com:3001/health/simple (ECONNREFUSED)." "Set WEB_HOSTNAME_API=localhost and WEB_PORT_API=3001")
+check "web cannot reach the api: ✘" 1 "Reviews: NOT RUNNING" STUB_APP_TSV="$APP_OK" 'STUB_WEB_PROBE=http://api.example.com:3001/health/simple\tapi.example.com\t0\tERR:ECONNREFUSED'
+EXTRA_NEEDLES=("? The web's call to the api at http://api.example.com:3001/health/simple timed out.")
+check "web-to-api timeout: ?, not ✘" 0 "Reviews: OK" STUB_APP_TSV="$APP_OK" 'STUB_WEB_PROBE=http://api.example.com:3001/health/simple\tapi.example.com\t0\tERR:TimeoutError'
+EXTRA_NEEDLES=("? Could not check whether the web reaches the api.")
+check "web-to-api probe gives no answer: ?" 0 "Reviews: OK" STUB_APP_TSV="$APP_OK" 'STUB_WEB_PROBE=OCI runtime exec failed'
 
 # A stopped bundled broker stops every review: one ✘ for it, and nothing else
 # repeats it or calls the bundled broker external (#2021).
