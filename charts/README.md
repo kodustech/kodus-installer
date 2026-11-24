@@ -403,8 +403,11 @@ registries. Notes:
 ```
 
 Checks the Helm release, migration Job, workloads, pods, config/secrets (incl.
-that `API_CRYPTO_KEY` is valid hex), PVCs, and the real health endpoints
-(`/health`, `/health/ready`, …).
+that `API_CRYPTO_KEY` is valid hex), PVCs, RabbitMQ resource alarms, and the real
+health endpoints (`/health`, `/health/ready`, …), probed from inside each pod with
+`kubectl exec`. Its first line is the verdict: `Reviews: NOT RUNNING` (exit 1),
+`COULD NOT VERIFY` (exit 2: the review checks inside the api did not answer),
+`RUNNING, DEGRADED` or `OK` (exit 0).
 
 ## Troubleshooting
 
