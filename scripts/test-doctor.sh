@@ -377,10 +377,41 @@ echo "API_RABBITMQ_URI=amqp://kodus:kodus@[::1]:5672/kodus-ai" >> "$WORK/install
 EXTRA_NEEDLES=("i RabbitMQ is external (API_RABBITMQ_URI host ::1)")
 check "IPv6 broker URI: host parsed with its brackets" 0 "Reviews: OK" STUB_APP_TSV="$APP_OK"
 cp "$WORK/env.orig" "$WORK/install/.env"
+# An @ after the host reads two ways: an unencoded / in a generated password
+# (common) or an @ in the vhost (rare). One ? that is right either way, and the
+# bundled broker keeps its checks when either reading names it.
 echo "API_RABBITMQ_URI=amqp://kodus:pa/ss@rabbitmq:5672/kodus-ai" >> "$WORK/install/.env"
-EXTRA_NEEDLES=("? API_RABBITMQ_URI has a / ? or # in its user name or password that is not encoded." "reads the broker host as 'kodus'")
+EXTRA_NEEDLES=("? API_RABBITMQ_URI has an @ after its host, so it can be read two ways." "write any / ? # in them as %2F %3F %23" "the app connects to 'kodus'" "✔ The message queue lets jobs run up to 120 minutes.")
 ABSENT_NEEDLES=("RabbitMQ is external")
-check "unencoded / in the broker password: ?, bundled broker still checked" 0 "Reviews: OK" STUB_APP_TSV="$APP_OK"
+check "unencoded / in the broker password: ?, bundled broker still checked" 0 "Reviews: OK" STUB_APP_TSV="$APP_OK" DOCTOR_TEST_VERBOSE=1
+cp "$WORK/env.orig" "$WORK/install/.env"
+echo "API_RABBITMQ_URI=amqp://rabbitmq:5672/kodus@ai" >> "$WORK/install/.env"
+EXTRA_NEEDLES=("? API_RABBITMQ_URI has an @ after its host, so it can be read two ways." "write it as %40" "the app connects to 'rabbitmq'" "✔ The message queue lets jobs run up to 120 minutes.")
+ABSENT_NEEDLES=("RabbitMQ is external" "host ai")
+check "@ in the vhost: ?, the bundled broker is not called external" 0 "Reviews: OK" STUB_APP_TSV="$APP_OK" DOCTOR_TEST_VERBOSE=1
+cp "$WORK/env.orig" "$WORK/install/.env"
+# An @ inside the password itself: the driver dials 'ss'; the bundled broker is still checked.
+echo "API_RABBITMQ_URI=amqp://kodus:p@ss/word@rabbitmq:5672/kodus-ai" >> "$WORK/install/.env"
+EXTRA_NEEDLES=("? API_RABBITMQ_URI has an @ after its host, so it can be read two ways." "the app connects to 'ss'" "✔ The message queue lets jobs run up to 120 minutes.")
+ABSENT_NEEDLES=("RabbitMQ is external")
+check "@ and / in the broker password: ?, bundled broker still checked" 0 "Reviews: OK" STUB_APP_TSV="$APP_OK" DOCTOR_TEST_VERBOSE=1
+cp "$WORK/env.orig" "$WORK/install/.env"
+# A well-formed external URI is still external, with no ? about it.
+echo "API_RABBITMQ_URI=amqps://kodus:secret@broker.internal:5671/kodus-ai" >> "$WORK/install/.env"
+EXTRA_NEEDLES=("i RabbitMQ is external (API_RABBITMQ_URI host broker.internal)")
+ABSENT_NEEDLES=("read two ways")
+check "well-formed external broker URI: external, no ?" 0 "Reviews: OK" STUB_APP_TSV="$APP_OK"
+cp "$WORK/env.orig" "$WORK/install/.env"
+
+# The scheme is case-insensitive, and so is the host the doctor reads.
+echo "API_GITHUB_CODE_MANAGEMENT_WEBHOOK=HTTPS://" >> "$WORK/install/.env"
+EXTRA_NEEDLES=("✘ API_GITHUB_CODE_MANAGEMENT_WEBHOOK (GitHub) must include a valid host.")
+check "HTTPS:// with no host: ✘ no valid host" 1 "Reviews: NOT RUNNING" STUB_APP_TSV="$APP_OK"
+cp "$WORK/env.orig" "$WORK/install/.env"
+echo "API_GITHUB_CODE_MANAGEMENT_WEBHOOK=HTTPS://Hooks.Example.com/hooks" >> "$WORK/install/.env"
+EXTRA_NEEDLES=("(example: https://hooks.example.com/github/webhook)")
+ABSENT_NEEDLES=("https://HTTPS/" "must include a valid host")
+check "HTTPS:// with a wrong path: the example names the real host" 1 "Reviews: NOT RUNNING" STUB_APP_TSV="$APP_OK"
 cp "$WORK/env.orig" "$WORK/install/.env"
 
 # http works for a Git server on the same network, and the app does not require https.
@@ -576,6 +607,24 @@ kcheck "webhooks: http is ?, localhost is ✘ in prod, every provider checked" 1
     K_CM_API_GITLAB_CODE_MANAGEMENT_WEBHOOK=http://gitlab-hooks.internal/gitlab/webhook \
     K_CM_GLOBAL_BITBUCKET_CODE_MANAGEMENT_WEBHOOK=https://localhost/bitbucket/webhook \
     K_CM_API_FORGEJO_CODE_MANAGEMENT_WEBHOOK=https://hooks.example.com/forgejo/webhook
+EXTRA_NEEDLES=("✘ API_GITHUB_CODE_MANAGEMENT_WEBHOOK points at localhost" "✘ GLOBAL_BITBUCKET_CODE_MANAGEMENT_WEBHOOK points at localhost" "✔ Forgejo webhook: https://[2001:db8::1]/forgejo/webhook")
+kcheck "webhooks: a mapped IPv6 loopback is loopback, a real IPv6 host is not" 1 "Reviews: NOT RUNNING" K_APP_TSV="$APP_OK" DOCTOR_TEST_VERBOSE=1 \
+    "K_CM_API_GITHUB_CODE_MANAGEMENT_WEBHOOK=https://[::ffff:127.0.0.1]/github/webhook" \
+    "K_CM_GLOBAL_BITBUCKET_CODE_MANAGEMENT_WEBHOOK=https://[0:0:0:0:0:0:0:1]:3332/bitbucket/webhook" \
+    "K_CM_API_FORGEJO_CODE_MANAGEMENT_WEBHOOK=https://[2001:db8::1]/forgejo/webhook"
+# Every spelling URL parsers accept for this machine, and look-alikes that are not.
+loop_bad=""
+for h in localhost a.localhost 127.0.0.1 127.1 0177.0.0.1 0x7f.1 2130706433 0 0.0.0.0 ::1 :: 0:0:0:0:0:0:0:1 0000::0001 ::ffff:127.0.0.1 ::ffff:7f00:1 ::127.0.0.1 ::1%lo; do
+    (. "$ROOT/scripts/doctor-lib.sh"; rm -f "$DOCTOR_RESULTS" "$DOCTOR_DETAIL"; doctor_is_loopback_host "$h") || loop_bad+=" $h(missed)"
+done
+for h in example.com localhost.example.com 127.example.com 10.0.0.1 128.0.0.1 2001:db8::1 ::ffff:10.0.0.1 ::2 1::1 0x80000001 fe80::1%eth0 ::ffff:300.1.1.1; do
+    (. "$ROOT/scripts/doctor-lib.sh"; rm -f "$DOCTOR_RESULTS" "$DOCTOR_DETAIL"; doctor_is_loopback_host "$h") && loop_bad+=" $h(false)"
+done
+if [ -z "$loop_bad" ]; then
+    pass=$((pass + 1)); echo "ok   loopback hosts: IPv4/IPv6 spellings, mapped addresses, no look-alikes"
+else
+    fail=$((fail + 1)); echo "FAIL loopback hosts:$loop_bad"
+fi
 EXTRA_NEEDLES=("✘ API_GITHUB_CODE_MANAGEMENT_WEBHOOK points at localhost" "✔ GitLab webhook: https://localhost.example.com/gitlab/webhook")
 kcheck "webhooks: LOCALHOST is loopback, localhost.example.com is not" 1 "Reviews: NOT RUNNING" K_APP_TSV="$APP_OK" DOCTOR_TEST_VERBOSE=1 \
     K_CM_API_GITHUB_CODE_MANAGEMENT_WEBHOOK=HTTPS://LOCALHOST/github/webhook \

@@ -55,15 +55,6 @@ normalize_bool() {
     esac
 }
 
-normalize_host() {
-    local host=$1
-    host="${host#http://}"
-    host="${host#https://}"
-    host="${host%%/*}"
-    host="${host%%:*}"
-    printf '%s' "$host"
-}
-
 extract_url_path() {
     local url=$1
     local without_scheme="${url#*://}"
@@ -105,8 +96,10 @@ validate_webhook_url() {
 
     # WEB_HOSTNAME_API is how the web reaches the api, not where Git providers
     # send webhooks (the webhooks service), so the two hosts are not compared.
+    # Parsed as URL parsers do (doctor-lib.sh): the scheme is case-insensitive,
+    # so HTTPS://host/... has a host, and HTTPS:// alone has none.
     local host
-    host=$(normalize_host "$url")
+    host=$(doctor_url_host "$url")
     if [ -z "$host" ]; then
         err "${var_name} (${label}) must include a valid host."
     fi
@@ -290,14 +283,14 @@ if [ "$env_loaded" = true ]; then
     fi
 
     if [ -n "$NEXTAUTH_URL" ]; then
-        case "$NEXTAUTH_URL" in
-            http://*|https://*)
+        case "$(printf '%s' "${NEXTAUTH_URL%%://*}" | tr '[:upper:]' '[:lower:]')://" in
+            http://|https://)
                 ;;
             *)
                 err "NEXTAUTH_URL must include http:// or https:// and be a full URL (e.g. https://kodus-web.yourdomain.com)."
                 ;;
         esac
-        nextauth_host=$(normalize_host "$NEXTAUTH_URL")
+        nextauth_host=$(doctor_url_host "$NEXTAUTH_URL")
         if [ -z "$nextauth_host" ]; then
             err "NEXTAUTH_URL must include a valid host."
         fi
@@ -574,29 +567,33 @@ fi
 if [ "$use_local_rabbitmq" != "true" ]; then
     rabbit_source="USE_LOCAL_RABBITMQ=false"
 elif [ -n "${API_RABBITMQ_URI:-}" ]; then
-    # Parsed as the driver parses it (doctor_url_host). A / ? or # left
-    # unencoded in the user or password ends the host early, so the driver
-    # dials the wrong host: say so, and judge the host that was meant.
+    # The driver reads the host as doctor_url_host does: the authority ends at
+    # the first / ? or #. An @ after that point can be read two ways, and the
+    # text cannot tell which: a generated (base64) password with an unencoded
+    # / (kodus:pa/ss@rabbitmq:5672/kodus-ai, common) or an @ in the vhost
+    # (rabbitmq:5672/kodus@ai, rare). So, failing safe: one ? line that is
+    # right either way (encode it), and the broker counts as the bundled one if
+    # either reading names it, so its checks are not skipped on a guess.
     rabbit_rest=${API_RABBITMQ_URI#*://}
     rabbit_authority=${rabbit_rest%%[/?#]*}
     rabbit_host=$(doctor_url_host "$API_RABBITMQ_URI")
-    case "$rabbit_authority" in
-        *@*) ;;
-        *)
-            case "${rabbit_rest#"$rabbit_authority"}" in
-                *@*)
-                    warnings=$((warnings + 1))
-                    doctor_add unknown infra "" \
-                        "API_RABBITMQ_URI has a / ? or # in its user name or password that is not encoded." "" \
-                        "Write / as %2F, ? as %3F and # as %23 in that part: as written, the app reads the broker host as '${rabbit_host}' and cannot connect."
-                    rabbit_host=$(doctor_url_host "amqp://${rabbit_rest##*@}")
-                    ;;
-            esac ;;
+    rabbit_hosts=$rabbit_host
+    case "${rabbit_rest#"$rabbit_authority"}" in
+        *@*)
+            warnings=$((warnings + 1))
+            doctor_add unknown infra "" \
+                "API_RABBITMQ_URI has an @ after its host, so it can be read two ways." "" \
+                "If the @ ends the user name and password, write any / ? # in them as %2F %3F %23; if it is part of the vhost, write it as %40. As written, the app connects to '${rabbit_host}'."
+            rabbit_hosts="$rabbit_host $(doctor_url_host "amqp://${rabbit_rest##*@}")"
+            ;;
     esac
-    case "$rabbit_host" in
-        rabbitmq|rabbitmq-prod|"$(printf '%s' "${RABBITMQ_HOSTNAME:-rabbitmq}" | tr '[:upper:]' '[:lower:]')") ;;
-        *) rabbit_source="API_RABBITMQ_URI host ${rabbit_host}" ;;
-    esac
+    rabbit_bundled=""
+    for h in $rabbit_hosts; do
+        case "$h" in
+            rabbitmq|rabbitmq-prod|"$(printf '%s' "${RABBITMQ_HOSTNAME:-rabbitmq}" | tr '[:upper:]' '[:lower:]')") rabbit_bundled=1 ;;
+        esac
+    done
+    [ -n "$rabbit_bundled" ] || rabbit_source="API_RABBITMQ_URI host ${rabbit_host}"
 fi
 [ -n "$pg_source" ] && note "Postgres is external (${pg_source}): the review checks test it from inside the api, with the app's own settings."
 [ -n "$mongo_source" ] && note "MongoDB is external (${mongo_source}): the review checks test it from inside the api, with the app's own settings."

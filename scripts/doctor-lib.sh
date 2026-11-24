@@ -90,10 +90,97 @@ doctor_url_host() {
 }
 
 # A host that only ever means "this machine": unreachable from a Git provider.
+# Takes a host from doctor_url_host. Every spelling URL parsers accept counts:
+# 127.0.0.1, 127.1, 0177.0.0.1, 0x7f.1, 2130706433, 0, ::1, 0:0:0:0:0:0:0:1,
+# ::ffff:127.0.0.1, ::ffff:7f00:1, and the unspecified 0.0.0.0 / ::.
 doctor_is_loopback_host() {
-    case "$1" in
-        localhost|*.localhost|127.*|0.0.0.0|::1|::) return 0 ;;
+    local h=${1%%\%*}  # an IPv6 zone (%eth0) does not change the address
+    case "$h" in
+        localhost|*.localhost) return 0 ;;
+        *:*) _doctor_ipv6_is_loopback "$h"; return ;;
     esac
+    _doctor_ipv4_is_loopback "$h"
+}
+
+# Value of one IPv4 part as URL parsers read it (0x.. hex, 0.. octal), or
+# nothing when it is not a number (then the host is a name).
+_doctor_ipv4_part() {
+    case "$1" in
+        0[xX]) echo 0 ;;
+        0[xX]*) case "${1#0[xX]}" in *[!0-9a-fA-F]*) ;; *) [ ${#1} -le 10 ] && echo $((16#${1#0[xX]})) ;; esac ;;
+        0*) case "$1" in *[!0-7]*) ;; *) [ ${#1} -le 12 ] && echo $((8#$1)) ;; esac ;;
+        [1-9]*) case "$1" in *[!0-9]*) ;; *) [ ${#1} -le 10 ] && echo $((10#$1)) ;; esac ;;
+    esac
+}
+
+_doctor_ipv4_is_loopback() {
+    local part first="" all_zero=1 count=0 v
+    local IFS=.
+    for part in $1; do
+        v=$(_doctor_ipv4_part "$part")
+        [ -n "$v" ] || return 1
+        count=$((count + 1))
+        [ -n "$first" ] || first=$v
+        [ "$v" -eq 0 ] || all_zero=0
+    done
+    [ "$count" -ge 1 ] && [ "$count" -le 4 ] || return 1
+    [ "$all_zero" = 1 ] && return 0          # 0.0.0.0, 0
+    # One part is the whole address; with more, the first part is the first octet.
+    [ "$count" -eq 1 ] && first=$((first >> 24))
+    [ "$first" -eq 127 ]
+}
+
+# a.b.c.d -> the two hex groups it occupies in an IPv6 address, or fails.
+_doctor_v4_hex_groups() {
+    local IFS=. g
+    # shellcheck disable=SC2086 # split on the dots on purpose
+    set -- $1
+    [ $# -eq 4 ] || return 1
+    for g in "$@"; do
+        case "$g" in ""|*[!0-9]*) return 1 ;; esac
+        [ ${#g} -le 3 ] && [ "$((10#$g))" -le 255 ] || return 1
+    done
+    printf '%x:%x' $((10#$1 * 256 + 10#$2)) $((10#$3 * 256 + 10#$4))
+}
+
+_doctor_ipv6_is_loopback() {
+    local a=$1 tail v4 left right n i g zeros
+    local -a parts groups
+    # An IPv4 tail (::ffff:127.0.0.1) becomes its two hex groups.
+    tail=${a##*:}
+    case "$tail" in
+        *.*)
+            v4=$(_doctor_v4_hex_groups "$tail") || return 1
+            a="${a%:*}:$v4" ;;
+    esac
+    case "$a" in
+        *::*::*) return 1 ;;
+        *::*)
+            left=${a%%::*}; right=${a#*::}
+            n=0
+            [ -n "$left" ] && n=$((n + $(printf '%s' "$left" | tr -cd ':' | wc -c) + 1))
+            [ -n "$right" ] && n=$((n + $(printf '%s' "$right" | tr -cd ':' | wc -c) + 1))
+            [ "$n" -le 7 ] || return 1
+            zeros=""
+            for ((i = n; i < 8; i++)); do zeros="${zeros:+$zeros:}0"; done
+            a="${left:+$left:}${zeros}${right:+:$right}" ;;
+    esac
+    IFS=: read -r -a parts <<< "$a"
+    [ "${#parts[@]}" -eq 8 ] || return 1
+    for g in "${parts[@]}"; do
+        case "$g" in ""|*[!0-9a-f]*) return 1 ;; esac
+        [ ${#g} -le 4 ] || return 1
+        groups+=($((16#$g)))
+    done
+    for ((i = 0; i < 5; i++)); do [ "${groups[$i]}" -eq 0 ] || return 1; done
+    if [ "${groups[5]}" -eq 0 ] && [ "${groups[6]}" -eq 0 ]; then
+        [ "${groups[7]}" -le 1 ] && return 0       # ::1 and ::
+    fi
+    # IPv4-mapped (::ffff:127.x.y.z) or IPv4-compatible (::127.x.y.z).
+    if [ "${groups[5]}" -eq 65535 ] || [ "${groups[5]}" -eq 0 ]; then
+        [ $((groups[6] >> 8)) -eq 127 ] && return 0
+        [ "${groups[6]}" -eq 0 ] && [ "${groups[7]}" -eq 0 ] && [ "${groups[5]}" -eq 65535 ] && return 0  # ::ffff:0.0.0.0
+    fi
     return 1
 }
 
