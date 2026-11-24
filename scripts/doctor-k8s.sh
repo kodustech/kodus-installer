@@ -115,7 +115,15 @@ if [ -n "$JOB" ]; then
     bad "migration job '$JOB' has not succeeded — check: $K logs job/$JOB"
   fi
 else
-  warn "no migration job found (ttl-cleaned, or migrations.enabled=false)"
+  # The Job deletes itself 10 minutes after it finishes (ttlSecondsAfterFinished),
+  # so on any install older than that there is nothing to find. A ready api
+  # means the release is up; the review checks read the database itself.
+  API_READY=$($K get deploy "${RELEASE}-api" -o jsonpath='{.status.readyReplicas}' 2>/dev/null)
+  if [ "${API_READY:-0}" -ge 1 ] 2>/dev/null; then
+    echo "  ‣ no migration job left (cleaned up 10 minutes after it finished); the api is ready"
+  else
+    warn "no migration job found and the api is not ready (migrations.enabled=false, or the job was cleaned up) — check: $K logs -l app.kubernetes.io/name=migrations --tail=-1"
+  fi
 fi
 
 # --- Workloads ---
@@ -293,6 +301,7 @@ if [ -z "$any_webhook" ]; then
 fi
 NEXTA=$($K get configmap "$CM" -o jsonpath='{.data.NEXTAUTH_URL}' 2>/dev/null)
 case "$NEXTA" in
+  "") warn "NEXTAUTH_URL is empty — sign-in still works (the web trusts the request's host), but connecting GitHub through the Kodus GitHub App cannot send you back to Kodus. Set global.config.NEXTAUTH_URL to the web's public URL (https://...) and run helm upgrade" ;;
   https://*) ok "NEXTAUTH_URL is https" ;;
   *localhost*|http://*) warn "NEXTAUTH_URL is http/localhost ($NEXTA) — fine for local trials, must be public HTTPS in production" ;;
 esac
@@ -341,28 +350,45 @@ else
   done <<< "$PDBS"
 fi
 
-# --- HTTP health endpoints (via port-forward) ---
+# --- HTTP health endpoints (from inside each pod) ---
+# kubectl exec, not port-forward: a port-forward needs its own permission, a free
+# local port and a guessed wait (it was `sleep 3`), so a forbidden or slow one
+# read as a dead service. The pod asks itself, at its hostname (the pod IP:
+# Next.js may bind that instead of 127.0.0.1), on the port its Deployment
+# declares. A probe that cannot run, or times out, is ?, not ✘.
 section "Service health endpoints"
+# shellcheck disable=SC2016 # JavaScript, not shell
+PROBE_JS='const [, port, path] = process.argv;
+fetch(`http://${require("os").hostname()}:${port}${path}`, { signal: AbortSignal.timeout(8000), redirect: "manual" })
+  .then((r) => console.log(r.status))
+  .catch((e) => console.log("ERR:" + ((e && e.cause && e.cause.code) || (e && e.name) || "error")));'
 probe() {
-  local svc=$1 port=$2 path=$3 label=$4
-  if ! $K get svc "$svc" >/dev/null 2>&1; then warn "$label: service $svc not present (disabled?)"; return; fi
-  local lport=$(( (RANDOM % 10000) + 20000 ))
-  kubectl -n "$NAMESPACE" port-forward "svc/$svc" "$lport:$port" >/dev/null 2>&1 &
-  local pf=$!
-  sleep 3
-  local code
-  code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "http://127.0.0.1:${lport}${path}" 2>/dev/null)
-  kill "$pf" >/dev/null 2>&1; wait "$pf" 2>/dev/null
-  if echo "$code" | grep -qE '^(2|3)[0-9][0-9]$'; then ok "$label ${path} → HTTP $code"; else bad "$label ${path} → HTTP ${code:-no-response}"; fi
+  local svc=$1 path=$2 label=$3 impact=$4 soft=${5:-}
+  local deploy="${RELEASE}-${svc}" port out
+  # mcp-manager down degrades reviews (no MCP tools); the rest stop them.
+  down() {
+    if [ -n "$soft" ]; then
+      echo -e "  ${YELLOW}!${NC} $1"; doctor_add warn infra "" "$1" "$impact" "Check its logs: $K logs deploy/$deploy --tail=200"
+    else
+      bad "$1" "$impact" "Check its logs: $K logs deploy/$deploy --tail=200"
+    fi
+  }
+  if ! $K get deploy "$deploy" >/dev/null 2>&1; then warn "$label: deployment $deploy not present (disabled?)"; return; fi
+  port=$($K get deploy "$deploy" -o jsonpath='{.spec.template.spec.containers[0].ports[0].containerPort}' 2>/dev/null)
+  if [ -z "$port" ]; then warn "$label: deployment $deploy declares no container port to probe"; return; fi
+  out=$($K exec "deploy/$deploy" -c "$svc" -- node -e "$PROBE_JS" "$port" "$path" 2>&1 | tail -1)
+  case "$out" in
+    [23][0-9][0-9]) ok "$label ${path} → HTTP $out" ;;
+    [0-9][0-9][0-9]) down "$label ${path} → HTTP $out" ;;
+    ERR:TimeoutError|ERR:AbortError|ERR:UND_ERR_*TIMEOUT) warn "$label ${path} did not answer within 8s (from inside the pod)" ;;
+    ERR:E*) down "$label ${path} → not answering (${out#ERR:})" ;;
+    *) warn "couldn't probe $label ${path} from inside its pod: ${out:-no output} (exec not permitted, or no pod running?)" ;;
+  esac
 }
-if ! command -v curl >/dev/null 2>&1; then
-  warn "curl not found — skipping endpoint probes"
-else
-  probe "${RELEASE}-api"         3001 /health        "api"
-  probe "${RELEASE}-webhooks"    3332 /health/ready  "webhooks"
-  probe "${RELEASE}-mcp-manager" 3101 /health        "mcp-manager"
-  probe "${RELEASE}-web"         3000 /              "web"
-fi
+probe api         /health       "api"         "Nothing can be reviewed, and the review checks cannot run."
+probe webhooks    /health/ready "webhooks"    "Kodus is not told about new pull requests, so none is reviewed."
+probe mcp-manager /health       "mcp-manager" "Reviews run without the MCP tools your organizations connected." soft
+probe web         /api/health   "web"         "Nobody can sign in or change settings."
 
 # --- RabbitMQ resource alarms ---
 # A disk/memory alarm silently BLOCKS every publisher: webhook deliveries and

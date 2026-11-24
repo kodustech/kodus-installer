@@ -399,6 +399,149 @@ else
     fail=$((fail + 1)); echo "FAIL ordering (✘ at $l_fail, ! at $l_warn, summary at $l_pass)"
 fi
 
+# ---------------------------------------------------------------------------
+# doctor-k8s.sh against a stubbed kubectl/helm (namespace kodus, release kodus).
+# ---------------------------------------------------------------------------
+mkdir -p "$WORK/kbin"
+cp "$ROOT/scripts/doctor-k8s.sh" "$WORK/install/scripts/"
+printf '#!/usr/bin/env bash\necho '"'"'{"info":{"status":"deployed"}}'"'"'\n' > "$WORK/kbin/helm"
+cat > "$WORK/kbin/kubectl" <<'EOF'
+#!/usr/bin/env bash
+#   K_RMQ=bundled|operator|none   which RabbitMQ pod exists
+#   K_ALARM=<check_alarms output> K_OOM=<pod\tcontainer=last/current;...>
+#   K_PROBE_<svc>=<status|ERR:code> K_JOB=<name> K_API_READY=<n>
+#   K_CM_<KEY>=<configmap value>  K_EXEC_FORBIDDEN=1  K_APP_TSV=<api doctor tsv>
+[ "$1" = "-n" ] && shift 2
+case "$1" in
+  version)
+    case " $* " in *" --client "*) echo '{"clientVersion":{"gitVersion":"v1.31.0"}}' ;; *) echo '{"serverVersion":{"gitVersion":"v1.31.0"}}' ;; esac
+    exit 0 ;;
+  config) [ "$2" = current-context ] && echo kind-kodus || echo kodus; exit 0 ;;
+  get)
+    what=$2; shift 2
+    case "$what" in
+      job) if [ "$1" = -l ]; then echo "${K_JOB:-}"; else echo 1; fi ;;
+      deploy|deployment)
+        if [ "$1" = -l ]; then printf '%s\n' kodus-api kodus-worker kodus-webhooks kodus-web kodus-mcp-manager; exit 0; fi
+        case "$*" in
+          *containers*) case "$1" in kodus-api) echo 3001 ;; kodus-webhooks) echo 3332 ;; kodus-web) echo 3000 ;; kodus-mcp-manager) echo 3101 ;; esac ;;
+          *readyReplicas*) if [ "$1" = kodus-api ]; then echo "${K_API_READY-2}"; else echo 2; fi ;;
+          *spec.replicas*) echo 2 ;;
+        esac ;;
+      statefulset)
+        if [ "$1" = -l ]; then printf '%s\n' kodus-postgres kodus-mongodb kodus-rabbitmq; exit 0; fi
+        case "$*" in *image*) echo mongo:8.2.11 ;; *) echo 1 ;; esac ;;
+      pods)
+        case "$*" in
+          *deletionTimestamp*) ;;
+          *containerStatuses*) printf '%b' "${K_OOM:-}" ;;
+          *--no-headers*) printf '%s\n' "kodus-api-1 1/1 Running 0 1h" "kodus-worker-1 1/1 Running 0 1h" ;;
+        esac ;;
+      pod)
+        case "$1:${K_RMQ:-bundled}" in
+          kodus-rabbitmq-0:bundled|kodus-rabbitmq-server-0:operator) exit 0 ;;
+          *) exit 1 ;;
+        esac ;;
+      configmap)
+        case "$*" in
+          *go-template*) echo "kodus.io/chart=kodus-0.3.7" ;;
+          *jsonpath*)
+            key=$(printf '%s' "$*" | sed -n 's/.*{\.data\.\([A-Z_]*\)}.*/\1/p'); var="K_CM_$key"
+            case "$key" in
+              WEB_HOSTNAME_API) echo "${!var-kodus-api}" ;;
+              NEXTAUTH_URL) echo "${!var-https://app.example.com}" ;;
+              API_GITHUB_CODE_MANAGEMENT_WEBHOOK) echo "${!var-https://hooks.example.com/github/webhook}" ;;
+              *) echo "${!var-}" ;;
+            esac ;;
+        esac ;;
+      secret)
+        case "$*" in
+          *API_CRYPTO_KEY*) printf '%s' 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef | base64 ;;
+          *API_JWT_SECRET*) printf 'c2VjcmV0' ;;
+        esac ;;
+      pvc) echo "data-kodus-postgres-0 Bound pvc-1 10Gi RWO standard 1h" ;;
+    esac
+    exit 0 ;;
+  exec)
+    target=$2
+    if [ -n "${K_EXEC_FORBIDDEN:-}" ]; then
+      echo 'Error from server (Forbidden): pods "x" is forbidden: User "u" cannot create resource "pods/exec"'; exit 1
+    fi
+    case "$*" in
+      *check_alarms*) [ -n "${K_ALARM:-}" ] && { printf '%b\n' "$K_ALARM"; exit 69; } ;;
+      *consumer_timeout*) echo '{ok,7200000}' ;;
+      *doctor-client*) printf '%b' "${K_APP_TSV:-}" ;;
+      *"node -e"*) svc=${target#deploy/kodus-}; var="K_PROBE_$(printf '%s' "$svc" | tr -- '-' '_')"; echo "${!var:-200}" ;;
+    esac
+    exit 0 ;;
+esac
+exit 0
+EOF
+chmod +x "$WORK/kbin/"*
+
+krun() {
+    local flags=()
+    case " $* " in *" K_DEV=1 "*) flags+=(--profile dev) ;; esac
+    case " $* " in *" DOCTOR_TEST_VERBOSE=1 "*) flags+=(--verbose) ;; esac
+    (cd "$WORK/install" && env PATH="$WORK/kbin:$PATH" "$@" ./scripts/doctor-k8s.sh -n kodus -r kodus ${flags[@]+"${flags[@]}"}) 2>&1 | sed 's/\x1b\[[0-9;]*m//g'
+    return "${PIPESTATUS[0]}"
+}
+kcheck() { # same contract as check(), against doctor-k8s.sh
+    local name=$1 expect_rc=$2 expect_first=$3; shift 3
+    local out rc first ok=true
+    out=$(krun "$@"); rc=$?
+    first=$(printf '%s\n' "$out" | head -1)
+    [ "$rc" = "$expect_rc" ] || ok=false
+    [ "$first" = "$expect_first" ] || ok=false
+    for needle in ${EXTRA_NEEDLES[@]+"${EXTRA_NEEDLES[@]}"}; do
+        printf '%s' "$out" | grep -qF -- "$needle" || { ok=false; echo "    missing: $needle"; }
+    done
+    for needle in ${ABSENT_NEEDLES[@]+"${ABSENT_NEEDLES[@]}"}; do
+        printf '%s' "$out" | grep -qF -- "$needle" && { ok=false; echo "    unexpected: $needle"; }
+    done
+    if $SHOW; then echo "=== k8s: $name"; printf '%s\n' "$out" | sed 's/^/    | /'; fi
+    if $ok; then
+        pass=$((pass + 1)); echo "ok   k8s: $name"
+    else
+        fail=$((fail + 1)); echo "FAIL k8s: $name (rc=$rc, first line: $first)"
+        printf '%s\n' "$out" | sed 's/^/    | /' | head -40
+    fi
+    EXTRA_NEEDLES=(); ABSENT_NEEDLES=()
+}
+
+ABSENT_NEEDLES=("migration job")
+kcheck "healthy release: OK, no migration-job line once the Job is cleaned up" 0 "Reviews: OK" K_APP_TSV="$APP_OK"
+if krun K_APP_TSV="$APP_OK" | grep -v '^✘ reviews do not run' | grep -qE '^(✘|!|\?) '; then
+    fail=$((fail + 1)); echo "FAIL k8s: healthy release has a ✘, ! or ? line"
+else
+    pass=$((pass + 1)); echo "ok   k8s: healthy release has no ✘, ! or ? line"
+fi
+EXTRA_NEEDLES=("? no migration job found and the api is not ready")
+kcheck "no migration job and api not ready: ?" 1 "Reviews: NOT RUNNING" K_APP_TSV="$APP_OK" K_API_READY=0
+EXTRA_NEEDLES=("✘ The message queue is blocking new jobs (RabbitMQ disk alarm)." "kodus-rabbitmq-server-0")
+kcheck "alarm on the operator's RabbitMQ pod: ✘" 1 "Reviews: NOT RUNNING" K_APP_TSV="$APP_OK" K_RMQ=operator "K_ALARM=Free disk space alarm on node rabbit@kodus-rabbitmq-server-0"
+EXTRA_NEEDLES=("! Pod kodus-worker-1 (container worker) was killed for running out of memory.")
+kcheck "OOMKilled container: !" 0 "Reviews: RUNNING, DEGRADED" K_APP_TSV="$APP_OK" 'K_OOM=kodus-worker-1\tworker=OOMKilled/;\nkodus-api-1\tapi=/;\n'
+EXTRA_NEEDLES=("✘ webhooks /health/ready → not answering (ECONNREFUSED)" "Impact: Kodus is not told about new pull requests")
+kcheck "webhooks not listening (exec probe): ✘" 1 "Reviews: NOT RUNNING" K_APP_TSV="$APP_OK" K_PROBE_webhooks=ERR:ECONNREFUSED
+EXTRA_NEEDLES=("? api /health did not answer within 8s")
+kcheck "slow api probe: ?, not ✘" 0 "Reviews: OK" K_APP_TSV="$APP_OK" K_PROBE_api=ERR:TimeoutError
+EXTRA_NEEDLES=("? couldn't check RabbitMQ alarms (exec not permitted for this user)" "? couldn't probe api /health from inside its pod")
+kcheck "exec forbidden: no ✘, COULD NOT VERIFY, exit 2" 2 "Reviews: COULD NOT VERIFY" K_EXEC_FORBIDDEN=1
+EXTRA_NEEDLES=("? GitLab webhook uses http://" "✘ GLOBAL_BITBUCKET_CODE_MANAGEMENT_WEBHOOK points at localhost" "✔ Forgejo webhook: https://hooks.example.com/forgejo/webhook")
+ABSENT_NEEDLES=("✘ API_GITLAB")
+kcheck "webhooks: http is ?, localhost is ✘ in prod, every provider checked" 1 "Reviews: NOT RUNNING" K_APP_TSV="$APP_OK" DOCTOR_TEST_VERBOSE=1 \
+    K_CM_API_GITLAB_CODE_MANAGEMENT_WEBHOOK=http://gitlab-hooks.internal/gitlab/webhook \
+    K_CM_GLOBAL_BITBUCKET_CODE_MANAGEMENT_WEBHOOK=https://localhost/bitbucket/webhook \
+    K_CM_API_FORGEJO_CODE_MANAGEMENT_WEBHOOK=https://hooks.example.com/forgejo/webhook
+EXTRA_NEEDLES=("? NEXTAUTH_URL is empty")
+kcheck "empty NEXTAUTH_URL: a line" 0 "Reviews: OK" K_APP_TSV="$APP_OK" K_CM_NEXTAUTH_URL=
+APP_UNVERIFIED='#verdict\tUNVERIFIED\n#version\t2.4.0\n'
+kcheck "api says UNVERIFIED: COULD NOT VERIFY, exit 2" 2 "Reviews: COULD NOT VERIFY" K_APP_TSV="$APP_UNVERIFIED"
+# --profile dev: the api's own answers stay out of the exit code (a fresh CI install).
+kcheck "--profile dev: api UNVERIFIED does not fail the run" 0 "Reviews: COULD NOT VERIFY" K_APP_TSV="$APP_UNVERIFIED" K_DEV=1
+kcheck "--profile dev: api not answering still exits 2" 2 "Reviews: COULD NOT VERIFY" K_DEV=1
+
 echo
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]
