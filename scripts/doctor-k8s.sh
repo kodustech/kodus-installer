@@ -115,7 +115,15 @@ if [ -n "$JOB" ]; then
     bad "migration job '$JOB' has not succeeded — check: $K logs job/$JOB"
   fi
 else
-  warn "no migration job found (ttl-cleaned, or migrations.enabled=false)"
+  # The Job deletes itself 10 minutes after it finishes (ttlSecondsAfterFinished),
+  # so on any install older than that there is nothing to find. A ready api
+  # means the release is up; the review checks read the database itself.
+  API_READY=$($K get deploy "${RELEASE}-api" -o jsonpath='{.status.readyReplicas}' 2>/dev/null)
+  if [ "${API_READY:-0}" -ge 1 ] 2>/dev/null; then
+    echo "  ‣ no migration job left (cleaned up 10 minutes after it finished); the api is ready"
+  else
+    warn "no migration job found and the api is not ready (migrations.enabled=false, or the job was cleaned up) — check: $K logs -l app.kubernetes.io/name=migrations --tail=-1"
+  fi
 fi
 
 # --- Workloads ---
@@ -140,6 +148,19 @@ if [ -z "$DEPLOYS$STS" ]; then
 else
   for d in $DEPLOYS; do check_rollout deployment "$d"; done
   for s in $STS;     do check_rollout statefulset "$s"; done
+  # Without these, reviews do not run (or nobody can sign in) even though every
+  # pod that does exist is healthy. The api is checked under "Reviews".
+  for svc in worker webhooks web; do
+    if ! printf '%s\n' "$DEPLOYS" | grep -qx "${RELEASE}-${svc}"; then
+      bad "deployment ${RELEASE}-${svc} not found" \
+        "$(case $svc in worker) echo "No review runs: nothing takes the review jobs." ;; webhooks) echo "Kodus is not told about new pull requests, so none is reviewed." ;; web) echo "Nobody can sign in or change settings." ;; esac)" \
+        "Enable it (services.${svc}.enabled=true) and run helm upgrade."
+    elif [ "$($K get deploy "${RELEASE}-${svc}" -o jsonpath='{.spec.replicas}' 2>/dev/null)" = "0" ]; then
+      bad "deployment ${RELEASE}-${svc} is scaled to 0 replicas" \
+        "$(case $svc in worker) echo "No review runs: nothing takes the review jobs." ;; webhooks) echo "Kodus is not told about new pull requests, so none is reviewed." ;; web) echo "Nobody can sign in or change settings." ;; esac)" \
+        "Scale it back up: $K scale deploy/${RELEASE}-${svc} --replicas=1 (or set services.${svc}.replicas and run helm upgrade)."
+    fi
+  done
 fi
 
 # No MongoDB 8.3 release starts on Linux kernels 6.19+ (SERVER-121912), and the
@@ -192,6 +213,23 @@ else
   if [ -n "$RESTARTS" ]; then
     while IFS= read -r p; do [ -n "$p" ] && warn "high restart count: $p"; done <<< "$RESTARTS"
   fi
+  # A container the kernel killed for memory comes back Running, so only its
+  # last (or current) termination reason tells. Per pod: container=last/current;...
+  OOMS=$($K get pods -l "$SEL" -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{range .status.containerStatuses[*]}{.name}{"="}{.lastState.terminated.reason}{"/"}{.state.terminated.reason}{";"}{end}{"\n"}{end}' 2>/dev/null)
+  while IFS=$'\t' read -r pod containers; do
+    [ -n "$pod" ] || continue
+    IFS=';' read -r -a cs <<< "$containers"
+    for c in ${cs[@]+"${cs[@]}"}; do
+      case "$c" in
+        *OOMKilled*)
+          echo -e "  ${YELLOW}!${NC} pod $pod container ${c%%=*} was OOMKilled"
+          doctor_add warn infra "" "Pod $pod (container ${c%%=*}) was killed for running out of memory." \
+            "The work it was doing stopped (a review in progress fails), and it happens again when it needs that much memory." \
+            "Raise its memory limit (resources.limits.memory of ${c%%=*} in your values) and run helm upgrade."
+          ;;
+      esac
+    done
+  done <<< "$OOMS"
 fi
 
 # --- Config & Secrets ---
@@ -223,23 +261,52 @@ else
   ok "WEB_HOSTNAME_API=$HOSTAPI (web→api, in-cluster)"
 fi
 # Guide the user: connecting a repo registers this URL as the provider webhook,
-# so it must be a PUBLIC https URL reaching the webhooks service at /<provider>/webhook.
-if [ -z "$($K get configmap "$CM" -o jsonpath='{.data.API_GITHUB_CODE_MANAGEMENT_WEBHOOK}{.data.API_GITLAB_CODE_MANAGEMENT_WEBHOOK}' 2>/dev/null)" ]; then
-  warn "no Git webhook configured — connecting a repo won't register a webhook. Set API_<GITHUB|GITLAB>_CODE_MANAGEMENT_WEBHOOK to a PUBLIC https URL reaching the webhooks service, e.g. https://<public-webhooks-host>/github/webhook"
-fi
-for prov in GITHUB GITLAB; do
-  key="API_${prov}_CODE_MANAGEMENT_WEBHOOK"
+# so it must reach the webhooks service at /<provider>/webhook from the Git
+# provider. http is fine for a Git server on the same network (the app does not
+# require https); localhost never reaches a pod.
+any_webhook=""
+for entry in API_GITHUB_CODE_MANAGEMENT_WEBHOOK:github:GitHub \
+             API_GITLAB_CODE_MANAGEMENT_WEBHOOK:gitlab:GitLab \
+             GLOBAL_BITBUCKET_CODE_MANAGEMENT_WEBHOOK:bitbucket:Bitbucket \
+             GLOBAL_AZURE_REPOS_CODE_MANAGEMENT_WEBHOOK:azure-repos:Azure-Repos \
+             API_FORGEJO_CODE_MANAGEMENT_WEBHOOK:forgejo:Forgejo; do
+  key=${entry%%:*}; seg=${entry#*:}; label=${seg#*:}; seg=${seg%%:*}; label=${label//-/ }
   url=$($K get configmap "$CM" -o jsonpath="{.data.$key}" 2>/dev/null)
   [ -z "$url" ] && continue
-  provlc=$(echo "$prov" | tr '[:upper:]' '[:lower:]')
+  any_webhook=1
+  path_ok=""
   case "$url" in
-    https://*localhost*|http://*) notprod "$key is http/localhost ($url) — the provider will reject it, so 'save repositories' fails. Use a public https URL like https://<public-webhooks-host>/${provlc}/webhook." ;;
-    https://*/${provlc}/webhook) ok "$prov webhook: $url" ;;
-    https://*) warn "$prov webhook is https but the path looks off ($url) — expected .../${provlc}/webhook" ;;
+    */${seg}/webhook) path_ok=1 ;;
+    */azdevops/webhook) [ "$seg" = azure-repos ] && path_ok=1 ;;
+  esac
+  # Host and scheme compared case-insensitively (LOCALHOST, HTTPS://).
+  scheme=$(printf '%s' "${url%%://*}" | tr '[:upper:]' '[:lower:]')
+  if [ "$scheme" != "$url" ] && doctor_is_loopback_host "$(doctor_url_host "$url")"; then
+    scheme=loopback
+  fi
+  case "$scheme" in
+    loopback)
+      notprod "$key points at localhost ($url) — the Git provider cannot reach it, so 'save repositories' fails. Use a URL your Git provider reaches, like https://<webhooks-host>/${seg}/webhook." ;;
+    http|https)
+      if [ -z "$path_ok" ]; then
+        warn "$label webhook path looks off ($url) — expected .../${seg}/webhook"
+      elif [ "$scheme" = http ]; then
+        warn "$label webhook uses http:// ($url) — fine if your Git server reaches it on your network; a Git provider on the internet should get https"
+      else
+        ok "$label webhook: $url"
+      fi ;;
+    *)
+      bad "$key is not a URL ($url)" \
+        "$label cannot be told about new pull requests: saving repositories fails or no webhook is delivered." \
+        "Set it to the URL your Git provider uses to reach the webhooks service, like https://<webhooks-host>/${seg}/webhook, and run helm upgrade." ;;
   esac
 done
+if [ -z "$any_webhook" ]; then
+  warn "no Git webhook configured — connecting a repo won't register a webhook. Set API_<PROVIDER>_CODE_MANAGEMENT_WEBHOOK (GLOBAL_ for Bitbucket and Azure Repos) to a URL reaching the webhooks service, e.g. https://<webhooks-host>/github/webhook"
+fi
 NEXTA=$($K get configmap "$CM" -o jsonpath='{.data.NEXTAUTH_URL}' 2>/dev/null)
 case "$NEXTA" in
+  "") warn "NEXTAUTH_URL is empty — sign-in still works (the web trusts the request's host), but connecting GitHub through the Kodus GitHub App cannot send you back to Kodus. Set global.config.NEXTAUTH_URL to the web's public URL (https://...) and run helm upgrade" ;;
   https://*) ok "NEXTAUTH_URL is https" ;;
   *localhost*|http://*) warn "NEXTAUTH_URL is http/localhost ($NEXTA) — fine for local trials, must be public HTTPS in production" ;;
 esac
@@ -288,28 +355,45 @@ else
   done <<< "$PDBS"
 fi
 
-# --- HTTP health endpoints (via port-forward) ---
+# --- HTTP health endpoints (from inside each pod) ---
+# kubectl exec, not port-forward: a port-forward needs its own permission, a free
+# local port and a guessed wait (it was `sleep 3`), so a forbidden or slow one
+# read as a dead service. The pod asks itself, at its hostname (the pod IP:
+# Next.js may bind that instead of 127.0.0.1), on the port its Deployment
+# declares. A probe that cannot run, or times out, is ?, not ✘.
 section "Service health endpoints"
+# shellcheck disable=SC2016 # JavaScript, not shell
+PROBE_JS='const [, port, path] = process.argv;
+fetch(`http://${require("os").hostname()}:${port}${path}`, { signal: AbortSignal.timeout(8000), redirect: "manual" })
+  .then((r) => console.log(r.status))
+  .catch((e) => console.log("ERR:" + ((e && e.cause && e.cause.code) || (e && e.name) || "error")));'
 probe() {
-  local svc=$1 port=$2 path=$3 label=$4
-  if ! $K get svc "$svc" >/dev/null 2>&1; then warn "$label: service $svc not present (disabled?)"; return; fi
-  local lport=$(( (RANDOM % 10000) + 20000 ))
-  kubectl -n "$NAMESPACE" port-forward "svc/$svc" "$lport:$port" >/dev/null 2>&1 &
-  local pf=$!
-  sleep 3
-  local code
-  code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "http://127.0.0.1:${lport}${path}" 2>/dev/null)
-  kill "$pf" >/dev/null 2>&1; wait "$pf" 2>/dev/null
-  if echo "$code" | grep -qE '^(2|3)[0-9][0-9]$'; then ok "$label ${path} → HTTP $code"; else bad "$label ${path} → HTTP ${code:-no-response}"; fi
+  local svc=$1 path=$2 label=$3 impact=$4 soft=${5:-}
+  local deploy="${RELEASE}-${svc}" port out
+  # mcp-manager down degrades reviews (no MCP tools); the rest stop them.
+  down() {
+    if [ -n "$soft" ]; then
+      echo -e "  ${YELLOW}!${NC} $1"; doctor_add warn infra "" "$1" "$impact" "Check its logs: $K logs deploy/$deploy --tail=200"
+    else
+      bad "$1" "$impact" "Check its logs: $K logs deploy/$deploy --tail=200"
+    fi
+  }
+  if ! $K get deploy "$deploy" >/dev/null 2>&1; then warn "$label: deployment $deploy not present (disabled?)"; return; fi
+  port=$($K get deploy "$deploy" -o jsonpath='{.spec.template.spec.containers[0].ports[0].containerPort}' 2>/dev/null)
+  if [ -z "$port" ]; then warn "$label: deployment $deploy declares no container port to probe"; return; fi
+  out=$($K exec "deploy/$deploy" -c "$svc" -- node -e "$PROBE_JS" "$port" "$path" 2>&1 | tail -1)
+  case "$out" in
+    [23][0-9][0-9]) ok "$label ${path} → HTTP $out" ;;
+    [0-9][0-9][0-9]) down "$label ${path} → HTTP $out" ;;
+    ERR:TimeoutError|ERR:AbortError|ERR:UND_ERR_*TIMEOUT) warn "$label ${path} did not answer within 8s (from inside the pod)" ;;
+    ERR:E*) down "$label ${path} → not answering (${out#ERR:})" ;;
+    *) warn "couldn't probe $label ${path} from inside its pod: ${out:-no output} (exec not permitted, or no pod running?)" ;;
+  esac
 }
-if ! command -v curl >/dev/null 2>&1; then
-  warn "curl not found — skipping endpoint probes"
-else
-  probe "${RELEASE}-api"         3001 /health        "api"
-  probe "${RELEASE}-webhooks"    3332 /health/ready  "webhooks"
-  probe "${RELEASE}-mcp-manager" 3101 /health        "mcp-manager"
-  probe "${RELEASE}-web"         3000 /              "web"
-fi
+probe api         /health       "api"         "Nothing can be reviewed, and the review checks cannot run."
+probe webhooks    /health/ready "webhooks"    "Kodus is not told about new pull requests, so none is reviewed."
+probe mcp-manager /health       "mcp-manager" "Reviews run without the MCP tools your organizations connected." soft
+probe web         /api/health   "web"         "Nobody can sign in or change settings."
 
 # --- RabbitMQ resource alarms ---
 # A disk/memory alarm silently BLOCKS every publisher: webhook deliveries and
@@ -319,27 +403,24 @@ fi
 # is the NODE's RAM, not the pod limit, so on a small PVC the limit is unreachable
 # and the alarm never clears. Read-only check via a bundled RabbitMQ pod.
 section "RabbitMQ resource alarms"
+# Bundled mode runs <release>-rabbitmq-0; the RabbitMQ operator names its pods
+# <cluster>-server-N. Both run the Kodus image with a container named rabbitmq.
 RMQ_POD="${RELEASE}-rabbitmq-0"
+$K get pod "$RMQ_POD" >/dev/null 2>&1 || RMQ_POD="${RELEASE}-rabbitmq-server-0"
 if ! $K get pod "$RMQ_POD" >/dev/null 2>&1; then
-  echo -e "  ${BLUE}‣${NC} no bundled RabbitMQ pod ($RMQ_POD) — external/operator mode, skipping"
+  RMQ_POD=""
+  echo -e "  ${BLUE}‣${NC} no bundled or operator RabbitMQ pod (${RELEASE}-rabbitmq-0 / ${RELEASE}-rabbitmq-server-0) — external broker, skipping"
 else
-  alarm_out=$($K exec "$RMQ_POD" -c rabbitmq -- rabbitmqctl eval 'rabbit_alarm:get_alarms().' 2>&1)
+  alarm_out=$($K exec "$RMQ_POD" -c rabbitmq -- rabbitmq-diagnostics -q check_alarms 2>&1)
   alarm_rc=$?
-  alarm_clean=$(echo "$alarm_out" | tr -d '[:space:]')
-  if [ $alarm_rc -ne 0 ] && echo "$alarm_out" | grep -qiE "forbidden|cannot exec|not allowed|denied"; then
+  echo "     $alarm_out"
+  if [ $alarm_rc -ne 0 ] && ! echo "$alarm_out" | grep -qi 'alarm on node' \
+    && echo "$alarm_out" | grep -qiE "forbidden|cannot exec|not allowed|denied"; then
     warn "couldn't check RabbitMQ alarms (exec not permitted for this user)"
-  elif [ "$alarm_clean" = "[]" ]; then
-    ok "RabbitMQ: no resource alarms (publishers not blocked)"
-  elif [ $alarm_rc -ne 0 ] || [ -z "$alarm_clean" ]; then
-    warn "couldn't read RabbitMQ alarms: ${alarm_out}"
   else
-    bad "RabbitMQ resource ALARM active — publishers blocked; webhook & review jobs won't enqueue" \
-      "Webhooks and review jobs stop being enqueued while every pod still reports Running." \
-      "Likely disk_free_limit relative to the node's RAM on a small PVC: upgrade to a current chart (it sets total_memory_available_override_value). Inspect: $K exec $RMQ_POD -c rabbitmq -- rabbitmqctl status | grep -A3 Alarms"
-    echo "     alarms: $alarm_clean"
-    echo "     Likely disk_free_limit relative to host RAM on a small PVC (bundled mode sets"
-    echo "     total_memory_available_override_value to fix this — check you're on a current chart)."
-    echo "     Inspect: $K exec $RMQ_POD -c rabbitmq -- rabbitmqctl status | grep -A3 Alarms"
+    doctor_check_rabbit_alarms "$alarm_rc" "$alarm_out" \
+      "Free disk is below RabbitMQ's limit, which is relative to the RAM it detects: in a container that is the node's RAM, not the pod limit, so a small volume never has enough. Upgrade to a current chart (it sets total_memory_available_override_value) or grow the RabbitMQ volume. Inspect: $K exec $RMQ_POD -c rabbitmq -- rabbitmq-diagnostics status" \
+      "RabbitMQ is over its memory limit, usually jobs piling up in a queue nothing takes: $K exec $RMQ_POD -c rabbitmq -- rabbitmqctl list_queues -p kodus-ai name messages consumers; or raise its memory limit."
   fi
 fi
 
@@ -367,11 +448,9 @@ fi
 
 # --- Message queue job time limit ---
 section "RabbitMQ consumer_timeout"
-# The operator names its pods <cluster>-server-N; both modes run the Kodus image.
-TIMEOUT_POD="$RMQ_POD"
-$K get pod "$TIMEOUT_POD" >/dev/null 2>&1 || TIMEOUT_POD="${RELEASE}-rabbitmq-server-0"
-if $K get pod "$TIMEOUT_POD" >/dev/null 2>&1; then
-  doctor_check_consumer_timeout "$($K exec "$TIMEOUT_POD" -c rabbitmq -- rabbitmqctl eval 'application:get_env(rabbit, consumer_timeout).' 2>/dev/null)"
+# RMQ_POD: the bundled or operator pod found above.
+if [ -n "$RMQ_POD" ]; then
+  doctor_check_consumer_timeout "$($K exec "$RMQ_POD" -c rabbitmq -- rabbitmqctl eval 'application:get_env(rabbit, consumer_timeout).' 2>/dev/null)"
 else
   doctor_add unknown broker.consumer_timeout "" \
     "Could not check the message queue's job time limit (external RabbitMQ)." \
@@ -391,7 +470,10 @@ fi
 doctor_render
 [ -n "$FINGERPRINT" ] && { echo; echo -e "$FINGERPRINT"; }
 
-if doctor_has_fail; then
+# 1 = reviews do not run, 2 = could not verify (doctor-lib.sh). --profile dev
+# keeps the api's own ✘ and UNVERIFIED out of it (see DOCTOR_SOFT_APP_FAILS).
+rc=$(doctor_exit_code)
+if [ "$rc" = 1 ]; then
   echo -e "${RED}Some checks failed.${NC} Inspect with:  $K get pods,events --sort-by=.lastTimestamp | tail"
-  exit 1
 fi
+exit "$rc"

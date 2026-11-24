@@ -55,28 +55,6 @@ normalize_bool() {
     esac
 }
 
-normalize_host() {
-    local host=$1
-    host="${host#http://}"
-    host="${host#https://}"
-    host="${host%%/*}"
-    host="${host%%:*}"
-    printf '%s' "$host"
-}
-
-is_localhost() {
-    local host
-    host=$(normalize_host "$1")
-    case "$host" in
-        localhost|127.0.0.1|0.0.0.0)
-            return 0
-            ;;
-        *)
-            return 1
-            ;;
-    esac
-}
-
 extract_url_path() {
     local url=$1
     local without_scheme="${url#*://}"
@@ -94,30 +72,36 @@ validate_webhook_url() {
     local var_name=$2
     local url=$3
     local expected_path=$4
-    local expected_host=$5
 
     if [ -z "$url" ]; then
         return 0
     fi
 
-    if [[ "$url" != https://* ]]; then
-        err "${var_name} (${label}) must start with https://"
-    fi
+    case "$(printf '%s' "${url%%://*}" | tr '[:upper:]' '[:lower:]')://" in
+        https://) ;;
+        http://)
+            # The app does not require https, and a Git server on the same
+            # network (GitLab, Forgejo, Bitbucket Data Center) works over http.
+            warnings=$((warnings + 1))
+            doctor_add unknown infra "" \
+                "The ${label} webhook URL uses http:// (${var_name})." "" \
+                "Nothing to do if your Git server reaches it on your network; a Git provider on the internet should get an https:// URL."
+            ;;
+        *)
+            err "${var_name} (${label}) must be a full URL starting with https:// or http://." \
+                "${label} cannot be told about new pull requests: saving repositories fails or no webhook is delivered." \
+                "Set ${var_name} to the URL your Git provider uses to reach the webhooks service, ending in ${expected_path%%|*}."
+            ;;
+    esac
 
+    # WEB_HOSTNAME_API is how the web reaches the api, not where Git providers
+    # send webhooks (the webhooks service), so the two hosts are not compared.
+    # Parsed as URL parsers do (doctor-lib.sh): the scheme is case-insensitive,
+    # so HTTPS://host/... has a host, and HTTPS:// alone has none.
     local host
-    host=$(normalize_host "$url")
+    host=$(doctor_url_host "$url")
     if [ -z "$host" ]; then
         err "${var_name} (${label}) must include a valid host."
-    elif [ -n "$expected_host" ] && [ "$host" != "$expected_host" ]; then
-        # A tunnel or reverse proxy in front of the webhooks service is a valid
-        # setup, so a different host is unverifiable here, not a failure. The
-        # mismatches are reported together in report_webhook_host_mismatch.
-        echo -e "${YELLOW}WARN${NC} ${var_name} (${label}) host ${host} differs from WEB_HOSTNAME_API (${expected_host})."
-        webhook_mismatch_labels+=("$label")
-        case " ${webhook_mismatch_hosts[*]-} " in
-            *" $host "*) ;;
-            *) webhook_mismatch_hosts+=("$host") ;;
-        esac
     fi
 
     local path
@@ -131,13 +115,16 @@ validate_webhook_url() {
         fi
     done
     if [ "$path_ok" != "true" ]; then
-        err "${var_name} (${label}) path must be one of ${expected_path} (example: https://${expected_host}${expected_paths[0]})."
+        err "${var_name} (${label}) path must be one of ${expected_path} (example: https://${host:-<webhooks-host>}${expected_paths[0]})."
     fi
 }
 
 DOCTOR_SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=scripts/doctor-lib.sh
 . "$DOCTOR_SCRIPT_DIR/doctor-lib.sh"
+# .env and docker compose are read from the installer root: run from anywhere
+# else, every check would fail on a missing .env or compose project.
+cd "$DOCTOR_SCRIPT_DIR/.." || exit 1
 
 for arg in "$@"; do
     case "$arg" in
@@ -153,12 +140,30 @@ done
 doctor_capture_start
 
 if [ -x "$DOCTOR_SCRIPT_DIR/validate-env.sh" ]; then
-    if ! "$DOCTOR_SCRIPT_DIR/validate-env.sh"; then
+    # Its findings come back as lines in a report file: its warnings exit 0,
+    # so the exit code alone never reached this report.
+    ve_report=$(mktemp "${TMPDIR:-/tmp}/kodus-doctor-env.XXXXXX")
+    VALIDATE_ENV_REPORT="$ve_report" "$DOCTOR_SCRIPT_DIR/validate-env.sh"
+    ve_rc=$?
+    ve_errors=$(grep -c '^fail	' "$ve_report" 2>/dev/null)
+    ve_first=$(grep '^fail	' "$ve_report" 2>/dev/null | cut -f2 | head -3 | paste -sd ';' - | sed 's/;/; /g')
+    if [ "$ve_rc" -ne 0 ]; then
         errors=$((errors + 1))
-        doctor_add fail env.schema "" ".env has missing or invalid variables." \
+        title=".env has missing or invalid variables"
+        if [ -n "$ve_first" ]; then
+            title="${title}: ${ve_first}"
+            [ "${ve_errors:-0}" -gt 3 ] && title="${title}; and $((ve_errors - 3)) more"
+        fi
+        doctor_add fail env.schema "" "${title}." \
             "Services may fail to start or behave unexpectedly." \
-            "Run ./scripts/validate-env.sh to see which variables to fix."
+            "Fix them in .env (./scripts/validate-env.sh lists them), then recreate the services ('docker compose up -d')."
     fi
+    while IFS=$'\t' read -r ve_status ve_title ve_fix; do
+        [ "$ve_status" = unknown ] || continue
+        warnings=$((warnings + 1))
+        doctor_add unknown env.schema "" "$ve_title" "" "$ve_fix"
+    done < "$ve_report"
+    rm -f "$ve_report"
 fi
 
 section "Prerequisites"
@@ -226,7 +231,7 @@ else
                                 value="${value%%\'*}"
                                 ;;
                             *)
-                                value="${value%%#*}"
+                                value="${value%%[[:space:]]#*}"  # a comment starts at " #", as in compose
                                 value="${value%"${value##*[![:space:]]}"}"
                                 ;;
                         esac
@@ -260,29 +265,32 @@ if [ "$env_loaded" = true ]; then
         warn "WEBHOOKS_PORT is deprecated; use API_WEBHOOKS_PORT."
     fi
 
-    if [ -n "$WEB_HOSTNAME_API" ]; then
-        case "$WEB_HOSTNAME_API" in
-            http://*|https://*)
-                err "WEB_HOSTNAME_API must be hostname only (no scheme). Example: api.kodus.io"
-                ;;
-        esac
-        if [[ "$WEB_HOSTNAME_API" == */* ]]; then
-            err "WEB_HOSTNAME_API must not include path or trailing slash."
-        fi
-        if is_localhost "$WEB_HOSTNAME_API"; then
-            warn "WEB_HOSTNAME_API is localhost; cloud Git webhooks will not reach it unless your Git server is on the same network."
-        fi
+    # WEB_HOSTNAME_API is how the web's server reaches the api, not a public
+    # address: `localhost` (the default) means the api container, by
+    # GLOBAL_API_CONTAINER_NAME (apps/web/src/core/utils/helpers.ts), and a
+    # scheme is honoured. Whether the web really reaches the api is tested
+    # from inside the web container under "HTTP checks".
+    web_api_host="${WEB_HOSTNAME_API#http://}"
+    web_api_host="${web_api_host#https://}"
+    if [ -z "$WEB_HOSTNAME_API" ]; then
+        err "WEB_HOSTNAME_API is empty: the web cannot reach the api." \
+            "Nobody can sign in, and every page fails." \
+            "Set WEB_HOSTNAME_API=localhost and WEB_PORT_API=3001 in .env (the web then calls the api container), and run '$DOCKER_COMPOSE up -d kodus-web'."
+    elif [[ "$web_api_host" == */* ]]; then
+        err "WEB_HOSTNAME_API must not include a path or a trailing slash." \
+            "The web builds a broken api address: nobody can sign in, and every page fails." \
+            "Set WEB_HOSTNAME_API to a host name only (the default is localhost), and run '$DOCKER_COMPOSE up -d kodus-web'."
     fi
 
     if [ -n "$NEXTAUTH_URL" ]; then
-        case "$NEXTAUTH_URL" in
-            http://*|https://*)
+        case "$(printf '%s' "${NEXTAUTH_URL%%://*}" | tr '[:upper:]' '[:lower:]')://" in
+            http://|https://)
                 ;;
             *)
                 err "NEXTAUTH_URL must include http:// or https:// and be a full URL (e.g. https://kodus-web.yourdomain.com)."
                 ;;
         esac
-        nextauth_host=$(normalize_host "$NEXTAUTH_URL")
+        nextauth_host=$(doctor_url_host "$NEXTAUTH_URL")
         if [ -z "$nextauth_host" ]; then
             err "NEXTAUTH_URL must include a valid host."
         fi
@@ -309,27 +317,11 @@ if [ "$env_loaded" = true ]; then
     if [ ${#webhook_providers[@]} -eq 0 ]; then
         err "At least one Git webhook URL must be configured (GitHub, GitLab, Bitbucket, Azure Repos, or Forgejo). See https://docs.kodus.io/how_to_deploy/en/deploy_kodus/generic_vm#git-provider-configuration"
     else
-        if [ -z "$WEB_HOSTNAME_API" ]; then
-            err "WEB_HOSTNAME_API is required when configuring Git webhooks."
-        else
-            expected_host=$(normalize_host "$WEB_HOSTNAME_API")
-            webhook_mismatch_labels=()
-            webhook_mismatch_hosts=()
-            validate_webhook_url "GitHub" "API_GITHUB_CODE_MANAGEMENT_WEBHOOK" "$API_GITHUB_CODE_MANAGEMENT_WEBHOOK" "/github/webhook" "$expected_host"
-            validate_webhook_url "GitLab" "API_GITLAB_CODE_MANAGEMENT_WEBHOOK" "$API_GITLAB_CODE_MANAGEMENT_WEBHOOK" "/gitlab/webhook" "$expected_host"
-            validate_webhook_url "Bitbucket" "GLOBAL_BITBUCKET_CODE_MANAGEMENT_WEBHOOK" "$GLOBAL_BITBUCKET_CODE_MANAGEMENT_WEBHOOK" "/bitbucket/webhook" "$expected_host"
-            validate_webhook_url "Azure Repos" "GLOBAL_AZURE_REPOS_CODE_MANAGEMENT_WEBHOOK" "$GLOBAL_AZURE_REPOS_CODE_MANAGEMENT_WEBHOOK" "/azdevops/webhook|/azure-repos/webhook" "$expected_host"
-            validate_webhook_url "Forgejo" "API_FORGEJO_CODE_MANAGEMENT_WEBHOOK" "$API_FORGEJO_CODE_MANAGEMENT_WEBHOOK" "/forgejo/webhook" "$expected_host"
-            if [ ${#webhook_mismatch_labels[@]} -gt 0 ]; then
-                mismatch_hosts=$(IFS=,; echo "${webhook_mismatch_hosts[*]}" | sed 's/,/, /g')
-                mismatch_labels=$(IFS=,; echo "${webhook_mismatch_labels[*]}" | sed 's/,/, /g')
-                warnings=$((warnings + 1))
-                doctor_add unknown infra "" \
-                    "Git webhook URLs point to ${mismatch_hosts}, not WEB_HOSTNAME_API (${expected_host}): ${mismatch_labels}." \
-                    "" \
-                    "Nothing to do if your Git provider reaches that host (a tunnel or reverse proxy in front of the webhooks service). Otherwise use https://${expected_host}/<provider>/webhook."
-            fi
-        fi
+        validate_webhook_url "GitHub" "API_GITHUB_CODE_MANAGEMENT_WEBHOOK" "$API_GITHUB_CODE_MANAGEMENT_WEBHOOK" "/github/webhook"
+        validate_webhook_url "GitLab" "API_GITLAB_CODE_MANAGEMENT_WEBHOOK" "$API_GITLAB_CODE_MANAGEMENT_WEBHOOK" "/gitlab/webhook"
+        validate_webhook_url "Bitbucket" "GLOBAL_BITBUCKET_CODE_MANAGEMENT_WEBHOOK" "$GLOBAL_BITBUCKET_CODE_MANAGEMENT_WEBHOOK" "/bitbucket/webhook"
+        validate_webhook_url "Azure Repos" "GLOBAL_AZURE_REPOS_CODE_MANAGEMENT_WEBHOOK" "$GLOBAL_AZURE_REPOS_CODE_MANAGEMENT_WEBHOOK" "/azdevops/webhook|/azure-repos/webhook"
+        validate_webhook_url "Forgejo" "API_FORGEJO_CODE_MANAGEMENT_WEBHOOK" "$API_FORGEJO_CODE_MANAGEMENT_WEBHOOK" "/forgejo/webhook"
     fi
 
     if [ "$api_mcp_enabled" = "true" ]; then
@@ -349,21 +341,16 @@ if [ "$env_loaded" = true ]; then
         done
     fi
 
-    api_rabbitmq_enabled=$(printf '%s' "$API_RABBITMQ_ENABLED" | tr '[:upper:]' '[:lower:]')
-    if [ "$api_rabbitmq_enabled" != "true" ]; then
-        warn "API_RABBITMQ_ENABLED is not true (RabbitMQ is required)."
+    # The app turns the queue off only for the exact value "false"; unset or
+    # anything else means on (libs/core/infrastructure/config/loaders/rabbitmq.loader.ts).
+    if [ "${API_RABBITMQ_ENABLED:-}" = "false" ]; then
+        err "API_RABBITMQ_ENABLED=false turns the message queue off." \
+            "No review job is queued or taken, so no review runs." \
+            "Set API_RABBITMQ_ENABLED=true in .env (or remove the line) and run '$DOCKER_COMPOSE up -d'."
     fi
 
     if [ -n "$API_RABBITMQ_URI" ] && ! printf '%s' "$API_RABBITMQ_URI" | grep -Eq '/kodus-ai$'; then
         warn "API_RABBITMQ_URI does not end with /kodus-ai."
-    fi
-
-    if [ "$use_local_db" != "true" ]; then
-        note "USE_LOCAL_DB=false: skipping local DB container checks."
-    fi
-
-    if [ "$use_local_rabbitmq" != "true" ]; then
-        note "USE_LOCAL_RABBITMQ=false: skipping local RabbitMQ container checks."
     fi
 fi
 
@@ -401,7 +388,7 @@ fi
 
 is_optional_service() {
     local svc=$1
-    for opt in "${optional_services[@]}"; do
+    for opt in ${optional_services[@]+"${optional_services[@]}"}; do
         if [ "$opt" = "$svc" ]; then
             return 0
         fi
@@ -409,36 +396,141 @@ is_optional_service() {
     return 1
 }
 
+# What a stopped service costs decides its mark: ✘ when reviews (or the whole
+# app) stop, ! when a feature the admin turned on stops, ? for a service this
+# script does not know. Bundled datastores only get here when they are in use
+# (otherwise they are optional above).
+service_down_status() {
+    case "$1" in
+        api|worker|webhooks|kodus-web|rabbitmq|db_kodus_postgres|db_kodus_mongodb) echo fail ;;
+        kodus-mcp-manager|worker-analytics) echo warn ;;
+        *) echo unknown ;;
+    esac
+}
+
+service_down_impact() {
+    case "$1" in
+        api) echo "Nothing can be reviewed, and the review checks cannot run." ;;
+        worker) echo "No review runs: pull request events wait in the queue until a worker takes them." ;;
+        webhooks) echo "Kodus is not told about new pull requests, so none is reviewed." ;;
+        kodus-web) echo "Nobody can sign in or change settings." ;;
+        rabbitmq) echo "No review job can be queued or taken, so no review runs." ;;
+        db_kodus_postgres|db_kodus_mongodb) echo "Kodus has no database: nothing works until it is back." ;;
+        kodus-mcp-manager) echo "Reviews run without the MCP tools your organizations connected." ;;
+        worker-analytics) echo "Cockpit analytics stop updating; reviews are not affected." ;;
+    esac
+}
+
+# Services found stopped, so later checks do not report the same cause again (#2021).
+down_services=" "
+
+# report_service_down <service> <title> [fix]
+report_service_down() {
+    local svc=$1 title=$2 fix=${3:-} status
+    status=$(service_down_status "$svc")
+    down_services+="$svc "
+    [ -n "$fix" ] || fix="Start it with '$DOCKER_COMPOSE up -d $svc'; if it stops again, '$DOCKER_COMPOSE logs --tail 200 $svc' shows why."
+    echo -e "${RED}DOWN${NC} $title"
+    [ "$status" = fail ] && errors=$((errors + 1))
+    doctor_add "$status" infra "" "$title" "$(service_down_impact "$svc")" "$fix"
+}
+
+is_down() {
+    case "$down_services" in *" $1 "*) return 0 ;; esac
+    return 1
+}
+
+# Crash loop: restart: unless-stopped brings a crashing service back, so it
+# reads "running" between crashes. RESTART_LOOP_MIN or more restarts with the
+# last start inside RESTART_LOOP_MINUTES means it is crashing now; a service
+# that has stayed up longer than that is not. RestartCount only counts
+# restarts by the restart policy, and resets when the container is recreated
+# (upgrade, `up -d` after an .env change).
+RESTART_LOOP_MIN=3
+RESTART_LOOP_MINUTES=5
+loop_cutoff=$(date -u -d "-${RESTART_LOOP_MINUTES} minutes" +%Y-%m-%dT%H:%M:%S 2>/dev/null \
+    || date -u -v-"${RESTART_LOOP_MINUTES}"M +%Y-%m-%dT%H:%M:%S 2>/dev/null)
+
+# Containers the kernel killed for memory recently. .State.OOMKilled alone
+# misses one that already restarted, as Docker clears it on start. The daemon
+# keeps only its last 256 events (minutes on a host with health checks), so this
+# catches recent kills only; it never reports an old one.
+oom_names=" $(docker events --since 24h --until "$(date +%s)" --filter event=oom \
+    --format '{{.Actor.Attributes.name}}' 2>/dev/null | sort -u | tr '\n' ' ') "
+
+report_service_loop() { # <service> <restarts> <started>
+    local svc=$1 impact
+    case "$svc" in
+        api|worker|webhooks) impact="Reviews stop each time it restarts." ;;
+        *) impact=$(service_down_impact "$svc") ;;
+    esac
+    down_services+="$svc "
+    echo -e "${RED}LOOP${NC} ${svc}: $2 restarts, last start $3"
+    [ "$(service_down_status "$svc")" = fail ] && errors=$((errors + 1))
+    doctor_add "$(service_down_status "$svc")" infra "" \
+        "The ${svc} service keeps restarting ($2 restarts, last start ${3%%.*} UTC)." \
+        "$impact" "See why: '$DOCKER_COMPOSE logs --tail 200 $svc'."
+}
+
+report_service_oom() {
+    local svc=$1
+    doctor_add warn infra "" "The ${svc} service was killed for running out of memory." \
+        "The work it was doing stopped (a review in progress fails), and it happens again when it needs that much memory." \
+        "Give the machine more memory, or remove a memory limit set on ${svc}; '$DOCKER_COMPOSE logs --tail 200 $svc' shows what it was doing."
+}
+
 services=$($DOCKER_COMPOSE config --services 2>/dev/null)
 if [ -z "$services" ]; then
     warn "No services found in compose config."
 else
     for service in $services; do
-        container_id=$($DOCKER_COMPOSE ps -q "$service")
-        if [ -z "$container_id" ]; then
+        # -a: a stopped container is still listed, so its state can be told.
+        container_id=$($DOCKER_COMPOSE ps -a -q "$service" 2>/dev/null | head -1)
+        state=""
+        [ -n "$container_id" ] && state=$(docker inspect -f '{{.State.Status}}|{{.State.ExitCode}}|{{if .State.Health}}{{.State.Health.Status}}{{end}}|{{.RestartCount}}|{{.State.OOMKilled}}|{{.State.StartedAt}}|{{.Name}}' "$container_id" 2>/dev/null)
+        IFS='|' read -r status exit_code health restarts oom_killed started cname <<< "$state"
+        cname=${cname#/}
+        oom=false
+        if [ "$oom_killed" = "true" ] || { [ -n "$cname" ] && [ "${oom_names#* "$cname" }" != "$oom_names" ]; }; then
+            oom=true
+        fi
+        # Killed for memory and still down: one line, with the memory fix.
+        if [ "$oom" = true ] && [ "$status" = "exited" ] && ! is_optional_service "$service"; then
+            report_service_down "$service" "The ${service} service was killed for running out of memory (exited with code ${exit_code:-?})." \
+                "Give the machine more memory, or remove a memory limit set on ${service}, then '$DOCKER_COMPOSE up -d $service'; '$DOCKER_COMPOSE logs --tail 200 $service' shows what it was doing."
+            continue
+        fi
+        [ "$oom" = true ] && ! is_optional_service "$service" && report_service_oom "$service"
+        if [ "$status" != "running" ]; then
             if [ "$service" = "migration" ]; then
                 ok "Service ${service} is not running (one-off)."
             elif is_optional_service "$service"; then
                 ok "Service ${service} is not running (disabled by config)."
+            elif [ -z "$status" ]; then
+                report_service_down "$service" "The ${service} service is not running."
+            elif [ "$status" = "restarting" ]; then
+                report_service_loop "$service" "${restarts:-?}" "${started:-?}"
+            elif [ "$status" = "exited" ]; then
+                report_service_down "$service" "The ${service} service is stopped (exited with code ${exit_code:-?})."
             else
-                warn "Service ${service} is not running."
+                report_service_down "$service" "The ${service} service is ${status}."
             fi
             continue
         fi
 
-        status=$(docker inspect -f '{{.State.Status}}' "$container_id" 2>/dev/null)
-        if [ "$status" = "running" ]; then
-            ok "Service ${service} is running."
-        else
-            err "Service ${service} status is ${status}."
+        if [ "${restarts:-0}" -ge "$RESTART_LOOP_MIN" ] 2>/dev/null && [ -n "$loop_cutoff" ] \
+            && [[ "$started" > "$loop_cutoff" ]]; then
+            report_service_loop "$service" "$restarts" "$started"
+            continue
         fi
 
-        health=$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{end}}' "$container_id" 2>/dev/null)
+        ok "Service ${service} is running."
         if [ -n "$health" ]; then
             if [ "$health" = "healthy" ]; then
                 ok "Service ${service} is healthy."
             elif [ "$health" = "unhealthy" ]; then
-                err "Service ${service} is unhealthy."
+                report_service_down "$service" "The ${service} service is unhealthy." \
+                    "'$DOCKER_COMPOSE logs --tail 200 $service' shows why its health check fails."
             else
                 warn "Service ${service} health is ${health}."
             fi
@@ -448,10 +540,55 @@ fi
 
 section "Connectivity checks"
 
+# An external datastore is reached by the app, not by this machine. Probing it
+# from the host gave false ✘: host.docker.internal and private DNS resolve only
+# inside the containers, mongodb+srv (Atlas), TLS and the MONGODB_URI /
+# API_MG_DB_URI the app prefers were ignored, and a password with @ or : broke
+# the URI. The review checks run inside the api with the app's own settings and
+# report Postgres and MongoDB there. The bundled containers are still checked.
+pg_source=""; mongo_source=""; rabbit_source=""
+if [ "$use_local_db" != "true" ]; then
+    pg_source="USE_LOCAL_DB=false"; mongo_source="USE_LOCAL_DB=false"
+fi
+case "${API_PG_DB_HOST:-db_kodus_postgres}" in
+    db_kodus_postgres) ;;
+    *) [ -n "$pg_source" ] || pg_source="API_PG_DB_HOST=${API_PG_DB_HOST}" ;;
+esac
+if [ -n "${MONGODB_URI:-}" ]; then
+    mongo_source="MONGODB_URI"
+elif [ -n "${API_MG_DB_URI:-}" ]; then
+    mongo_source="API_MG_DB_URI"
+else
+    case "${API_MG_DB_HOST:-db_kodus_mongodb}" in
+        db_kodus_mongodb) ;;
+        *) [ -n "$mongo_source" ] || mongo_source="API_MG_DB_HOST=${API_MG_DB_HOST}" ;;
+    esac
+fi
+# Bundled or external broker, by a plain rule: the URI's host (doctor_url_host)
+# is the bundled service or container name, or localhost; a host that cannot
+# be read counts as bundled, so the bundled broker is still checked. The URI
+# itself is not judged here: the api connects with the real client and reports
+# a URI it cannot use as ✘, in the client's own words.
+if [ "$use_local_rabbitmq" != "true" ]; then
+    rabbit_source="USE_LOCAL_RABBITMQ=false"
+elif [ -n "${API_RABBITMQ_URI:-}" ]; then
+    rabbit_host=$(doctor_url_host "$API_RABBITMQ_URI")
+    case "$rabbit_host" in
+        ""|*[!a-z0-9_.:-]*|rabbitmq|rabbitmq-prod|localhost|127.0.0.1) ;;
+        "$(printf '%s' "${RABBITMQ_HOSTNAME:-rabbitmq}" | tr '[:upper:]' '[:lower:]')") ;;
+        *) rabbit_source="API_RABBITMQ_URI host ${rabbit_host}" ;;
+    esac
+fi
+[ -n "$pg_source" ] && note "Postgres is external (${pg_source}): the review checks test it from inside the api, with the app's own settings."
+[ -n "$mongo_source" ] && note "MongoDB is external (${mongo_source}): the review checks test it from inside the api, with the app's own settings."
+[ -n "$rabbit_source" ] && note "RabbitMQ is external (${rabbit_source}): the review checks test it from inside the api, with the app's own settings."
+
 postgres_id=$($DOCKER_COMPOSE ps -q db_kodus_postgres 2>/dev/null)
+is_down db_kodus_postgres && postgres_id=""
 if [ "$use_local_db" = "true" ]; then
     if [ -z "$postgres_id" ]; then
-        warn "Skipping Postgres check (container not running)."
+        # Already reported by the service status section (#2021).
+        echo -e "${YELLOW}NOTE${NC} Skipping Postgres check (container not running)."
     else
         if $DOCKER_COMPOSE exec -T db_kodus_postgres sh -c 'pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"' &> /dev/null; then
             ok "Postgres is accepting connections."
@@ -469,9 +606,9 @@ if [ "$use_local_db" = "true" ]; then
                 "Kodus has no database until MongoDB starts." \
                 "Set KODUS_MONGO_IMAGE=docker.io/mongo:8.2.11 in .env and run docker compose up -d db_kodus_mongodb."
         else
-            warn "Skipping MongoDB check (container not running)."
+            echo -e "${YELLOW}NOTE${NC} Skipping MongoDB check (container not running)."
         fi
-    else
+    elif ! is_down db_kodus_mongodb; then
         # Credentials as quoted flags, not in a URI: a password with @ : / %
         # would break the URI and report a healthy MongoDB as down.
         if $DOCKER_COMPOSE exec -T db_kodus_mongodb sh -c 'mongosh --quiet --host 127.0.0.1 -u "$MONGO_INITDB_ROOT_USERNAME" -p "$MONGO_INITDB_ROOT_PASSWORD" --authenticationDatabase admin --eval "db.runCommand({ ping: 1 }).ok" | grep -q 1' &> /dev/null; then
@@ -480,29 +617,10 @@ if [ "$use_local_db" = "true" ]; then
             err "MongoDB is not accepting connections."
         fi
     fi
-else
-    if command -v pg_isready &> /dev/null; then
-        if PGPASSWORD="$API_PG_DB_PASSWORD" pg_isready -h "$API_PG_DB_HOST" -p "${API_PG_DB_PORT:-5432}" -U "$API_PG_DB_USERNAME" -d "$API_PG_DB_DATABASE" &> /dev/null; then
-            ok "External Postgres is accepting connections."
-        else
-            err "External Postgres is not accepting connections."
-        fi
-    else
-        note "pg_isready not found; skipping external Postgres check."
-    fi
-
-    if command -v mongosh &> /dev/null; then
-        if mongosh --quiet "mongodb://${API_MG_DB_USERNAME}:${API_MG_DB_PASSWORD}@${API_MG_DB_HOST}:${API_MG_DB_PORT:-27017}/admin" --eval "db.runCommand({ ping: 1 }).ok" | grep -q 1; then
-            ok "External MongoDB is accepting connections."
-        else
-            err "External MongoDB is not accepting connections."
-        fi
-    else
-        note "mongosh not found; skipping external MongoDB check."
-    fi
 fi
 
 rabbit_id=$($DOCKER_COMPOSE ps -q rabbitmq 2>/dev/null)
+is_down rabbitmq && rabbit_id=""
 if [ "$use_local_rabbitmq" = "true" ]; then
     if [ -z "$rabbit_id" ]; then
         # The service status section already reported it; saying it again
@@ -511,29 +629,18 @@ if [ "$use_local_rabbitmq" = "true" ]; then
     else
         if $DOCKER_COMPOSE exec -T rabbitmq rabbitmq-diagnostics -q check_running &> /dev/null; then
             ok "RabbitMQ is running."
+            # The bundled broker's rabbitmq.conf (kodus-ai docker/rabbitMQ)
+            # sets disk_free_limit.relative = 1.2 and
+            # vm_memory_high_watermark.relative = 0.4.
+            alarm_out=$($DOCKER_COMPOSE exec -T rabbitmq rabbitmq-diagnostics -q check_alarms 2>&1)
+            alarm_rc=$?
+            echo "$alarm_out"
+            doctor_check_rabbit_alarms "$alarm_rc" "$alarm_out" \
+                "Free disk space on this machine ('df -h /var/lib/docker'): the bundled RabbitMQ stops taking jobs while free disk is below 1.2 times the machine's RAM (disk_free_limit.relative = 1.2), and starts again by itself once there is room." \
+                "RabbitMQ is holding more than 40% of the machine's memory (vm_memory_high_watermark.relative = 0.4), usually jobs piling up in a queue nothing takes: check '$DOCKER_COMPOSE exec rabbitmq rabbitmqctl list_queues -p kodus-ai name messages consumers', or give the machine more memory."
         else
             err "RabbitMQ is not running."
         fi
-    fi
-else
-    if command -v nc &> /dev/null; then
-        rabbit_uri="${API_RABBITMQ_URI}"
-        rabbit_no_scheme="${rabbit_uri#*://}"
-        rabbit_hostport="${rabbit_no_scheme%%/*}"
-        rabbit_hostport="${rabbit_hostport#*@}"
-        rabbit_host="${rabbit_hostport%%:*}"
-        rabbit_port="${rabbit_hostport##*:}"
-        if [ "$rabbit_hostport" = "$rabbit_host" ]; then
-            rabbit_port="5672"
-        fi
-
-        if nc -z -w 3 "$rabbit_host" "$rabbit_port" &> /dev/null; then
-            ok "External RabbitMQ is reachable at ${rabbit_host}:${rabbit_port}."
-        else
-            err "External RabbitMQ is not reachable at ${rabbit_host}:${rabbit_port}."
-        fi
-    else
-        note "nc not found; skipping external RabbitMQ check."
     fi
 fi
 
@@ -593,20 +700,92 @@ web_port=${WEB_PORT:-3000}
 api_port=${API_PORT:-3001}
 webhooks_port=${API_WEBHOOKS_PORT:-${WEBHOOKS_PORT:-3332}}
 
-http_check "kodus-web" "http://localhost:${web_port}/health"
-http_check "api" "http://localhost:${api_port}/health"
-http_check "webhooks" "http://localhost:${webhooks_port}/health"
+# A stopped service was reported above; probing its port would only say it again.
+for probe in "kodus-web|http://localhost:${web_port}/api/health" \
+             "api|http://localhost:${api_port}/health" \
+             "webhooks|http://localhost:${webhooks_port}/health"; do
+    if is_down "${probe%%|*}"; then
+        echo -e "${YELLOW}NOTE${NC} Skipping ${probe%%|*} HTTP check (service not running)."
+    else
+        http_check "${probe%%|*}" "${probe#*|}"
+    fi
+done
 
-if [ "$api_mcp_enabled" = "true" ]; then
+if [ "$api_mcp_enabled" = "true" ] && ! is_down kodus-mcp-manager; then
     http_check_optional "kodus-mcp-manager" "http://localhost:${mcp_manager_port}/health"
+fi
+
+# The web's server calls the api for sign-in and every page. Ask the web
+# container itself, so its own env, DNS and networks are what is tested, and
+# resolve the address exactly as pathToApiUrl/createUrl do
+# (apps/web/src/core/utils/helpers.ts): WEB_HOSTNAME_API, where `localhost`
+# means GLOBAL_API_CONTAINER_NAME (default kodus_api), a scheme in it is kept,
+# and WEB_PORT_API. Any HTTP answer means the api is reachable; its health is
+# checked on its own. Prints: url, host, 1 if localhost was mapped, result.
+WEB_API_PROBE_JS=$(cat <<'JS'
+const e = process.env;
+let host = e.WEB_HOSTNAME_API || "";
+let mapped = 0;
+if (host === "localhost") { host = e.GLOBAL_API_CONTAINER_NAME || "kodus_api"; mapped = 1; }
+let scheme = "";
+if (host.startsWith("http://")) { scheme = "http"; host = host.slice(7); }
+else if (host.startsWith("https://")) { scheme = "https"; host = host.slice(8); }
+const port = e.WEB_PORT_API || "";
+let base;
+if (port) base = (scheme || "http") + "://" + host + ":" + port;
+else if (scheme) base = scheme + "://" + host;
+else if (e.WEB_NODE_ENV === "production" || (e.WEB_NODE_ENV === "self-hosted" && host !== "localhost")) base = "https://" + host;
+else base = "http://" + host;
+const url = base + "/health/simple";
+const out = (r) => console.log([url, host, mapped, r].join("\t"));
+fetch(url, { signal: AbortSignal.timeout(8000), redirect: "manual" })
+  .then((res) => out(res.status))
+  .catch((err) => out("ERR:" + ((err && err.cause && err.cause.code) || (err && err.name) || "error")));
+JS
+)
+
+if [ -z "$WEB_HOSTNAME_API" ] || is_down kodus-web || [ -z "$($DOCKER_COMPOSE ps -q kodus-web 2>/dev/null)" ]; then
+    echo -e "${YELLOW}NOTE${NC} Skipping the web-to-api check (kodus-web not running, or WEB_HOSTNAME_API empty; reported above)."
+else
+    probe=$($DOCKER_COMPOSE exec -T kodus-web node -e "$WEB_API_PROBE_JS" 2>/dev/null | tail -1)
+    echo "web -> api: $probe"
+    IFS=$'\t' read -r probe_url probe_host probe_mapped probe_result <<< "$probe"
+    api_cname=$(docker inspect -f '{{.Name}}' "$($DOCKER_COMPOSE ps -q api 2>/dev/null | head -1)" 2>/dev/null)
+    api_cname=${api_cname#/}
+    case "$probe_result" in
+        [0-9]*)
+            ok "The web reaches the api at ${probe_url} (HTTP ${probe_result})."
+            ;;
+        ERR:TimeoutError|ERR:AbortError|ERR:UND_ERR_CONNECT_TIMEOUT|ERR:UND_ERR_HEADERS_TIMEOUT)
+            warnings=$((warnings + 1))
+            doctor_add unknown infra "" "The web's call to the api at ${probe_url} timed out." "" \
+                "Check that the api is up ('$DOCKER_COMPOSE logs --tail 200 api'), then run this again."
+            ;;
+        ERR:*)
+            if [ "$probe_mapped" = "1" ] && [ -n "$api_cname" ] && [ "$probe_host" != "$api_cname" ] && [ "$probe_host" != "api" ]; then
+                web_api_fix="With WEB_HOSTNAME_API=localhost the web calls the api container by GLOBAL_API_CONTAINER_NAME ('${probe_host}'), but the api container is named '${api_cname}'. Set GLOBAL_API_CONTAINER_NAME=${probe_host} in .env and run '$DOCKER_COMPOSE up -d' (it recreates the api under that name)."
+            else
+                web_api_fix="Set WEB_HOSTNAME_API=localhost and WEB_PORT_API=3001 in .env (the web then calls the api container directly), and run '$DOCKER_COMPOSE up -d kodus-web'."
+            fi
+            err "The web cannot reach the api at ${probe_url} (${probe_result#ERR:})." \
+                "Nobody can sign in, and every page fails." "$web_api_fix"
+            ;;
+        *)
+            warnings=$((warnings + 1))
+            doctor_add unknown infra "" "Could not check whether the web reaches the api." "" \
+                "Run '$DOCKER_COMPOSE exec kodus-web node -v' to see that the web container answers, then run this again."
+            ;;
+    esac
 fi
 
 section "Database structure checks"
 
-if [ "$use_local_db" != "true" ]; then
-    note "Skipping schema and seed checks (USE_LOCAL_DB=false)."
+if [ -n "$pg_source" ]; then
+    # The bundled container is not the database the app uses: its schemas say
+    # nothing. The api's own checks read the real one.
+    echo -e "${YELLOW}NOTE${NC} Skipping schema and seed checks (Postgres is external: ${pg_source})."
 elif [ -z "$postgres_id" ]; then
-    warn "Skipping schema and seed checks (Postgres not running)."
+    echo -e "${YELLOW}NOTE${NC} Skipping schema and seed checks (Postgres not running)."
 else
     schemas=(public kodus_workflow)
     api_mcp_enabled=$(printf '%s' "$API_MCP_SERVER_ENABLED" | tr '[:upper:]' '[:lower:]')
@@ -639,7 +818,9 @@ fi
 
 section "Message queue job time limit"
 
-if [ "$use_local_rabbitmq" = "true" ] && [ -n "$rabbit_id" ]; then
+if [ -n "$rabbit_source" ] && [ "$use_local_rabbitmq" = "true" ]; then
+    echo -e "${YELLOW}NOTE${NC} Skipping the job time limit check (the app uses another broker: ${rabbit_source})."
+elif [ "$use_local_rabbitmq" = "true" ] && [ -n "$rabbit_id" ]; then
     doctor_check_consumer_timeout "$($DOCKER_COMPOSE exec -T rabbitmq rabbitmqctl eval 'application:get_env(rabbit, consumer_timeout).' 2>/dev/null)"
 elif [ "$use_local_rabbitmq" = "true" ]; then
     # Bundled broker, stopped: already reported, and not "external" (#2021).
@@ -652,17 +833,17 @@ fi
 
 section "Reviews"
 
-if [ -z "$($DOCKER_COMPOSE ps -q api 2>/dev/null)" ]; then
+if is_down api; then
+    echo -e "${YELLOW}NOTE${NC} Skipping the review checks (the api is not running; reported above)."
+elif [ -z "$($DOCKER_COMPOSE ps -q api 2>/dev/null)" ]; then
     doctor_add fail reviews.api "" "The api service is not running." \
         "Nothing can be reviewed, and the review checks cannot run." \
-        "Start it with '$DOCKER_COMPOSE up -d api' and check '$DOCKER_COMPOSE logs api'."
+        "Start it with '$DOCKER_COMPOSE up -d api' and check '$DOCKER_COMPOSE logs --tail 200 api'."
 else
     doctor_run_app_checks "$DOCKER_COMPOSE exec -T api"
 fi
 
 doctor_render
 
-if doctor_has_fail; then
-    exit 1
-fi
-exit 0
+# 1 = reviews do not run, 2 = could not verify (doctor-lib.sh).
+exit "$(doctor_exit_code)"

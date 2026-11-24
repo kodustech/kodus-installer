@@ -180,6 +180,7 @@ Show the full output. If there are errors:
 - `Schema missing` → seeds/migrations didn't run yet; wait a moment and rerun doctor
 - Service not running → `docker compose logs <service>` to investigate
 - HTTP check failing → service may still be starting; wait and retry
+- `Reviews: COULD NOT VERIFY` (exit 2) → the review checks inside the api did not answer; if the api just started, wait and rerun
 
 If all checks pass, tell the user Kodus is ready and print the access URL:
 `http://localhost:{WEB_PORT}` (or their configured `NEXTAUTH_URL`).

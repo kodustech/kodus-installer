@@ -4,36 +4,53 @@
 # so operators can share it with Kodus support. Read-only. Secret VALUES are
 # never included — only key names and non-sensitive config.
 #
-# Usage: ./scripts/collect-diagnostics.sh [-n namespace] [-r release]
+# Usage: ./scripts/collect-diagnostics.sh [-n namespace] [-r release] [-o output-dir]
+#
+# Every file goes through the shared redactor (scripts/redact-lib.sh) before it
+# is archived. Docker Compose installs: scripts/collect-diagnostics-compose.sh.
 
 set -uo pipefail
-RELEASE="kodus"; NS=""
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=scripts/redact-lib.sh
+. "$SCRIPT_DIR/redact-lib.sh"
+RELEASE="kodus"; NS=""; OUT_DIR="${TMPDIR:-/tmp}"
 while [ $# -gt 0 ]; do
+  # Every option takes a value: a bare flag must not trip `set -u` on $2.
+  case "$1" in
+    -n|--namespace|-r|--release|-o|--output)
+      [ $# -ge 2 ] && [ -n "$2" ] || { echo "$1 needs a value"; exit 1; } ;;
+  esac
   case "$1" in
     -n|--namespace) NS="$2"; shift 2 ;;
     -r|--release)   RELEASE="$2"; shift 2 ;;
-    -h|--help) echo "Usage: $0 [-n namespace] [-r release]"; exit 0 ;;
+    -o|--output)    OUT_DIR="$2"; shift 2 ;;
+    -h|--help) echo "Usage: $0 [-n namespace] [-r release] [-o output-dir]"; exit 0 ;;
     *) echo "Unknown arg: $1"; exit 1 ;;
   esac
 done
+case "$OUT_DIR" in /*) ;; *) OUT_DIR="$PWD/$OUT_DIR" ;; esac
+# Fail now, not after minutes of collecting: tar cannot create the directory.
+mkdir -p "$OUT_DIR" 2>/dev/null || { echo "Cannot create the output directory $OUT_DIR"; exit 1; }
 command -v kubectl >/dev/null 2>&1 || { echo "kubectl not found"; exit 1; }
 [ -z "$NS" ] && NS=$(kubectl config view --minify -o jsonpath='{..namespace}' 2>/dev/null); [ -z "$NS" ] && NS=default
 K="kubectl -n $NS"
 
-# No Date.now in a portable way without date; the operator's shell has it.
+# The bundle is for support, not for other users of this machine.
+umask 077
 STAMP=$(date +%Y%m%d-%H%M%S 2>/dev/null || echo bundle)
 OUT="kodus-diagnostics-${NS}-${STAMP}"
-DIR="/tmp/${OUT}"
+WORKDIR=$(mktemp -d "${TMPDIR:-/tmp}/kodus-diagnostics.XXXXXX") || exit 1
+trap 'rm -rf "$WORKDIR"' EXIT
+DIR="$WORKDIR/$OUT"
 mkdir -p "$DIR"
-# Redact anything that looks like a secret value in logs/config.
-redact() { sed -E 's/(password|token|secret|key|authorization|bearer)([\"'"'"': =]+)[^ \"'"'"',}]+/\1\2<REDACTED>/Ig'; }
+redact() { kodus_redact; }
 
 echo "Collecting into $DIR ..."
-{ kubectl version --short 2>/dev/null; echo "namespace: $NS  release: $RELEASE"; } > "$DIR/00-meta.txt"
-command -v helm >/dev/null 2>&1 && helm -n "$NS" status "$RELEASE" > "$DIR/01-helm-status.txt" 2>&1
-$K get all,pvc,ingress,networkpolicy,configmap -o wide > "$DIR/02-resources.txt" 2>&1
-$K get events --sort-by=.lastTimestamp > "$DIR/03-events.txt" 2>&1
-$K describe pods > "$DIR/04-describe-pods.txt" 2>&1
+{ kubectl version 2>/dev/null; echo "namespace: $NS  release: $RELEASE"; } | redact > "$DIR/00-meta.txt"
+command -v helm >/dev/null 2>&1 && helm -n "$NS" status "$RELEASE" 2>&1 | redact > "$DIR/01-helm-status.txt"
+$K get all,pvc,ingress,networkpolicy,configmap -o wide 2>&1 | redact > "$DIR/02-resources.txt"
+$K get events --sort-by=.lastTimestamp 2>&1 | redact > "$DIR/03-events.txt"
+$K describe pods 2>&1 | redact > "$DIR/04-describe-pods.txt"
 
 # ConfigMap with secret-ish keys blanked; Secrets = KEY NAMES ONLY (never values).
 $K get configmap "${RELEASE}-config" -o yaml 2>/dev/null | redact > "$DIR/05-configmap.redacted.yaml"
@@ -57,10 +74,15 @@ grep -rhaE '"level":(4[0-9]|5[0-9]|6[0-9])|\b(ERROR|WARN|FATAL)\b|HttpError|Vali
 echo "# Tip: trace one request across services — grep -rh \"<requestId>\" logs/" > "$DIR/09-how-to-trace.txt"
 
 # Doctor snapshot (if present).
-[ -x "$(dirname "$0")/doctor-k8s.sh" ] && "$(dirname "$0")/doctor-k8s.sh" -n "$NS" -r "$RELEASE" > "$DIR/07-doctor.txt" 2>&1
+[ -x "$SCRIPT_DIR/doctor-k8s.sh" ] && "$SCRIPT_DIR/doctor-k8s.sh" -n "$NS" -r "$RELEASE" --verbose 2>&1 | kodus_strip_ansi | redact > "$DIR/07-doctor.txt"
 
-TARBALL="/tmp/${OUT}.tar.gz"
-tar -czf "$TARBALL" -C /tmp "$OUT" 2>/dev/null && rm -rf "$DIR"
+# Every file, once more: whatever a step above wrote unfiltered is caught here.
+kodus_redact_tree "$DIR"
+
+TARBALL="${OUT_DIR%/}/${OUT}.tar.gz"
+if ! tar -czf "$TARBALL" -C "$WORKDIR" "$OUT"; then
+  echo "Could not write $TARBALL"; exit 1
+fi
 echo ""
 echo "Support bundle: $TARBALL"
-echo "Secret VALUES are NOT included. Review $TARBALL before sharing."
+echo "Secret values are redacted, but check what is inside before you share it: tar -xzf $TARBALL"

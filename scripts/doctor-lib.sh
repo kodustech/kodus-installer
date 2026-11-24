@@ -5,9 +5,15 @@
 # working?" sat at the bottom of a long log. Now every check records a result,
 # the legacy per-check output goes to a detail log, and the report prints:
 #
-#   1. the verdict          Reviews: NOT RUNNING / RUNNING, DEGRADED / OK
+#   1. the verdict          Reviews: NOT RUNNING / COULD NOT VERIFY /
+#                           RUNNING, DEGRADED / OK
 #   2. the problems, worst first, each with what is lost and the fix
 #   3. one line for everything that passed (--verbose lists them + the log)
+#
+# COULD NOT VERIFY: no ✘, but the review checks inside the api did not answer,
+# or the api itself said it could not verify (#verdict UNVERIFIED). A run that
+# never reached those checks must not read as OK. Exit codes: 1 NOT RUNNING,
+# 2 COULD NOT VERIFY, 0 otherwise.
 #
 #   fail    (✘) reviews do not run
 #   warn    (!) reviews run degraded
@@ -23,6 +29,11 @@ DOCTOR_DETAIL=$(mktemp "${TMPDIR:-/tmp}/kodus-doctor-detail.XXXXXX")
 DOCTOR_VERBOSE=false
 DOCTOR_RENDERED=false
 DOCTOR_APP_VERSION=""
+# The api's own verdict (#verdict line). Only UNVERIFIED changes anything here;
+# the installer computes the verdict from the statuses itself.
+DOCTOR_APP_VERDICT=""
+# none: the review checks were not asked; answered; failed: asked, no answer.
+DOCTOR_APP_STATE=none
 # Checks whose ✘ does not fail the exit code (doctor-k8s.sh --profile dev).
 DOCTOR_SOFT_APP_FAILS=false
 
@@ -63,15 +74,55 @@ _doctor_on_exit() {
     exit "$rc"
 }
 
+# Host of a URL by plain string rules, not a URL parser (on purpose: the api
+# tests every address for real, with the real clients): drop the scheme, the
+# path, query and fragment, the user info (up to the last @ left), the port
+# and [brackets], and one trailing dot; lowercase.
+doctor_url_host() {
+    local u=${1#*://} host
+    u=${u%%[/?#]*}
+    u=${u##*@}
+    case "$u" in
+        \[*\]*) host=${u#\[}; host=${host%%\]*} ;;
+        *) host=${u%%:*} ;;
+    esac
+    host=$(printf '%s' "$host" | tr '[:upper:]' '[:lower:]')
+    printf '%s' "${host%.}"
+}
+
+# A host (from doctor_url_host) that names this machine, so a Git provider
+# cannot reach it: localhost and *.localhost (RFC 6761), ::1, 0.0.0.0, and
+# 127.x.y.z with each part 0-255. Other ways to write a loopback address
+# (0x7f.1, 2130706433, octal, IPv4-mapped IPv6, zones) are out of scope by
+# design; the api's webhook probe tests the address for real.
+doctor_is_loopback_host() {
+    case "$1" in
+        localhost|*.localhost|::1|0.0.0.0) return 0 ;;
+    esac
+    local octet='(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])'
+    printf '%s' "$1" | grep -Eq "^127\.$octet\.$octet\.$octet\$"
+}
+
 # Appends the API's results (doctor-client.mjs --format tsv) read from stdin.
 # App results are tagged so --profile dev can keep them out of the exit code.
 doctor_add_app_tsv() {
     local line
     while IFS= read -r line; do
+        line=${line%$'\r'}
         case "$line" in
+            # Metadata only: a version with no verdict and no check is not an answer.
             '#version'*) DOCTOR_APP_VERSION="${line#*	}" ;;
+            '#verdict'*)
+                DOCTOR_APP_STATE=answered
+                DOCTOR_APP_VERDICT=$(printf '%s' "${line#\#verdict}" | tr -d '[:space:]')
+                ;;
             '#'*|'') ;;
             *)
+                # Only a line that carries a status is a check result; stray
+                # output (a runtime warning on stderr) is not an answer.
+                case "${line%%$'\t'*}" in
+                    fail|warn|unknown|info|skip|ok) DOCTOR_APP_STATE=answered ;;
+                esac
                 # The api is trusted to send 6 tab-separated fields, but its
                 # text can carry provider messages: drop control bytes (ANSI
                 # included) and anything that is not exactly 6 fields, so the
@@ -107,18 +158,27 @@ doctor_run_app_checks() {
     # Tab and newline are kept, so the TSV shape is untouched.
     out=$(printf '%s' "$out" | _doctor_strip_controls)
     printf '\n== Review checks (api output) ==\n%s\n' "$out" >> "$DOCTOR_DETAIL"
+    local unverified="Whether reviews run could not be checked."
     if [ $rc -eq 0 ]; then
         # Here-string, not a pipe: a pipe would run it in a subshell and
-        # lose DOCTOR_APP_VERSION.
+        # lose DOCTOR_APP_VERSION / DOCTOR_APP_STATE.
         doctor_add_app_tsv <<< "$out"
+        if [ "$DOCTOR_APP_STATE" != answered ]; then
+            DOCTOR_APP_STATE=failed
+            doctor_add unknown reviews.doctor "" \
+                "The review checks returned nothing." "$unverified" \
+                "Run this script again with --verbose: the api's output is under 'Review checks (api output)'; share it with support."
+        fi
     elif [ $rc -eq 42 ]; then
+        DOCTOR_APP_STATE=failed
         doctor_add unknown reviews.doctor "" \
-            "The review checks are not available in this Kodus version." \
-            "" "Upgrade Kodus to a release that ships scripts/doctor/doctor-client.mjs, then run this again."
+            "The review checks are not available in this Kodus version." "$unverified" \
+            "Upgrade Kodus to a release that ships scripts/doctor/doctor-client.mjs, then run this again."
     else
+        DOCTOR_APP_STATE=failed
         doctor_add unknown reviews.doctor "" \
             "The review checks did not run: $(printf '%s' "$out" | tail -2 | tr '\n' ' ' | cut -c1-200)" \
-            "" "Check that the api is up and healthy, then run this again."
+            "$unverified" "Check that the api is up and healthy, then run this again."
     fi
 }
 
@@ -139,7 +199,7 @@ doctor_check_consumer_timeout() {
         return
     fi
     minutes=$((ms / 60000))
-    if [ "$ms" -lt 6300000 ]; then
+    if [ "$ms" -lt 7200000 ]; then
         doctor_add warn broker.consumer_timeout "" \
             "The message queue stops any job that runs longer than ${minutes} minutes." \
             "Reviews of large pull requests that take longer than ${minutes} minutes are cut off and never finish." \
@@ -150,11 +210,76 @@ doctor_check_consumer_timeout() {
     fi
 }
 
+# Resource alarm on the broker (kodus-ai #1694). While a memory or disk alarm
+# is in effect RabbitMQ blocks every publisher: the node, its connections and
+# the consumers stay up, only publishing hangs, so Git events and review jobs
+# are never queued while every service reads "running". check_running passes.
+# doctor_check_rabbit_alarms <rc> <output of `rabbitmq-diagnostics -q check_alarms`> <disk fix> <memory fix>
+doctor_check_rabbit_alarms() {
+    local rc=$1 out=$2 disk_fix=$3 memory_fix=$4 kind="" fix=""
+    if [ "$rc" -eq 0 ]; then
+        doctor_add ok broker.alarms "" "The message queue has no resource alarm (publishers are not blocked)."
+        return
+    fi
+    # Exit 69 with "<Free disk space|Memory> alarm on node ..." per alarm;
+    # anything else (node down, CLI error) is not an answer.
+    if ! printf '%s' "$out" | grep -qi 'alarm on node'; then
+        doctor_add unknown broker.alarms "" "Could not check the message queue for resource alarms." "" \
+            "Run 'rabbitmq-diagnostics check_alarms' on the broker; an alarm there blocks every new review job."
+        return
+    fi
+    if printf '%s' "$out" | grep -qi 'disk.*alarm on node'; then
+        kind="disk"; fix=$disk_fix
+    fi
+    if printf '%s' "$out" | grep -qi 'memory.*alarm on node'; then
+        kind="${kind:+$kind and }memory"; fix="${fix:+$fix }$memory_fix"
+    fi
+    doctor_add fail broker.alarms "" \
+        "The message queue is blocking new jobs (RabbitMQ ${kind:-resource} alarm)." \
+        "No Git event or review job can be queued, so no review runs, while every service still reads as running." \
+        "${fix:-$disk_fix $memory_fix}"
+}
+
 doctor_has_fail() {
     if [ "$DOCTOR_SOFT_APP_FAILS" = "true" ]; then
         grep -q '^fail	' "$DOCTOR_RESULTS"
     else
         grep -qE '^(app:)?fail	' "$DOCTOR_RESULTS"
+    fi
+}
+
+# The review checks never answered, or the api said it could not verify.
+doctor_unverified() {
+    [ "$DOCTOR_APP_STATE" != answered ] || [ "$DOCTOR_APP_VERDICT" = UNVERIFIED ]
+}
+
+# NOT_RUNNING > UNVERIFIED > DEGRADED > OK. A ✘ is a definite answer, so it
+# wins; without one, reviews cannot be called fine when their checks did not run.
+doctor_verdict() {
+    if grep -qE '^(app:)?fail	' "$DOCTOR_RESULTS"; then
+        echo NOT_RUNNING
+    elif doctor_unverified; then
+        echo UNVERIFIED
+    elif grep -qE '^(app:)?warn	' "$DOCTOR_RESULTS"; then
+        echo DEGRADED
+    else
+        echo OK
+    fi
+}
+
+# 1 = reviews do not run, 2 = could not verify, 0 otherwise. --profile dev
+# keeps the api's own answers out of it (its ✘ and its UNVERIFIED verdict:
+# a fresh install has nothing to review yet); the api not answering at all
+# still counts.
+doctor_exit_code() {
+    if doctor_has_fail; then
+        echo 1
+    elif [ "$DOCTOR_APP_STATE" != answered ]; then
+        echo 2
+    elif [ "$DOCTOR_APP_VERDICT" = UNVERIFIED ] && [ "$DOCTOR_SOFT_APP_FAILS" != "true" ]; then
+        echo 2
+    else
+        echo 0
     fi
 }
 
@@ -171,13 +296,12 @@ doctor_render() {
     nfail=$(count fail); nwarn=$(count warn); nunk=$(count unknown)
     ninfo=$(count info); nskip=$(count skip); nok=$(count ok)
 
-    if [ "$nfail" -gt 0 ]; then
-        echo -e "${b}${r}Reviews: NOT RUNNING${n}"
-    elif [ "$nwarn" -gt 0 ]; then
-        echo -e "${b}${y}Reviews: RUNNING, DEGRADED${n}"
-    else
-        echo -e "${b}${g}Reviews: OK${n}"
-    fi
+    case "$(doctor_verdict)" in
+        NOT_RUNNING) echo -e "${b}${r}Reviews: NOT RUNNING${n}" ;;
+        UNVERIFIED) echo -e "${b}${m}Reviews: COULD NOT VERIFY${n}" ;;
+        DEGRADED) echo -e "${b}${y}Reviews: RUNNING, DEGRADED${n}" ;;
+        *) echo -e "${b}${g}Reviews: OK${n}" ;;
+    esac
     local summary=""
     [ "$nfail" -gt 0 ] && summary+="✘ $nfail   "
     [ "$nwarn" -gt 0 ] && summary+="! $nwarn   "

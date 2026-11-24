@@ -153,16 +153,35 @@ only when you intend to wipe all data.
 ```
 
 `doctor.sh` is the first thing to run when something looks off. Its first line
-is the verdict (`Reviews: NOT RUNNING`, `RUNNING, DEGRADED` or `OK`), followed by
-each problem with what you lose and the one thing to do:
+is the verdict (`Reviews: NOT RUNNING`, `COULD NOT VERIFY`, `RUNNING, DEGRADED` or
+`OK`), followed by each problem with what you lose and the one thing to do:
 
 - ✘ reviews do not run, ! reviews run degraded, ? could not verify,
   i optional feature off, - skipped on purpose by your settings.
+- `COULD NOT VERIFY` means nothing is known to be broken, but the review checks
+  inside the api did not answer (or the api could not tell), so the run cannot
+  say reviews are fine.
+
+It exits 1 for `NOT RUNNING`, 2 for `COULD NOT VERIFY` and 0 otherwise, and it
+can be run from any directory.
 
 Besides the containers and config, it asks the api to check what only the app
 can see: the worker taking jobs, a real call to your model, the Git token and
 webhook on every selected repository, seats, the code graph. It changes nothing
 and prints no secret, so the output can be pasted into a support thread.
+
+When support asks for more, build a support bundle:
+
+```bash
+./scripts/collect-diagnostics-compose.sh   # prints the path of kodus-diagnostics-compose-<stamp>.tar.gz
+```
+
+It is read-only and holds the host and Docker versions, each container's image,
+state and restarts, recent Docker events, the last 500 log lines
+of every service, `.env` key names (never values), `validate-env.sh` and RabbitMQ
+status, and the doctor's output. Every file goes through a redactor that removes
+credentials in URLs, tokens, keys and any secret value from your `.env`; still,
+look inside before you share it.
 
 ## Ports
 
@@ -186,6 +205,7 @@ and prints no secret, so the output can be pasted into a support thread.
 | Docker daemon not running | `docker info` |
 | Port already in use | Free the port or remap it in `.env` (see the table above) |
 | RabbitMQ connection errors | `API_RABBITMQ_URI` must match user/pass and use vhost `kodus-ai` |
+| Doctor: "The message queue is blocking new jobs" (`Error publishing message to RabbitMQ … timeout` in the logs) | A RabbitMQ resource alarm. The bundled broker stops taking jobs while free disk is below 1.2× the machine's RAM, or while it holds more than 40% of it: free disk space (or add RAM) and it resumes by itself |
 | DB errors | Check Postgres/Mongo credentials; Postgres needs the pgvector extension |
 | Service crash / boot loop | `docker compose logs -f api` (or `worker`, `webhooks`, `rabbitmq`) |
 | MongoDB exits with `SERVER-121912` | MongoDB 8.3 does not start on Linux kernels 6.19+. `install.sh` handles this by writing `KODUS_MONGO_IMAGE=docker.io/mongo:8.2.11` to `.env`; if you upgrade with `docker compose` directly, add that line yourself |
