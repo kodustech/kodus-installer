@@ -603,14 +603,16 @@ kcheck "webhooks: http is ?, localhost is ✘ in prod, every provider checked" 1
 # spellings are left to the api's webhook probe.
 loop_bad=""
 for u in https://localhost/x https://LOCALHOST/x http://127.0.0.1:3332/x https://127.0.0.1./x \
-         "https://[::1]:3332/x" HTTPS://user:pw@LocalHost./x https://0.0.0.0/x; do
+         "https://[::1]:3332/x" HTTPS://user:pw@LocalHost./x https://0.0.0.0/x \
+         https://hooks.localhost/x "https://127.0.0.1?heartbeat=60" "https://127.255.0.1#x"; do
     (. "$ROOT/scripts/doctor-lib.sh"; rm -f "$DOCTOR_RESULTS" "$DOCTOR_DETAIL"; doctor_is_loopback_host "$(doctor_url_host "$u")") || loop_bad+=" $u(missed)"
 done
-for u in https://hooks.example.com/x https://localhost.example.com/x https://127.example.com/x "https://[2001:db8::1]/x"; do
+for u in https://hooks.example.com/x https://localhost.example.com/x https://127.example.com/x "https://[2001:db8::1]/x" \
+         https://10.0.0.1/x https://128.0.0.1/x https://127.0.0.256/x "https://hooks.example.com?u=localhost" "https://#localhost"; do
     (. "$ROOT/scripts/doctor-lib.sh"; rm -f "$DOCTOR_RESULTS" "$DOCTOR_DETAIL"; doctor_is_loopback_host "$(doctor_url_host "$u")") && loop_bad+=" $u(false)"
 done
 if [ -z "$loop_bad" ]; then
-    pass=$((pass + 1)); echo "ok   loopback hosts: localhost, 127.x, ::1, 0.0.0.0 in any case; public hosts are not"
+    pass=$((pass + 1)); echo "ok   loopback hosts: localhost, *.localhost, 127.x (octets 0-255), ::1, 0.0.0.0 in any case; other hosts are not"
 else
     fail=$((fail + 1)); echo "FAIL loopback hosts:$loop_bad"
 fi

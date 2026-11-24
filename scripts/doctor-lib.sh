@@ -76,11 +76,11 @@ _doctor_on_exit() {
 
 # Host of a URL by plain string rules, not a URL parser (on purpose: the api
 # tests every address for real, with the real clients): drop the scheme, the
-# user info (up to the last @ before the first /), the port and [brackets],
-# and one trailing dot; lowercase.
+# path, query and fragment, the user info (up to the last @ left), the port
+# and [brackets], and one trailing dot; lowercase.
 doctor_url_host() {
     local u=${1#*://} host
-    u=${u%%/*}
+    u=${u%%[/?#]*}
     u=${u##*@}
     case "$u" in
         \[*\]*) host=${u#\[}; host=${host%%\]*} ;;
@@ -91,14 +91,16 @@ doctor_url_host() {
 }
 
 # A host (from doctor_url_host) that names this machine, so a Git provider
-# cannot reach it. Only the plain spellings: other ways to write a loopback
-# address (0x7f.1, 2130706433, octal, IPv4-mapped IPv6, zones) are out of
-# scope by design; the api's webhook probe tests the address for real.
+# cannot reach it: localhost and *.localhost (RFC 6761), ::1, 0.0.0.0, and
+# 127.x.y.z with each part 0-255. Other ways to write a loopback address
+# (0x7f.1, 2130706433, octal, IPv4-mapped IPv6, zones) are out of scope by
+# design; the api's webhook probe tests the address for real.
 doctor_is_loopback_host() {
     case "$1" in
-        localhost|::1|0.0.0.0) return 0 ;;
+        localhost|*.localhost|::1|0.0.0.0) return 0 ;;
     esac
-    printf '%s' "$1" | grep -Eq '^127\.[0-9]+\.[0-9]+\.[0-9]+$'
+    local octet='(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])'
+    printf '%s' "$1" | grep -Eq "^127\.$octet\.$octet\.$octet\$"
 }
 
 # Appends the API's results (doctor-client.mjs --format tsv) read from stdin.
