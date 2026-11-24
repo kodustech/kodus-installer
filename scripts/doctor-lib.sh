@@ -74,6 +74,29 @@ _doctor_on_exit() {
     exit "$rc"
 }
 
+# Host of a URL the way URL parsers (and the app's drivers) read it: the
+# authority ends at the first / ? or #, user:password@ ends at its last @, a
+# [bracketed] IPv6 host keeps its colons. Lowercased, no trailing dot.
+doctor_url_host() {
+    local u=${1#*://} host
+    u=${u%%[/?#]*}
+    u=${u##*@}
+    case "$u" in
+        \[*\]*) host=${u#\[}; host=${host%%\]*} ;;
+        *) host=${u%%:*} ;;
+    esac
+    host=$(printf '%s' "$host" | tr '[:upper:]' '[:lower:]')
+    printf '%s' "${host%.}"
+}
+
+# A host that only ever means "this machine": unreachable from a Git provider.
+doctor_is_loopback_host() {
+    case "$1" in
+        localhost|*.localhost|127.*|0.0.0.0|::1|::) return 0 ;;
+    esac
+    return 1
+}
+
 # Appends the API's results (doctor-client.mjs --format tsv) read from stdin.
 # App results are tagged so --profile dev can keep them out of the exit code.
 doctor_add_app_tsv() {
@@ -81,14 +104,19 @@ doctor_add_app_tsv() {
     while IFS= read -r line; do
         line=${line%$'\r'}
         case "$line" in
-            '#version'*) DOCTOR_APP_VERSION="${line#*	}"; DOCTOR_APP_STATE=answered ;;
+            # Metadata only: a version with no verdict and no check is not an answer.
+            '#version'*) DOCTOR_APP_VERSION="${line#*	}" ;;
             '#verdict'*)
                 DOCTOR_APP_STATE=answered
                 DOCTOR_APP_VERDICT=$(printf '%s' "${line#\#verdict}" | tr -d '[:space:]')
                 ;;
             '#'*|'') ;;
             *)
-                DOCTOR_APP_STATE=answered
+                # Only a line that carries a status is a check result; stray
+                # output (a runtime warning on stderr) is not an answer.
+                case "${line%%$'\t'*}" in
+                    fail|warn|unknown|info|skip|ok) DOCTOR_APP_STATE=answered ;;
+                esac
                 # The api is trusted to send 6 tab-separated fields, but its
                 # text can carry provider messages: drop control bytes (ANSI
                 # included) and anything that is not exactly 6 fields, so the

@@ -232,7 +232,7 @@ parse_user_env() {
                         ;;
                     *)
                         # Drop trailing inline comment ("VAR=foo  # note").
-                        value="${value%%#*}"
+                        value="${value%%[[:space:]]#*}"  # a comment starts at " #", as in compose
                         # Strip trailing whitespace.
                         value="${value%"${value##*[![:space:]]}"}"
                         ;;
@@ -473,10 +473,12 @@ else
         cd "$ROOT_DIR" || true
         services=$($DC config --services 2>/dev/null || true)
 
-        # Keys a service's `environment:` block sets in the compose files
-        # (RUN_MIGRATIONS=false, WORKER_ROLE=analytics, NODE_ENV...). Compose
-        # applies them over env_file, so the container differs from .env there
-        # on purpose: that is not drift, and recreating would not change it.
+        # A service's `environment:` block in the compose files, as
+        # "KEY<TAB>value" lines (later files win). Compose applies it over
+        # env_file: a literal (RUN_MIGRATIONS=false, WORKER_ROLE=analytics) makes
+        # the container differ from .env on purpose, which is not drift; a
+        # pass-through of the same variable (API_WEBHOOKS_PORT=${API_WEBHOOKS_PORT:-3332})
+        # still follows .env, so a stale container is drift.
         compose_env_overrides() {
             local f
             for f in "$ROOT_DIR/docker-compose.yml" "$ROOT_DIR/docker-compose.override.yml"; do
@@ -494,10 +496,26 @@ else
                         sub(/^[[:space:]]*(-[[:space:]]*)?/, "", line)
                         if (line == "" || line ~ /^#/) next
                         gsub(/["\047]/, "", line)
-                        sub(/[=:].*/, "", line)
-                        if (line ~ /^[A-Za-z_][A-Za-z0-9_]*$/) print line
+                        if (match(line, /[=:]/)) { key = substr(line, 1, RSTART - 1); val = substr(line, RSTART + 1) }
+                        else { key = line; val = "" }
+                        sub(/[[:space:]]+$/, "", key); sub(/^[[:space:]]+/, "", val); sub(/[[:space:]]+$/, "", val)
+                        if (key ~ /^[A-Za-z_][A-Za-z0-9_]*$/) print key "\t" val
                     }' "$f"
             done
+        }
+
+        # What the container should hold for <var> given the compose entry
+        # <expr>, or nothing when compose sets it on its own (a literal, or
+        # another variable): then it is not compared.
+        expected_from_compose() { # <var> <expr> <.env value>
+            local var=$1 expr=$2 value=$3 default
+            case "$expr" in
+                "\${$var}"|"\$$var") printf '=%s' "$value" ;;
+                "\${$var:-"*"}")
+                    default=${expr#"\${$var:-"}; default=${default%\}}
+                    if [ -n "$value" ]; then printf '=%s' "$value"; else printf '=%s' "$default"; fi ;;
+                "\${$var-"*"}") printf '=%s' "$value" ;;  # set in .env, even empty
+            esac
         }
 
         if [ -z "$services" ]; then
@@ -516,14 +534,19 @@ else
                 drift=0
                 compared=0
                 drift_names=""
-                overrides=" $(compose_env_overrides "$service" | tr '\n' ' ') "
+                overrides=$(compose_env_overrides "$service")
                 for var in $USER_VARS; do
-                    case "$overrides" in *" $var "*) continue ;; esac
+                    user_value=$(get_user_value "$var")
+                    expr=$(printf '%s\n' "$overrides" | awk -F'\t' -v k="$var" '$1 == k { v = $2; f = 1 } END { if (f) print "=" v }')
+                    if [ -n "$expr" ]; then
+                        expected=$(expected_from_compose "$var" "${expr#=}" "$user_value")
+                        [ -n "$expected" ] || continue
+                        user_value=${expected#=}
+                    fi
                     container_line=$(grep -m1 "^${var}=" "$envs_tmp" 2>/dev/null || true)
                     [ -z "$container_line" ] && continue
                     compared=$((compared + 1))
                     container_value="${container_line#*=}"
-                    user_value=$(get_user_value "$var")
                     if [ "$user_value" != "$container_value" ]; then
                         drift=$((drift + 1))
                         drift_names="${drift_names:+$drift_names, }$var"

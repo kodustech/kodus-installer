@@ -15,6 +15,11 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 . "$SCRIPT_DIR/redact-lib.sh"
 RELEASE="kodus"; NS=""; OUT_DIR="${TMPDIR:-/tmp}"
 while [ $# -gt 0 ]; do
+  # Every option takes a value: a bare flag must not trip `set -u` on $2.
+  case "$1" in
+    -n|--namespace|-r|--release|-o|--output)
+      [ $# -ge 2 ] && [ -n "$2" ] || { echo "$1 needs a value"; exit 1; } ;;
+  esac
   case "$1" in
     -n|--namespace) NS="$2"; shift 2 ;;
     -r|--release)   RELEASE="$2"; shift 2 ;;
@@ -23,6 +28,9 @@ while [ $# -gt 0 ]; do
     *) echo "Unknown arg: $1"; exit 1 ;;
   esac
 done
+case "$OUT_DIR" in /*) ;; *) OUT_DIR="$PWD/$OUT_DIR" ;; esac
+# Fail now, not after minutes of collecting: tar cannot create the directory.
+mkdir -p "$OUT_DIR" 2>/dev/null || { echo "Cannot create the output directory $OUT_DIR"; exit 1; }
 command -v kubectl >/dev/null 2>&1 || { echo "kubectl not found"; exit 1; }
 [ -z "$NS" ] && NS=$(kubectl config view --minify -o jsonpath='{..namespace}' 2>/dev/null); [ -z "$NS" ] && NS=default
 K="kubectl -n $NS"

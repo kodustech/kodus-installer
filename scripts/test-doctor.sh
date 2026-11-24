@@ -226,6 +226,9 @@ cat > "$VE/.env.example" <<'EOF'
 API_PORT=3001
 API_RABBITMQ_URI=amqp://kodus:kodus@rabbitmq:5672/kodus-ai
 RUN_MIGRATIONS=true
+API_WEBHOOKS_PORT=3332
+OBSERVABILITY_MONGO_ENABLED=
+API_JWT_SECRET=
 # (secret, type: url, opt-in: uncomment to enable)
 # MONGODB_URI=
 EOF
@@ -238,22 +241,30 @@ ANALYTICS_PG_DB_HOST=
 ANALYTICS_INGESTION_CRON=*/30 * * * *
 MONGODB_URI=mongodb+srv://u:p@cluster0.example.net/kodus
 TYPO_VAR=1
+API_WEBHOOKS_PORT=3333
+OBSERVABILITY_MONGO_ENABLED=
+API_JWT_SECRET=Se#cretValue1  # a comment starts at " #"
 EOF
 rm -f "$VE/report"
+# webhooks: API_WEBHOOKS_PORT is passed through by compose (${API_WEBHOOKS_PORT:-3332})
+# and the container still has the old port: drift. OBSERVABILITY_MONGO_ENABLED
+# is empty in .env, so compose's default applies: not drift. RUN_MIGRATIONS is
+# a compose literal: not drift. API_JWT_SECRET holds a # that is not a comment.
 ve_out=$(env PATH="$WORK/bin:$PATH" VALIDATE_ENV_REPORT="$VE/report" \
-    'STUB_ENV_worker=RUN_MIGRATIONS=false\nAPI_PORT=3001\nAPI_RABBITMQ_URI=amqp://kodus:OldPassw0rd@rabbitmq:5672/kodus-ai\n' \
+    'STUB_ENV_worker=RUN_MIGRATIONS=false\nAPI_PORT=3001\nAPI_RABBITMQ_URI=amqp://kodus:OldPassw0rd@rabbitmq:5672/kodus-ai\nAPI_JWT_SECRET=Se#cretValue1\n' \
+    'STUB_ENV_webhooks=API_WEBHOOKS_PORT=3332\nOBSERVABILITY_MONGO_ENABLED=false\nRUN_MIGRATIONS=false\n' \
     bash "$VE/scripts/validate-env.sh" 2>&1 | sed 's/\x1b\[[0-9;]*m//g')
 ve_ok=true
-for needle in "TYPO_VAR is set but not in the self-hosted schema" "worker API_RABBITMQ_URI drift"; do
+for needle in "TYPO_VAR is set but not in the self-hosted schema" "worker API_RABBITMQ_URI drift" "webhooks API_WEBHOOKS_PORT drift: .env=3333 container=3332"; do
     printf '%s' "$ve_out" | grep -qF -- "$needle" || { ve_ok=false; echo "    missing: $needle"; }
 done
-for needle in N3wPassw0rd OldPassw0rd "RUN_MIGRATIONS drift" "KODUS_LICENSE_KEY is set" "ANALYTICS_PG_DB_HOST is set" "ANALYTICS_INGESTION_CRON is set" "MONGODB_URI is set"; do
+for needle in N3wPassw0rd OldPassw0rd "RUN_MIGRATIONS drift" "OBSERVABILITY_MONGO_ENABLED drift" "API_JWT_SECRET drift" "KODUS_LICENSE_KEY is set" "ANALYTICS_PG_DB_HOST is set" "ANALYTICS_INGESTION_CRON is set" "MONGODB_URI is set"; do
     printf '%s' "$ve_out" | grep -qF -- "$needle" && { ve_ok=false; echo "    unexpected: $needle"; }
 done
 grep -qF "$(printf 'unknown\tKodus does not know 1 variable(s) set in .env: TYPO_VAR.')" "$VE/report" 2>/dev/null || { ve_ok=false; echo "    report lacks the unknown-variable line"; }
 grep -qF "$(printf 'unknown\tThe worker service runs with values that differ from .env: API_RABBITMQ_URI.')" "$VE/report" 2>/dev/null || { ve_ok=false; echo "    report lacks the drift line"; }
 if $ve_ok; then
-    pass=$((pass + 1)); echo "ok   validate-env: known app vars, masked URIs, compose overrides are not drift, report file"
+    pass=$((pass + 1)); echo "ok   validate-env: known app vars, masked URIs, compose literals are not drift, pass-throughs are, report file"
 else
     fail=$((fail + 1)); echo "FAIL validate-env"; printf '%s\n' "$ve_out" | sed 's/^/    | /' | tail -30
 fi
@@ -297,12 +308,19 @@ check "bundled RabbitMQ stopped: one ✘, no repeated or mislabelled lines" 1 "R
 EXTRA_NEEDLES=("✘ The worker service is not running." "Impact: No review runs")
 check "worker stopped: NOT RUNNING, exit 1" 1 "Reviews: NOT RUNNING" STUB_APP_TSV="$APP_OK" STUB_DOWN=worker
 
-EXTRA_NEEDLES=("✘ The webhooks service is stopped (exited with code 1)." "logs --tail 200 webhooks")
-ABSENT_NEEDLES=("webhooks is not responding")
-check "webhooks exited: one ✘, its HTTP probe not repeated" 1 "Reviews: NOT RUNNING" STUB_APP_TSV="$APP_OK" "STUB_STATE_webhooks=exited|1|"
+# The stubbed curl always answers 200, so the skip is asserted by its own
+# NOTE and by the probe's success line being absent (--verbose shows both).
+EXTRA_NEEDLES=("✘ The webhooks service is stopped (exited with code 1)." "logs --tail 200 webhooks" "Skipping webhooks HTTP check (service not running).")
+ABSENT_NEEDLES=("webhooks is not responding" "webhooks is responding")
+check "webhooks exited: one ✘, its HTTP probe not repeated" 1 "Reviews: NOT RUNNING" STUB_APP_TSV="$APP_OK" "STUB_STATE_webhooks=exited|1|" DOCTOR_TEST_VERBOSE=1
 
 EXTRA_NEEDLES=("? The review checks did not run:")
 check "api checks fail to answer: COULD NOT VERIFY, exit 2" 2 "Reviews: COULD NOT VERIFY" STUB_APP_RC=3
+
+# A version header alone, or stray output with no status, is not an answer.
+EXTRA_NEEDLES=("? The review checks returned nothing.")
+check "api sends only #version: COULD NOT VERIFY, exit 2" 2 "Reviews: COULD NOT VERIFY" 'STUB_APP_TSV=#version\t2.4.0\n'
+check "api sends only stray output: COULD NOT VERIFY, exit 2" 2 "Reviews: COULD NOT VERIFY" 'STUB_APP_TSV=#version\t2.4.0\n(node:1) Warning: something\n'
 
 # The api's own UNVERIFIED verdict holds even when every line it sent is ✔.
 check "api says UNVERIFIED: COULD NOT VERIFY, exit 2" 2 "Reviews: COULD NOT VERIFY" 'STUB_APP_TSV=#verdict\tUNVERIFIED\n#version\t2.4.0\nok\tllm.completion\tacme\tThe review model answered a test request.\t\t\n'
@@ -350,6 +368,19 @@ echo "API_MG_DB_URI=mongodb://kodus:pw@mongo.internal:27017/kodus" >> "$WORK/ins
 EXTRA_NEEDLES=("i MongoDB is external (API_MG_DB_URI)")
 ABSENT_NEEDLES=("Postgres is external")
 check "API_MG_DB_URI set: Mongo checked from the api" 0 "Reviews: OK" STUB_APP_TSV="$APP_OK"
+cp "$WORK/env.orig" "$WORK/install/.env"
+
+# The broker host is read as the driver reads it: a bracketed IPv6 host keeps
+# its colons, and an unencoded / in the password is called out instead of
+# turning the user name into the "host".
+echo "API_RABBITMQ_URI=amqp://kodus:kodus@[::1]:5672/kodus-ai" >> "$WORK/install/.env"
+EXTRA_NEEDLES=("i RabbitMQ is external (API_RABBITMQ_URI host ::1)")
+check "IPv6 broker URI: host parsed with its brackets" 0 "Reviews: OK" STUB_APP_TSV="$APP_OK"
+cp "$WORK/env.orig" "$WORK/install/.env"
+echo "API_RABBITMQ_URI=amqp://kodus:pa/ss@rabbitmq:5672/kodus-ai" >> "$WORK/install/.env"
+EXTRA_NEEDLES=("? API_RABBITMQ_URI has a / ? or # in its user name or password that is not encoded." "reads the broker host as 'kodus'")
+ABSENT_NEEDLES=("RabbitMQ is external")
+check "unencoded / in the broker password: ?, bundled broker still checked" 0 "Reviews: OK" STUB_APP_TSV="$APP_OK"
 cp "$WORK/env.orig" "$WORK/install/.env"
 
 # http works for a Git server on the same network, and the app does not require https.
@@ -545,6 +576,10 @@ kcheck "webhooks: http is ?, localhost is ✘ in prod, every provider checked" 1
     K_CM_API_GITLAB_CODE_MANAGEMENT_WEBHOOK=http://gitlab-hooks.internal/gitlab/webhook \
     K_CM_GLOBAL_BITBUCKET_CODE_MANAGEMENT_WEBHOOK=https://localhost/bitbucket/webhook \
     K_CM_API_FORGEJO_CODE_MANAGEMENT_WEBHOOK=https://hooks.example.com/forgejo/webhook
+EXTRA_NEEDLES=("✘ API_GITHUB_CODE_MANAGEMENT_WEBHOOK points at localhost" "✔ GitLab webhook: https://localhost.example.com/gitlab/webhook")
+kcheck "webhooks: LOCALHOST is loopback, localhost.example.com is not" 1 "Reviews: NOT RUNNING" K_APP_TSV="$APP_OK" DOCTOR_TEST_VERBOSE=1 \
+    K_CM_API_GITHUB_CODE_MANAGEMENT_WEBHOOK=HTTPS://LOCALHOST/github/webhook \
+    K_CM_API_GITLAB_CODE_MANAGEMENT_WEBHOOK=https://localhost.example.com/gitlab/webhook
 EXTRA_NEEDLES=("? NEXTAUTH_URL is empty")
 kcheck "empty NEXTAUTH_URL: a line" 0 "Reviews: OK" K_APP_TSV="$APP_OK" K_CM_NEXTAUTH_URL=
 APP_UNVERIFIED='#verdict\tUNVERIFIED\n#version\t2.4.0\n'
@@ -580,6 +615,7 @@ API_RABBITMQ_URI: amqp://kodus:LEAK30@rabbitmq:5672/kodus-ai
       API_CRYPTO_KEY:  LEAK31value
 masked sk-svcac****LEAK32VeAA
 query ?client_secret=LEAK33&x=1
+API_PG_DB_PASSWORD=ab&LEAK34tail API_KEY=<LEAK35> DB_PASSWORD=x;LEAK36,y API_TOKEN=ab"LEAK37
 EOF
 cat > "$WORK/keep.txt" <<'EOF'
 Schema kodus_workflow exists.
@@ -612,10 +648,10 @@ fi
 
 # The K8s bundle: every file in the archive goes through the redactor,
 # describe-pods and the doctor output included.
-mkdir -p "$WORK/bundle"
+# -o names a directory that does not exist yet: it is created up front.
 (cd "$WORK/install" && env PATH="$WORK/kbin:$PATH" K_LEAKS="$WORK/leaks.txt" K_APP_TSV="$APP_OK" \
-    ./scripts/collect-diagnostics.sh -n kodus -r kodus -o "$WORK/bundle") > "$WORK/bundle.log" 2>&1
-tarball=$(ls "$WORK/bundle"/kodus-diagnostics-kodus-*.tar.gz 2>/dev/null | head -1)
+    ./scripts/collect-diagnostics.sh -n kodus -r kodus -o "$WORK/bundle/new") > "$WORK/bundle.log" 2>&1
+tarball=$(ls "$WORK/bundle/new"/kodus-diagnostics-kodus-*.tar.gz 2>/dev/null | head -1)
 if [ -n "$tarball" ] && mkdir -p "$WORK/bundle/x" && tar -xzf "$tarball" -C "$WORK/bundle/x" \
     && [ -s "$(ls "$WORK/bundle/x"/*/04-describe-pods.txt)" ] && ls "$WORK/bundle/x"/*/07-doctor.txt >/dev/null \
     && ! grep -rq 'LEAK[0-9]' "$WORK/bundle/x"; then
@@ -625,12 +661,29 @@ else
     grep -rn 'LEAK[0-9]' "$WORK/bundle/x" 2>/dev/null | head -10 | sed 's/^/    | /'
 fi
 
+# A bare -o (no value) is reported, not an unbound-variable abort.
+bare_ok=true
+for script in collect-diagnostics.sh collect-diagnostics-compose.sh; do
+    bare_out=$(cd "$WORK/install" && env PATH="$WORK/kbin:$WORK/bin:$PATH" ./scripts/$script -o 2>&1); bare_rc=$?
+    if [ "$bare_rc" -ne 1 ] || ! printf '%s' "$bare_out" | grep -q 'needs a' || printf '%s' "$bare_out" | grep -q 'unbound'; then
+        bare_ok=false; echo "    $script -o: rc=$bare_rc: $bare_out"
+    fi
+done
+if $bare_ok; then
+    pass=$((pass + 1)); echo "ok   support bundles: a bare -o is reported, not a set -u abort"
+else
+    fail=$((fail + 1)); echo "FAIL support bundles: bare -o"
+fi
+
 # The Compose bundle: logs, events and the doctor go through the redactor, a
 # secret value from .env is replaced wherever it appears, .env contributes key
 # names only, and a container's env contributes RELEASE_VERSION only.
 cp "$WORK/env.orig" "$WORK/install/.env"
 echo 'API_JWT_SECRET=LEAK40envValueFromDotEnv' >> "$WORK/install/.env"
 echo 'mongo said: authentication failed, password LEAK40envValueFromDotEnv' >> "$WORK/leaks.txt"
+# Compose passes pa#... whole (a comment needs a space before #): so must the scrub.
+echo 'API_PG_DB_PASSWORD=Pa#LEAK43word  # db password' >> "$WORK/install/.env"
+echo 'provider rejected credentials Pa#LEAK43word for user kodus' >> "$WORK/leaks.txt"
 rm -rf "$WORK/cbundle"; mkdir -p "$WORK/cbundle"
 (cd "$WORK" && env PATH="$WORK/bin:$PATH" STUB_LEAKS="$WORK/leaks.txt" STUB_APP_TSV="$APP_OK" \
     'STUB_ENV_api=RELEASE_VERSION=2.4.0\nAPI_PG_DB_PASSWORD=LEAK41containerEnv\nWEB_HOSTNAME_API=localhost\n' \

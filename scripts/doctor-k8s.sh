@@ -279,13 +279,18 @@ for entry in API_GITHUB_CODE_MANAGEMENT_WEBHOOK:github:GitHub \
     */${seg}/webhook) path_ok=1 ;;
     */azdevops/webhook) [ "$seg" = azure-repos ] && path_ok=1 ;;
   esac
-  case "$url" in
-    *://localhost*|*://127.0.0.1*|*://0.0.0.0*)
+  # Host and scheme compared case-insensitively (LOCALHOST, HTTPS://).
+  scheme=$(printf '%s' "${url%%://*}" | tr '[:upper:]' '[:lower:]')
+  if [ "$scheme" != "$url" ] && doctor_is_loopback_host "$(doctor_url_host "$url")"; then
+    scheme=loopback
+  fi
+  case "$scheme" in
+    loopback)
       notprod "$key points at localhost ($url) — the Git provider cannot reach it, so 'save repositories' fails. Use a URL your Git provider reaches, like https://<webhooks-host>/${seg}/webhook." ;;
-    http://*|https://*)
+    http|https)
       if [ -z "$path_ok" ]; then
         warn "$label webhook path looks off ($url) — expected .../${seg}/webhook"
-      elif [ "${url#http://}" != "$url" ]; then
+      elif [ "$scheme" = http ]; then
         warn "$label webhook uses http:// ($url) — fine if your Git server reaches it on your network; a Git provider on the internet should get https"
       else
         ok "$label webhook: $url"

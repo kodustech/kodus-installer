@@ -22,7 +22,8 @@ ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 OUT_DIR="${TMPDIR:-/tmp}"
 while [ $# -gt 0 ]; do
     case "$1" in
-        -o|--output) OUT_DIR="$2"; shift 2 ;;
+        -o|--output) [ $# -ge 2 ] && [ -n "$2" ] || { echo "$1 needs a directory"; exit 1; }
+                     OUT_DIR="$2"; shift 2 ;;
         -h|--help) echo "Usage: $0 [-o output-dir]"; exit 0 ;;
         *) echo "Unknown arg: $1"; exit 1 ;;
     esac
@@ -72,7 +73,9 @@ if [ -f .env ]; then
         case "$value" in
             \"*) value=${value#\"}; value=${value%%\"*} ;;
             \'*) value=${value#\'}; value=${value%%\'*} ;;
-            *) value=${value%%#*}; value="${value%"${value##*[![:space:]]}"}" ;;
+            # Compose starts a comment only at a # after whitespace: a
+            # password like pa#ssw0rd is passed whole, so register it whole.
+            *) value=${value%%[[:space:]]#*}; value="${value%"${value##*[![:space:]]}"}" ;;
         esac
         case "$key" in
             *PASSWORD|*PASSWD|*PASS|*PWD|*SECRET|*KEY|*TOKEN|*DSN|*URI|*CREDENTIAL|*CREDENTIALS|*PRIVATE) ;;

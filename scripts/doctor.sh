@@ -86,9 +86,9 @@ validate_webhook_url() {
         return 0
     fi
 
-    case "$url" in
-        https://*) ;;
-        http://*)
+    case "$(printf '%s' "${url%%://*}" | tr '[:upper:]' '[:lower:]')://" in
+        https://) ;;
+        http://)
             # The app does not require https, and a Git server on the same
             # network (GitLab, Forgejo, Bitbucket Data Center) works over http.
             warnings=$((warnings + 1))
@@ -238,7 +238,7 @@ else
                                 value="${value%%\'*}"
                                 ;;
                             *)
-                                value="${value%%#*}"
+                                value="${value%%[[:space:]]#*}"  # a comment starts at " #", as in compose
                                 value="${value%"${value##*[![:space:]]}"}"
                                 ;;
                         esac
@@ -553,7 +553,6 @@ section "Connectivity checks"
 # API_MG_DB_URI the app prefers were ignored, and a password with @ or : broke
 # the URI. The review checks run inside the api with the app's own settings and
 # report Postgres and MongoDB there. The bundled containers are still checked.
-uri_host() { local u=${1#*://}; u=${u%%/*}; u=${u##*@}; printf '%s' "${u%%:*}"; }
 pg_source=""; mongo_source=""; rabbit_source=""
 if [ "$use_local_db" != "true" ]; then
     pg_source="USE_LOCAL_DB=false"; mongo_source="USE_LOCAL_DB=false"
@@ -575,9 +574,28 @@ fi
 if [ "$use_local_rabbitmq" != "true" ]; then
     rabbit_source="USE_LOCAL_RABBITMQ=false"
 elif [ -n "${API_RABBITMQ_URI:-}" ]; then
-    case "$(uri_host "$API_RABBITMQ_URI")" in
-        rabbitmq|rabbitmq-prod|"${RABBITMQ_HOSTNAME:-rabbitmq}") ;;
-        *) rabbit_source="API_RABBITMQ_URI host $(uri_host "$API_RABBITMQ_URI")" ;;
+    # Parsed as the driver parses it (doctor_url_host). A / ? or # left
+    # unencoded in the user or password ends the host early, so the driver
+    # dials the wrong host: say so, and judge the host that was meant.
+    rabbit_rest=${API_RABBITMQ_URI#*://}
+    rabbit_authority=${rabbit_rest%%[/?#]*}
+    rabbit_host=$(doctor_url_host "$API_RABBITMQ_URI")
+    case "$rabbit_authority" in
+        *@*) ;;
+        *)
+            case "${rabbit_rest#"$rabbit_authority"}" in
+                *@*)
+                    warnings=$((warnings + 1))
+                    doctor_add unknown infra "" \
+                        "API_RABBITMQ_URI has a / ? or # in its user name or password that is not encoded." "" \
+                        "Write / as %2F, ? as %3F and # as %23 in that part: as written, the app reads the broker host as '${rabbit_host}' and cannot connect."
+                    rabbit_host=$(doctor_url_host "amqp://${rabbit_rest##*@}")
+                    ;;
+            esac ;;
+    esac
+    case "$rabbit_host" in
+        rabbitmq|rabbitmq-prod|"$(printf '%s' "${RABBITMQ_HOSTNAME:-rabbitmq}" | tr '[:upper:]' '[:lower:]')") ;;
+        *) rabbit_source="API_RABBITMQ_URI host ${rabbit_host}" ;;
     esac
 fi
 [ -n "$pg_source" ] && note "Postgres is external (${pg_source}): the review checks test it from inside the api, with the app's own settings."
