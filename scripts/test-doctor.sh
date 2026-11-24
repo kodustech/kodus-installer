@@ -370,43 +370,28 @@ ABSENT_NEEDLES=("Postgres is external")
 check "API_MG_DB_URI set: Mongo checked from the api" 0 "Reviews: OK" STUB_APP_TSV="$APP_OK"
 cp "$WORK/env.orig" "$WORK/install/.env"
 
-# The broker host is read as the driver reads it: a bracketed IPv6 host keeps
-# its colons, and an unencoded / in the password is called out instead of
-# turning the user name into the "host".
-echo "API_RABBITMQ_URI=amqp://kodus:kodus@[::1]:5672/kodus-ai" >> "$WORK/install/.env"
-EXTRA_NEEDLES=("i RabbitMQ is external (API_RABBITMQ_URI host ::1)")
-check "IPv6 broker URI: host parsed with its brackets" 0 "Reviews: OK" STUB_APP_TSV="$APP_OK"
-cp "$WORK/env.orig" "$WORK/install/.env"
-# API_RABBITMQ_URI is read as the client reads it: the authority ends at the
-# first / ? #, the user info at the last @ in it, and host[:port] must be valid.
-# A generated password with an unencoded / is rejected by the client: ✘.
-echo "API_RABBITMQ_URI=amqp://kodus:pa/ss@rabbitmq:5672/kodus-ai" >> "$WORK/install/.env"
-EXTRA_NEEDLES=("✘ API_RABBITMQ_URI cannot be parsed: percent-encode / ? # @ in the user name or password." "Impact: The api, worker and webhooks cannot connect" "Write / as %2F")
-ABSENT_NEEDLES=("RabbitMQ is external" "read two ways")
-check "unencoded / in the broker password: ✘, the client rejects the URI" 1 "Reviews: NOT RUNNING" STUB_APP_TSV="$APP_OK"
-cp "$WORK/env.orig" "$WORK/install/.env"
-echo "API_RABBITMQ_URI=amqp://kodus:kodus@rabbitmq:99999/kodus-ai" >> "$WORK/install/.env"
-EXTRA_NEEDLES=("✘ API_RABBITMQ_URI cannot be parsed")
-check "broker port out of range: ✘" 1 "Reviews: NOT RUNNING" STUB_APP_TSV="$APP_OK"
-cp "$WORK/env.orig" "$WORK/install/.env"
-# An @ after a valid host:port belongs to the vhost, and the client accepts it.
-echo "API_RABBITMQ_URI=amqp://rabbitmq:5672/kodus@ai" >> "$WORK/install/.env"
-EXTRA_NEEDLES=("✔ The message queue lets jobs run up to 120 minutes.")
-ABSENT_NEEDLES=("cannot be parsed" "read two ways" "RabbitMQ is external")
-check "@ in the vhost: no line, the bundled broker is checked" 0 "Reviews: OK" STUB_APP_TSV="$APP_OK" DOCTOR_TEST_VERBOSE=1
-cp "$WORK/env.orig" "$WORK/install/.env"
-# User info ends at the last @ in the authority, as in the client: here the
-# client dials "ss", so that is the host the doctor judges.
-echo "API_RABBITMQ_URI=amqp://kodus:p@ss/word@rabbitmq:5672/kodus-ai" >> "$WORK/install/.env"
-EXTRA_NEEDLES=("i RabbitMQ is external (API_RABBITMQ_URI host ss)")
-ABSENT_NEEDLES=("cannot be parsed")
-check "@ and / in the broker password: the host the client dials" 0 "Reviews: OK" STUB_APP_TSV="$APP_OK"
-cp "$WORK/env.orig" "$WORK/install/.env"
-# A well-formed external URI is still external, with no other line about it.
+# Bundled or external broker, by a plain rule on the URI's host. The URI itself
+# is never judged here (the api's broker check connects with the real client).
 echo "API_RABBITMQ_URI=amqps://kodus:secret@broker.internal:5671/kodus-ai" >> "$WORK/install/.env"
 EXTRA_NEEDLES=("i RabbitMQ is external (API_RABBITMQ_URI host broker.internal)")
-ABSENT_NEEDLES=("cannot be parsed")
-check "well-formed external broker URI: external, no ✘" 0 "Reviews: OK" STUB_APP_TSV="$APP_OK"
+check "external broker host: external" 0 "Reviews: OK" STUB_APP_TSV="$APP_OK"
+cp "$WORK/env.orig" "$WORK/install/.env"
+echo "API_RABBITMQ_URI=amqp://kodus:kodus@RabbitMQ:5672/kodus-ai" >> "$WORK/install/.env"
+EXTRA_NEEDLES=("✔ The message queue lets jobs run up to 120 minutes.")
+ABSENT_NEEDLES=("RabbitMQ is external")
+check "bundled broker host: bundled checks run" 0 "Reviews: OK" STUB_APP_TSV="$APP_OK" DOCTOR_TEST_VERBOSE=1
+cp "$WORK/env.orig" "$WORK/install/.env"
+# A host that cannot be read counts as the bundled broker: it is still checked.
+echo "API_RABBITMQ_URI=amqp://:5672/kodus-ai" >> "$WORK/install/.env"
+EXTRA_NEEDLES=("✔ The message queue lets jobs run up to 120 minutes." "✔ The message queue has no resource alarm")
+ABSENT_NEEDLES=("RabbitMQ is external")
+check "odd broker URI with the bundled broker running: bundled checks run, no ✘" 0 "Reviews: OK" STUB_APP_TSV="$APP_OK" DOCTOR_TEST_VERBOSE=1
+cp "$WORK/env.orig" "$WORK/install/.env"
+# A URI the client would reject (unencoded / in a generated password) is the
+# api's to report (✘ broker.connect, in the client's words): no ✘ from here.
+echo "API_RABBITMQ_URI=amqp://kodus:pa/ss@rabbitmq:5672/kodus-ai" >> "$WORK/install/.env"
+ABSENT_NEEDLES=("cannot be parsed" "API_RABBITMQ_URI has")
+check "broker URI shape: the installer prints no ✘ for it" 0 "Reviews: OK" STUB_APP_TSV="$APP_OK"
 cp "$WORK/env.orig" "$WORK/install/.env"
 
 # The scheme is case-insensitive, and so is the host the doctor reads.
@@ -613,33 +598,26 @@ kcheck "webhooks: http is ?, localhost is ✘ in prod, every provider checked" 1
     K_CM_API_GITLAB_CODE_MANAGEMENT_WEBHOOK=http://gitlab-hooks.internal/gitlab/webhook \
     K_CM_GLOBAL_BITBUCKET_CODE_MANAGEMENT_WEBHOOK=https://localhost/bitbucket/webhook \
     K_CM_API_FORGEJO_CODE_MANAGEMENT_WEBHOOK=https://hooks.example.com/forgejo/webhook
-EXTRA_NEEDLES=("✘ API_GITHUB_CODE_MANAGEMENT_WEBHOOK points at localhost" "✘ GLOBAL_BITBUCKET_CODE_MANAGEMENT_WEBHOOK points at localhost" "✔ Forgejo webhook: https://[2001:db8::1]/forgejo/webhook")
-kcheck "webhooks: a mapped IPv6 loopback is loopback, a real IPv6 host is not" 1 "Reviews: NOT RUNNING" K_APP_TSV="$APP_OK" DOCTOR_TEST_VERBOSE=1 \
-    "K_CM_API_GITHUB_CODE_MANAGEMENT_WEBHOOK=https://[::ffff:127.0.0.1]/github/webhook" \
-    "K_CM_GLOBAL_BITBUCKET_CODE_MANAGEMENT_WEBHOOK=https://[0:0:0:0:0:0:0:1]:3332/bitbucket/webhook" \
-    "K_CM_API_FORGEJO_CODE_MANAGEMENT_WEBHOOK=https://[2001:db8::1]/forgejo/webhook"
-# Hosts read exactly as the WHATWG URL parser reads them (checked against
-# Node's URL): every spelling of this machine, and what the parser makes a
-# domain or rejects. 0x is 0.0.0.0 to the parser; 127.0.0.256 is an invalid URL.
+# The loopback rule is plain on purpose (localhost, ::1, 0.0.0.0, 127.x.y.z;
+# case, one trailing dot, brackets, user info and port ignored). Other
+# spellings are left to the api's webhook probe.
 loop_bad=""
-for h in localhost a.localhost localhost. 127.0.0.1 127.1 127.0.0.1. 0177.0.0.1 0x7f.1 0x7f000001 127.0.0.0x1 \
-         2130706433 0 00 0x 0.0.0.0 ::1 :: 0:0:0:0:0:0:0:1 0000::0001 ::ffff:127.0.0.1 ::ffff:7f00:1 ::ffff:0.0.0.0; do
-    (. "$ROOT/scripts/doctor-lib.sh"; rm -f "$DOCTOR_RESULTS" "$DOCTOR_DETAIL"; doctor_is_loopback_host "$h") || loop_bad+=" $h(missed)"
+for u in https://localhost/x https://LOCALHOST/x http://127.0.0.1:3332/x https://127.0.0.1./x \
+         "https://[::1]:3332/x" HTTPS://user:pw@LocalHost./x https://0.0.0.0/x; do
+    (. "$ROOT/scripts/doctor-lib.sh"; rm -f "$DOCTOR_RESULTS" "$DOCTOR_DETAIL"; doctor_is_loopback_host "$(doctor_url_host "$u")") || loop_bad+=" $u(missed)"
 done
-for h in example.com example.com. localhost.example.com 127.example.com 10.0.0.1 128.0.0.1 127.0.0.256 127.0.0.1.. \
-         127.0.65536 127.16777216 4294967296 1.2.3.4.5 08.0.0.1 0x1g 0x.0.0.1 2001:db8::1 ::ffff:10.0.0.1 ::2 1::1 \
-         ::127.0.0.1 ::1%lo fe80::1%eth0 ::ffff:127.0.0.01 ::ffff:300.1.1.1; do
-    (. "$ROOT/scripts/doctor-lib.sh"; rm -f "$DOCTOR_RESULTS" "$DOCTOR_DETAIL"; doctor_is_loopback_host "$h") && loop_bad+=" $h(false)"
+for u in https://hooks.example.com/x https://localhost.example.com/x https://127.example.com/x "https://[2001:db8::1]/x"; do
+    (. "$ROOT/scripts/doctor-lib.sh"; rm -f "$DOCTOR_RESULTS" "$DOCTOR_DETAIL"; doctor_is_loopback_host "$(doctor_url_host "$u")") && loop_bad+=" $u(false)"
 done
-# The host is split without pathname expansion: a file named 127 in the
-# working directory must not turn *.0.0.1 into 127.0.0.1.
-mkdir -p "$WORK/globdir" && touch "$WORK/globdir/127"
-(cd "$WORK/globdir" && . "$ROOT/scripts/doctor-lib.sh"; rm -f "$DOCTOR_RESULTS" "$DOCTOR_DETAIL"; doctor_is_loopback_host '*.0.0.1') && loop_bad+=" *.0.0.1(globbed)"
 if [ -z "$loop_bad" ]; then
-    pass=$((pass + 1)); echo "ok   loopback hosts: read as the WHATWG URL parser reads them, no globbing"
+    pass=$((pass + 1)); echo "ok   loopback hosts: localhost, 127.x, ::1, 0.0.0.0 in any case; public hosts are not"
 else
     fail=$((fail + 1)); echo "FAIL loopback hosts:$loop_bad"
 fi
+EXTRA_NEEDLES=("✘ GLOBAL_BITBUCKET_CODE_MANAGEMENT_WEBHOOK points at localhost" "✔ Forgejo webhook: https://[2001:db8::1]/forgejo/webhook")
+kcheck "webhooks: [::1] is loopback, a real IPv6 host is not" 1 "Reviews: NOT RUNNING" K_APP_TSV="$APP_OK" DOCTOR_TEST_VERBOSE=1 \
+    "K_CM_GLOBAL_BITBUCKET_CODE_MANAGEMENT_WEBHOOK=https://[::1]:3332/bitbucket/webhook" \
+    "K_CM_API_FORGEJO_CODE_MANAGEMENT_WEBHOOK=https://[2001:db8::1]/forgejo/webhook"
 EXTRA_NEEDLES=("✘ API_GITHUB_CODE_MANAGEMENT_WEBHOOK points at localhost" "✔ GitLab webhook: https://localhost.example.com/gitlab/webhook")
 kcheck "webhooks: LOCALHOST is loopback, localhost.example.com is not" 1 "Reviews: NOT RUNNING" K_APP_TSV="$APP_OK" DOCTOR_TEST_VERBOSE=1 \
     K_CM_API_GITHUB_CODE_MANAGEMENT_WEBHOOK=HTTPS://LOCALHOST/github/webhook \

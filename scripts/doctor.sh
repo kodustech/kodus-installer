@@ -564,21 +564,18 @@ else
         *) [ -n "$mongo_source" ] || mongo_source="API_MG_DB_HOST=${API_MG_DB_HOST}" ;;
     esac
 fi
-# The URI is read as the client reads it (doctor_amqp_host): one the client
-# rejects means no service ever connects, whichever broker it names.
-rabbit_host=""
-if [ -n "${API_RABBITMQ_URI:-}" ] && ! rabbit_host=$(doctor_amqp_host "$API_RABBITMQ_URI"); then
-    rabbit_host=""
-    err "API_RABBITMQ_URI cannot be parsed: percent-encode / ? # @ in the user name or password." \
-        "The api, worker and webhooks cannot connect to the message queue, so no review runs." \
-        "Write / as %2F, ? as %3F, # as %23 and @ as %40 in the user name and password of API_RABBITMQ_URI, then run '$DOCKER_COMPOSE up -d'."
-fi
+# Bundled or external broker, by a plain rule: the URI's host (doctor_url_host)
+# is the bundled service or container name, or localhost; a host that cannot
+# be read counts as bundled, so the bundled broker is still checked. The URI
+# itself is not judged here: the api connects with the real client and reports
+# a URI it cannot use as ✘, in the client's own words.
 if [ "$use_local_rabbitmq" != "true" ]; then
     rabbit_source="USE_LOCAL_RABBITMQ=false"
-elif [ -n "$rabbit_host" ]; then
-    # "rabbitmq." is the same name as "rabbitmq".
-    case "${rabbit_host%.}" in
-        rabbitmq|rabbitmq-prod|"$(printf '%s' "${RABBITMQ_HOSTNAME:-rabbitmq}" | tr '[:upper:]' '[:lower:]')") ;;
+elif [ -n "${API_RABBITMQ_URI:-}" ]; then
+    rabbit_host=$(doctor_url_host "$API_RABBITMQ_URI")
+    case "$rabbit_host" in
+        ""|*[!a-z0-9_.:-]*|rabbitmq|rabbitmq-prod|localhost|127.0.0.1) ;;
+        "$(printf '%s' "${RABBITMQ_HOSTNAME:-rabbitmq}" | tr '[:upper:]' '[:lower:]')") ;;
         *) rabbit_source="API_RABBITMQ_URI host ${rabbit_host}" ;;
     esac
 fi
