@@ -32,7 +32,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: shellcheck
-        run: shellcheck -S warning scripts/doctor.sh scripts/doctor-k8s.sh scripts/doctor-lib.sh scripts/test-doctor.sh scripts/validate-env.sh scripts/redact-lib.sh scripts/collect-diagnostics.sh
+        run: shellcheck -S warning scripts/doctor.sh scripts/doctor-k8s.sh scripts/doctor-lib.sh scripts/test-doctor.sh scripts/validate-env.sh scripts/redact-lib.sh scripts/collect-diagnostics.sh scripts/collect-diagnostics-compose.sh
 
       # doctor.sh against a stubbed docker: verdict first, problems worst
       # first, exit codes, and the legacy checks still failing the run.

@@ -57,7 +57,10 @@ case "$1" in
       *) echo "running" ;;
     esac
     exit 0 ;;
-  events) [ -n "${STUB_OOM_EVENTS:-}" ] && printf '%s\n' $STUB_OOM_EVENTS; exit 0 ;;
+  events)
+    [ -n "${STUB_OOM_EVENTS:-}" ] && printf '%s\n' $STUB_OOM_EVENTS
+    [ -n "${STUB_LEAKS:-}" ] && cat "$STUB_LEAKS"
+    exit 0 ;;
   compose) shift ;;
   *) exit 0 ;;
 esac
@@ -66,6 +69,7 @@ case "$1" in
   config)
     [ "${2:-}" = "--services" ] && printf '%s\n' api worker webhooks rabbitmq db_kodus_postgres db_kodus_mongodb kodus-web
     exit 0 ;;
+  logs) [ -n "${STUB_LEAKS:-}" ] && cat "$STUB_LEAKS"; exit 0 ;;
   ps)
     for svc in "$@"; do :; done   # the service is the last argument
     case " ${STUB_DOWN:-} " in *" $svc "*) exit 0 ;; esac
@@ -403,7 +407,8 @@ fi
 # doctor-k8s.sh against a stubbed kubectl/helm (namespace kodus, release kodus).
 # ---------------------------------------------------------------------------
 mkdir -p "$WORK/kbin"
-cp "$ROOT/scripts/doctor-k8s.sh" "$ROOT/scripts/collect-diagnostics.sh" "$ROOT/scripts/redact-lib.sh" "$WORK/install/scripts/"
+cp "$ROOT/scripts/doctor-k8s.sh" "$ROOT/scripts/collect-diagnostics.sh" "$ROOT/scripts/collect-diagnostics-compose.sh" \
+    "$ROOT/scripts/redact-lib.sh" "$WORK/install/scripts/"
 printf '#!/usr/bin/env bash\necho '"'"'{"info":{"status":"deployed"}}'"'"'\n' > "$WORK/kbin/helm"
 cat > "$WORK/kbin/kubectl" <<'EOF'
 #!/usr/bin/env bash
@@ -615,6 +620,36 @@ if [ -n "$tarball" ] && mkdir -p "$WORK/bundle/x" && tar -xzf "$tarball" -C "$WO
 else
     fail=$((fail + 1)); echo "FAIL k8s support bundle"; cat "$WORK/bundle.log" | sed 's/^/    | /' | tail -10
     grep -rn 'LEAK[0-9]' "$WORK/bundle/x" 2>/dev/null | head -10 | sed 's/^/    | /'
+fi
+
+# The Compose bundle: logs, events and the doctor go through the redactor, a
+# secret value from .env is replaced wherever it appears, .env contributes key
+# names only, and a container's env contributes RELEASE_VERSION only.
+cp "$WORK/env.orig" "$WORK/install/.env"
+echo 'API_JWT_SECRET=LEAK40envValueFromDotEnv' >> "$WORK/install/.env"
+echo 'mongo said: authentication failed, password LEAK40envValueFromDotEnv' >> "$WORK/leaks.txt"
+rm -rf "$WORK/cbundle"; mkdir -p "$WORK/cbundle"
+(cd "$WORK" && env PATH="$WORK/bin:$PATH" STUB_LEAKS="$WORK/leaks.txt" STUB_APP_TSV="$APP_OK" \
+    'STUB_ENV_api=RELEASE_VERSION=2.4.0\nAPI_PG_DB_PASSWORD=LEAK41containerEnv\nWEB_HOSTNAME_API=localhost\n' \
+    ./install/scripts/collect-diagnostics-compose.sh -o "$WORK/cbundle") > "$WORK/cbundle.log" 2>&1
+tarball=$(ls "$WORK/cbundle"/kodus-diagnostics-compose-*.tar.gz 2>/dev/null | head -1)
+cb_ok=true
+if [ -z "$tarball" ] || ! mkdir -p "$WORK/cbundle/x" || ! tar -xzf "$tarball" -C "$WORK/cbundle/x"; then
+    cb_ok=false; echo "    no archive"
+else
+    for f in 00-host.txt 01-docker.txt 02-installer.txt 03-images.txt 05-state.txt 06-events-24h.txt 08-env-keys.txt 09-validate-env.txt 11-doctor.txt 12-api-doctor.json logs/api.log logs/rabbitmq.log; do
+        ls "$WORK/cbundle/x"/*/"$f" >/dev/null 2>&1 || { cb_ok=false; echo "    missing file: $f"; }
+    done
+    grep -rq 'LEAK[0-9]' "$WORK/cbundle/x" && { cb_ok=false; grep -rn 'LEAK[0-9]' "$WORK/cbundle/x" | head -5 | sed 's/^/    | /'; }
+    grep -q 'RELEASE_VERSION=2.4.0' "$WORK/cbundle/x"/*/03-images.txt || { cb_ok=false; echo "    RELEASE_VERSION missing"; }
+    grep -q 'WEB_HOSTNAME_API' "$WORK/cbundle/x"/*/03-images.txt && { cb_ok=false; echo "    container env beyond RELEASE_VERSION"; }
+    grep -qx 'API_JWT_SECRET' "$WORK/cbundle/x"/*/08-env-keys.txt || { cb_ok=false; echo "    .env key names missing"; }
+    grep -q 'Support bundle: ' "$WORK/cbundle.log" || { cb_ok=false; echo "    no path printed"; }
+fi
+if $cb_ok; then
+    pass=$((pass + 1)); echo "ok   compose support bundle: every file redacted, .env as key names, RELEASE_VERSION only"
+else
+    fail=$((fail + 1)); echo "FAIL compose support bundle"; tail -5 "$WORK/cbundle.log" | sed 's/^/    | /'
 fi
 
 echo

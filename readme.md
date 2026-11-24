@@ -160,6 +160,10 @@ then it lists each problem with its impact and fix (`--verbose` for everything):
 - Docker Compose: `./scripts/doctor.sh`
 - Kubernetes / OpenShift: `./scripts/doctor-k8s.sh -n <namespace>`
 
+To send support a redacted bundle (logs, versions, container state, the doctor's
+output; no secret values): `./scripts/collect-diagnostics-compose.sh` on Docker
+Compose, `./scripts/collect-diagnostics.sh -n <namespace>` on Kubernetes.
+
 For `.env` problems specifically, run the schema validator (also invoked by
 doctor): `./scripts/validate-env.sh`. It checks each variable against the upstream
 schema (`.env.example` types + `scripts/schema-vars.sh` required list), flags type

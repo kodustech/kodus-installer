@@ -170,6 +170,19 @@ can see: the worker taking jobs, a real call to your model, the Git token and
 webhook on every selected repository, seats, the code graph. It changes nothing
 and prints no secret, so the output can be pasted into a support thread.
 
+When support asks for more, build a support bundle:
+
+```bash
+./scripts/collect-diagnostics-compose.sh   # prints the path of kodus-diagnostics-compose-<stamp>.tar.gz
+```
+
+It is read-only and holds the host and Docker versions, each container's image,
+state and restarts, the last 24 hours of Docker events, the last 500 log lines
+of every service, `.env` key names (never values), `validate-env.sh` and RabbitMQ
+status, and the doctor's output. Every file goes through a redactor that removes
+credentials in URLs, tokens, keys and any secret value from your `.env`; still,
+look inside before you share it.
+
 ## Ports
 
 | Port | Service |
