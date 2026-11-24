@@ -608,7 +608,7 @@ for u in https://localhost/x https://LOCALHOST/x http://127.0.0.1:3332/x https:/
     (. "$ROOT/scripts/doctor-lib.sh"; rm -f "$DOCTOR_RESULTS" "$DOCTOR_DETAIL"; doctor_is_loopback_host "$(doctor_url_host "$u")") || loop_bad+=" $u(missed)"
 done
 for u in https://hooks.example.com/x https://localhost.example.com/x https://127.example.com/x "https://[2001:db8::1]/x" \
-         https://10.0.0.1/x https://128.0.0.1/x https://127.0.0.256/x "https://hooks.example.com?u=localhost" "https://#localhost"; do
+         https://10.0.0.1/x https://128.0.0.1/x https://127.0.0.256/x "https://hooks.example.com?x=.localhost" "https://hooks.example.com#x=.localhost" "https://hooks.example.com?u=@127.0.0.1"; do
     (. "$ROOT/scripts/doctor-lib.sh"; rm -f "$DOCTOR_RESULTS" "$DOCTOR_DETAIL"; doctor_is_loopback_host "$(doctor_url_host "$u")") && loop_bad+=" $u(false)"
 done
 if [ -z "$loop_bad" ]; then
