@@ -664,6 +664,9 @@ password = hunter2LEAK44hunter2
 aws_secret_access_key = wJalrXUtnFEMILEAK45EXAMPLEKEY
 password:nospaceLEAK46
 PASSWORD= leadingspaceLEAK47
+password : alignedLEAK48
+API_MG_DB_PASS = "first second LEAK49 last"
+DB_PASSWORD = 'one two LEAK50 three'
 EOF
 cat > "$WORK/keep.txt" <<'EOF'
 Schema kodus_workflow exists.

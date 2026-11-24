@@ -42,7 +42,7 @@ _kodus_redact_patterns() {
         -e "s#${_KR_PRE}(${_KR_NAME}[[:space:]]*=[[:space:]]*)\"[^\"]*\"#\\1\\2\"<redacted>\"#g" \
         -e "s#${_KR_PRE}(${_KR_NAME}[[:space:]]*=[[:space:]]*)'[^']*'#\\1\\2'<redacted>'#g" \
         -e "s#${_KR_PRE}(${_KR_NAME}[[:space:]]*=[[:space:]]*)[^[:space:]]+#\\1\\2<redacted>#g" \
-        -e "s#${_KR_PRE}(${_KR_NAME}:[[:space:]]*)[^[:space:]<].*\$#\\1\\2<redacted>#"
+        -e "s#${_KR_PRE}(${_KR_NAME}[[:space:]]*:[[:space:]]*)[^[:space:]<].*\$#\\1\\2<redacted>#"
 }
 
 # Replaces every literal occurrence of the values in <file> (longest first).
