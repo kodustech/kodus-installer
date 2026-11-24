@@ -459,6 +459,43 @@ is_down() {
     return 1
 }
 
+# Crash loop: restart: unless-stopped brings a crashing service back, so it
+# reads "running" between crashes. RESTART_LOOP_MIN or more restarts with the
+# last start inside RESTART_LOOP_MINUTES means it is crashing now; a service
+# that has stayed up longer than that is not. RestartCount only counts
+# restarts by the restart policy, and resets when the container is recreated
+# (upgrade, `up -d` after an .env change).
+RESTART_LOOP_MIN=3
+RESTART_LOOP_MINUTES=5
+loop_cutoff=$(date -u -d "-${RESTART_LOOP_MINUTES} minutes" +%Y-%m-%dT%H:%M:%S 2>/dev/null \
+    || date -u -v-"${RESTART_LOOP_MINUTES}"M +%Y-%m-%dT%H:%M:%S 2>/dev/null)
+
+# Containers the kernel killed for memory in the last 24 hours. .State.OOMKilled
+# alone misses one that already restarted, as Docker clears it on start.
+oom_names=" $(docker events --since 24h --until "$(date +%s)" --filter event=oom \
+    --format '{{.Actor.Attributes.name}}' 2>/dev/null | sort -u | tr '\n' ' ') "
+
+report_service_loop() { # <service> <restarts> <started>
+    local svc=$1 impact
+    case "$svc" in
+        api|worker|webhooks) impact="Reviews stop each time it restarts." ;;
+        *) impact=$(service_down_impact "$svc") ;;
+    esac
+    down_services+="$svc "
+    echo -e "${RED}LOOP${NC} ${svc}: $2 restarts, last start $3"
+    [ "$(service_down_status "$svc")" = fail ] && errors=$((errors + 1))
+    doctor_add "$(service_down_status "$svc")" infra "" \
+        "The ${svc} service keeps restarting ($2 restarts, last start ${3%%.*} UTC)." \
+        "$impact" "See why: '$DOCKER_COMPOSE logs --tail 200 $svc'."
+}
+
+report_service_oom() {
+    local svc=$1
+    doctor_add warn infra "" "The ${svc} service was killed for running out of memory." \
+        "The work it was doing stopped (a review in progress fails), and it happens again when it needs that much memory." \
+        "Give the machine more memory, or remove a memory limit set on ${svc}; '$DOCKER_COMPOSE logs --tail 200 $svc' shows what it was doing."
+}
+
 services=$($DOCKER_COMPOSE config --services 2>/dev/null)
 if [ -z "$services" ]; then
     warn "No services found in compose config."
@@ -467,8 +504,12 @@ else
         # -a: a stopped container is still listed, so its state can be told.
         container_id=$($DOCKER_COMPOSE ps -a -q "$service" 2>/dev/null | head -1)
         state=""
-        [ -n "$container_id" ] && state=$(docker inspect -f '{{.State.Status}}|{{.State.ExitCode}}|{{if .State.Health}}{{.State.Health.Status}}{{end}}' "$container_id" 2>/dev/null)
-        IFS='|' read -r status exit_code health <<< "$state"
+        [ -n "$container_id" ] && state=$(docker inspect -f '{{.State.Status}}|{{.State.ExitCode}}|{{if .State.Health}}{{.State.Health.Status}}{{end}}|{{.RestartCount}}|{{.State.OOMKilled}}|{{.State.StartedAt}}|{{.Name}}' "$container_id" 2>/dev/null)
+        IFS='|' read -r status exit_code health restarts oom_killed started cname <<< "$state"
+        cname=${cname#/}
+        if [ "$oom_killed" = "true" ] || { [ -n "$cname" ] && [ "${oom_names#* "$cname" }" != "$oom_names" ]; }; then
+            is_optional_service "$service" || report_service_oom "$service"
+        fi
         if [ "$status" != "running" ]; then
             if [ "$service" = "migration" ]; then
                 ok "Service ${service} is not running (one-off)."
@@ -476,11 +517,19 @@ else
                 ok "Service ${service} is not running (disabled by config)."
             elif [ -z "$status" ]; then
                 report_service_down "$service" "The ${service} service is not running."
+            elif [ "$status" = "restarting" ]; then
+                report_service_loop "$service" "${restarts:-?}" "${started:-?}"
             elif [ "$status" = "exited" ]; then
                 report_service_down "$service" "The ${service} service is stopped (exited with code ${exit_code:-?})."
             else
                 report_service_down "$service" "The ${service} service is ${status}."
             fi
+            continue
+        fi
+
+        if [ "${restarts:-0}" -ge "$RESTART_LOOP_MIN" ] 2>/dev/null && [ -n "$loop_cutoff" ] \
+            && [[ "$started" > "$loop_cutoff" ]]; then
+            report_service_loop "$service" "$restarts" "$started"
             continue
         fi
 

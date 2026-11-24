@@ -51,6 +51,7 @@ case "$1" in
       *) echo "running" ;;
     esac
     exit 0 ;;
+  events) [ -n "${STUB_OOM_EVENTS:-}" ] && printf '%s\n' $STUB_OOM_EVENTS; exit 0 ;;
   compose) shift ;;
   *) exit 0 ;;
 esac
@@ -236,6 +237,22 @@ cp "$WORK/env.orig" "$WORK/install/.env"
 # 7,200,000 ms (2 h) is what the docs ask for and what the fix line says.
 EXTRA_NEEDLES=("! The message queue stops any job that runs longer than 110 minutes." "consumer_timeout = 7200000")
 check "consumer_timeout below 2 h: DEGRADED" 0 "Reviews: RUNNING, DEGRADED" STUB_APP_TSV="$APP_OK" "STUB_CONSUMER_TIMEOUT={ok,6600000}"
+
+# Crash loop: running right now, but restarted again and again in the last minutes.
+NOW=$(date -u +%Y-%m-%dT%H:%M:%S.000000000Z)
+EXTRA_NEEDLES=("✘ The worker service keeps restarting (6 restarts" "Impact: Reviews stop each time it restarts." "docker compose logs --tail 200 worker")
+check "restart loop: ✘ even while running" 1 "Reviews: NOT RUNNING" STUB_APP_TSV="$APP_OK" "STUB_STATE_worker=running|0||6|false|$NOW|/kodus-worker-prod"
+EXTRA_NEEDLES=("✘ The api service keeps restarting (7 restarts")
+ABSENT_NEEDLES=("The review checks did not run")
+check "api caught between restarts: ✘, review checks not attempted" 1 "Reviews: NOT RUNNING" STUB_APP_TSV="$APP_OK" "STUB_STATE_api=restarting|1||7|false|$NOW|/kodus_api"
+# Old restarts on a service that has been up for a while are not a loop.
+ABSENT_NEEDLES=("keeps restarting")
+check "old restarts, long uptime: no loop" 0 "Reviews: OK" STUB_APP_TSV="$APP_OK" "STUB_STATE_worker=running|0||9|false|2020-01-01T00:00:00Z|/kodus-worker-prod"
+
+EXTRA_NEEDLES=("! The worker service was killed for running out of memory." "Give the machine more memory")
+check "OOMKilled: ! naming memory" 0 "Reviews: RUNNING, DEGRADED" STUB_APP_TSV="$APP_OK" "STUB_STATE_worker=running|0||1|true|2020-01-01T00:00:00Z|/kodus-worker-prod"
+EXTRA_NEEDLES=("! The worker service was killed for running out of memory.")
+check "OOM event in the last 24 h after a restart: !" 0 "Reviews: RUNNING, DEGRADED" STUB_APP_TSV="$APP_OK" "STUB_STATE_worker=running|0||1|false|2020-01-01T00:00:00Z|/kodus-worker-prod" STUB_OOM_EVENTS=kodus-worker-prod
 
 # Run from another directory: .env and the compose project are still found.
 out=$(cd "$WORK" && env PATH="$WORK/bin:$PATH" STUB_APP_TSV="$APP_OK" ./install/scripts/doctor.sh 2>&1 | sed 's/\x1b\[[0-9;]*m//g')

@@ -205,6 +205,23 @@ else
   if [ -n "$RESTARTS" ]; then
     while IFS= read -r p; do [ -n "$p" ] && warn "high restart count: $p"; done <<< "$RESTARTS"
   fi
+  # A container the kernel killed for memory comes back Running, so only its
+  # last (or current) termination reason tells. Per pod: container=last/current;...
+  OOMS=$($K get pods -l "$SEL" -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{range .status.containerStatuses[*]}{.name}{"="}{.lastState.terminated.reason}{"/"}{.state.terminated.reason}{";"}{end}{"\n"}{end}' 2>/dev/null)
+  while IFS=$'\t' read -r pod containers; do
+    [ -n "$pod" ] || continue
+    IFS=';' read -r -a cs <<< "$containers"
+    for c in ${cs[@]+"${cs[@]}"}; do
+      case "$c" in
+        *OOMKilled*)
+          echo -e "  ${YELLOW}!${NC} pod $pod container ${c%%=*} was OOMKilled"
+          doctor_add warn infra "" "Pod $pod (container ${c%%=*}) was killed for running out of memory." \
+            "The work it was doing stopped (a review in progress fails), and it happens again when it needs that much memory." \
+            "Raise its memory limit (resources.limits.memory of ${c%%=*} in your values) and run helm upgrade."
+          ;;
+      esac
+    done
+  done <<< "$OOMS"
 fi
 
 # --- Config & Secrets ---
