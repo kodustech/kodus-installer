@@ -10,7 +10,7 @@ SHOW=false
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/kodus-doctor-test.XXXXXX")
-trap 'rm -rf "$WORK"' EXIT
+trap '[ -n "${KEEP_WORK:-}" ] || rm -rf "$WORK"' EXIT
 
 mkdir -p "$WORK/bin" "$WORK/install/scripts"
 cp "$ROOT/scripts/doctor.sh" "$ROOT/scripts/doctor-lib.sh" "$WORK/install/scripts/"
@@ -403,7 +403,7 @@ fi
 # doctor-k8s.sh against a stubbed kubectl/helm (namespace kodus, release kodus).
 # ---------------------------------------------------------------------------
 mkdir -p "$WORK/kbin"
-cp "$ROOT/scripts/doctor-k8s.sh" "$WORK/install/scripts/"
+cp "$ROOT/scripts/doctor-k8s.sh" "$ROOT/scripts/collect-diagnostics.sh" "$ROOT/scripts/redact-lib.sh" "$WORK/install/scripts/"
 printf '#!/usr/bin/env bash\necho '"'"'{"info":{"status":"deployed"}}'"'"'\n' > "$WORK/kbin/helm"
 cat > "$WORK/kbin/kubectl" <<'EOF'
 #!/usr/bin/env bash
@@ -436,6 +436,7 @@ case "$1" in
           *deletionTimestamp*) ;;
           *containerStatuses*) printf '%b' "${K_OOM:-}" ;;
           *--no-headers*) printf '%s\n' "kodus-api-1 1/1 Running 0 1h" "kodus-worker-1 1/1 Running 0 1h" ;;
+          *metadata.name*) printf '%s\n' kodus-api-1 kodus-worker-1 ;;
         esac ;;
       pod)
         case "$1:${K_RMQ:-bundled}" in
@@ -460,8 +461,10 @@ case "$1" in
           *API_JWT_SECRET*) printf 'c2VjcmV0' ;;
         esac ;;
       pvc) echo "data-kodus-postgres-0 Bound pvc-1 10Gi RWO standard 1h" ;;
+      *) [ -n "${K_LEAKS:-}" ] && cat "$K_LEAKS" ;;   # get all,... / get events
     esac
     exit 0 ;;
+  logs|describe) [ -n "${K_LEAKS:-}" ] && cat "$K_LEAKS"; exit 0 ;;
   exec)
     target=$2
     if [ -n "${K_EXEC_FORBIDDEN:-}" ]; then
@@ -541,6 +544,78 @@ kcheck "api says UNVERIFIED: COULD NOT VERIFY, exit 2" 2 "Reviews: COULD NOT VER
 # --profile dev: the api's own answers stay out of the exit code (a fresh CI install).
 kcheck "--profile dev: api UNVERIFIED does not fail the run" 0 "Reviews: COULD NOT VERIFY" K_APP_TSV="$APP_UNVERIFIED" K_DEV=1
 kcheck "--profile dev: api not answering still exits 2" 2 "Reviews: COULD NOT VERIFY" K_DEV=1
+
+# ---------------------------------------------------------------------------
+# Support bundle redaction (scripts/redact-lib.sh). Each LEAKnn must go; the
+# KEEP lines must come out unchanged.
+# ---------------------------------------------------------------------------
+cat > "$WORK/leaks.txt" <<'EOF'
+mongo error: connect mongodb://kodus:LEAK01pass@db_kodus_mongodb:27017/kodus_db?authSource=admin
+atlas mongodb+srv://kodus:LEAK02p@ss@cluster0.abcd.mongodb.net/kodus
+amqp://kodus:LEAK03pw@rabbitmq:5672/kodus-ai and amqps://user:LEAK04pw@broker:5671/x
+postgres://kodus:LEAK05pw@db:5432/kodus postgresql://u:LEAK06pw@db/x
+clone https://oauth2:glpat-LEAK07aaaaaaaaaaaa@gitlab.example.com/group/repo.git
+clone https://x:ghp_LEAK08aaaaaaaaaaaaaaaa@github.com/org/repo.git
+Authorization: Bearer LEAK09abcdefghij.klmnop
+header Basic TEVBSzEwOnBhc3N3b3Jk==
+provider said: invalid key sk-LEAK11abcdefghijklmnop
+anthropic sk-ant-api03-LEAK12abcdefghijklmnop
+openai sk-proj-LEAK13abcdefghijklmnop
+tokens ghp_LEAK14aaaaaaaa gho_LEAK15aaaaaaaa ghs_LEAK16aaaaaaaa github_pat_LEAK17aaaaaaaa_bbbb
+gitlab glpat-LEAK18aaaaaaaaaaaa slack xoxb-LEAK19-aaaaaaaaa
+google AIzaLEAK20aaaaaaaaaaaaaaaaaaaaaaa team kodus_LEAK21aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+jwt eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJMRUFLMjIifQ.LEAK22signatureAAAA
+API_PG_DB_PASSWORD=LEAK23pw RABBITMQ_DEFAULT_PASS=LEAK24pw API_MG_DB_PASS="LEAK25 pw"
+{"level":50,"password":"LEAK26 with spaces","apiKey":"LEAK27 x","msg":"ok"}
+{"token": "LEAK28\"esc\" more", "x-api-key":"LEAK29"}
+API_RABBITMQ_URI: amqp://kodus:LEAK30@rabbitmq:5672/kodus-ai
+      API_CRYPTO_KEY:  LEAK31value
+masked sk-svcac****LEAK32VeAA
+query ?client_secret=LEAK33&x=1
+EOF
+cat > "$WORK/keep.txt" <<'EOF'
+Schema kodus_workflow exists.
+routingKey: "workflow.jobs.created.WEBHOOK_PROCESSING"
+image sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+task-assessment-runner disk-usage-checker
+{"private": true, "cacheKey": "abc"}
+GLOBAL_API_CONTAINER_NAME=kodus_api WEB_HOSTNAME_API=localhost
+https://api.example.com:3001/health
+EOF
+# shellcheck source=scripts/redact-lib.sh
+. "$ROOT/scripts/redact-lib.sh"
+left=$(kodus_redact < "$WORK/leaks.txt" | grep -o 'LEAK[0-9]*' | sort -u | tr '\n' ' ')
+if [ -z "$left" ]; then
+    pass=$((pass + 1)); echo "ok   redaction: URL credentials, Bearer/Basic, provider keys, JWTs, *_PASS(WORD) and JSON values"
+else
+    fail=$((fail + 1)); echo "FAIL redaction left: $left"; kodus_redact < "$WORK/leaks.txt" | grep 'LEAK' | sed 's/^/    | /'
+fi
+if kodus_redact < "$WORK/keep.txt" | diff "$WORK/keep.txt" - >/dev/null; then
+    pass=$((pass + 1)); echo "ok   redaction keeps schema names, routing keys, digests and plain URLs"
+else
+    fail=$((fail + 1)); echo "FAIL redaction changed harmless text"; kodus_redact < "$WORK/keep.txt" | diff "$WORK/keep.txt" - | sed 's/^/    | /'
+fi
+printf 'S3cretValueFromEnv\n' > "$WORK/values.txt"
+if [ "$(echo 'auth failed with S3cretValueFromEnv' | KODUS_REDACT_VALUES_FILE="$WORK/values.txt" kodus_redact)" = "auth failed with <redacted>" ]; then
+    pass=$((pass + 1)); echo "ok   redaction: known values from .env are replaced wherever they appear"
+else
+    fail=$((fail + 1)); echo "FAIL redaction of known values"
+fi
+
+# The K8s bundle: every file in the archive goes through the redactor,
+# describe-pods and the doctor output included.
+mkdir -p "$WORK/bundle"
+(cd "$WORK/install" && env PATH="$WORK/kbin:$PATH" K_LEAKS="$WORK/leaks.txt" K_APP_TSV="$APP_OK" \
+    ./scripts/collect-diagnostics.sh -n kodus -r kodus -o "$WORK/bundle") > "$WORK/bundle.log" 2>&1
+tarball=$(ls "$WORK/bundle"/kodus-diagnostics-kodus-*.tar.gz 2>/dev/null | head -1)
+if [ -n "$tarball" ] && mkdir -p "$WORK/bundle/x" && tar -xzf "$tarball" -C "$WORK/bundle/x" \
+    && [ -s "$(ls "$WORK/bundle/x"/*/04-describe-pods.txt)" ] && ls "$WORK/bundle/x"/*/07-doctor.txt >/dev/null \
+    && ! grep -rq 'LEAK[0-9]' "$WORK/bundle/x"; then
+    pass=$((pass + 1)); echo "ok   k8s support bundle: no secret survives in any file"
+else
+    fail=$((fail + 1)); echo "FAIL k8s support bundle"; cat "$WORK/bundle.log" | sed 's/^/    | /' | tail -10
+    grep -rn 'LEAK[0-9]' "$WORK/bundle/x" 2>/dev/null | head -10 | sed 's/^/    | /'
+fi
 
 echo
 echo "$pass passed, $fail failed"
