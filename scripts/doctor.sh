@@ -147,12 +147,30 @@ done
 doctor_capture_start
 
 if [ -x "$DOCTOR_SCRIPT_DIR/validate-env.sh" ]; then
-    if ! "$DOCTOR_SCRIPT_DIR/validate-env.sh"; then
+    # Its findings come back as lines in a report file: its warnings exit 0,
+    # so the exit code alone never reached this report.
+    ve_report=$(mktemp "${TMPDIR:-/tmp}/kodus-doctor-env.XXXXXX")
+    VALIDATE_ENV_REPORT="$ve_report" "$DOCTOR_SCRIPT_DIR/validate-env.sh"
+    ve_rc=$?
+    ve_errors=$(grep -c '^fail	' "$ve_report" 2>/dev/null)
+    ve_first=$(grep '^fail	' "$ve_report" 2>/dev/null | cut -f2 | head -3 | paste -sd ';' - | sed 's/;/; /g')
+    if [ "$ve_rc" -ne 0 ]; then
         errors=$((errors + 1))
-        doctor_add fail env.schema "" ".env has missing or invalid variables." \
+        title=".env has missing or invalid variables"
+        if [ -n "$ve_first" ]; then
+            title="${title}: ${ve_first}"
+            [ "${ve_errors:-0}" -gt 3 ] && title="${title}; and $((ve_errors - 3)) more"
+        fi
+        doctor_add fail env.schema "" "${title}." \
             "Services may fail to start or behave unexpectedly." \
-            "Run ./scripts/validate-env.sh to see which variables to fix."
+            "Fix them in .env (./scripts/validate-env.sh lists them), then recreate the services ('docker compose up -d')."
     fi
+    while IFS=$'\t' read -r ve_status ve_title ve_fix; do
+        [ "$ve_status" = unknown ] || continue
+        warnings=$((warnings + 1))
+        doctor_add unknown env.schema "" "$ve_title" "" "$ve_fix"
+    done < "$ve_report"
+    rm -f "$ve_report"
 fi
 
 section "Prerequisites"

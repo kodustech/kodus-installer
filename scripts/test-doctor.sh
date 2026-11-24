@@ -15,7 +15,11 @@ trap 'rm -rf "$WORK"' EXIT
 mkdir -p "$WORK/bin" "$WORK/install/scripts"
 cp "$ROOT/scripts/doctor.sh" "$ROOT/scripts/doctor-lib.sh" "$WORK/install/scripts/"
 # The env schema check has its own tests; here it must not depend on the host.
-printf '#!/usr/bin/env bash\nexit "${STUB_VALIDATE_ENV_RC:-0}"\n' > "$WORK/install/scripts/validate-env.sh"
+cat > "$WORK/install/scripts/validate-env.sh" <<'EOF'
+#!/usr/bin/env bash
+[ -n "${VALIDATE_ENV_REPORT:-}" ] && printf '%b' "${STUB_VALIDATE_ENV_REPORT:-}" >> "$VALIDATE_ENV_REPORT"
+exit "${STUB_VALIDATE_ENV_RC:-0}"
+EOF
 chmod +x "$WORK/install/scripts/"*.sh
 
 cat > "$WORK/install/.env" <<'EOF'
@@ -47,6 +51,7 @@ case "$1" in
     var="STUB_STATE_$(printf '%s' "$svc" | tr -- '-' '_')"
     case "$fmt" in
       '{{.Name}}') echo "/${STUB_API_CNAME:-kodus_api}" ;;
+      *Config.Env*) var="STUB_ENV_$(printf '%s' "$svc" | tr -- '-' '_')"; printf '%b' "${!var:-}" ;;
       *ExitCode*) echo "${!var:-running|0|healthy}" ;;
       *Health*) echo "healthy" ;;
       *) echo "running" ;;
@@ -198,6 +203,56 @@ check "legacy infra check still fails the run" 1 "Reviews: NOT RUNNING" STUB_APP
 
 EXTRA_NEEDLES=("✘ .env has missing or invalid variables.")
 check "env schema failure is reported" 1 "Reviews: NOT RUNNING" STUB_APP_TSV="$APP_OK" STUB_VALIDATE_ENV_RC=1
+EXTRA_NEEDLES=("✘ .env has missing or invalid variables: Missing or empty required variable: API_JWT_SECRET; API_PORT=abc is not a valid port (1-65535).")
+check "env schema failure names the variables" 1 "Reviews: NOT RUNNING" STUB_APP_TSV="$APP_OK" STUB_VALIDATE_ENV_RC=1 'STUB_VALIDATE_ENV_REPORT=fail\tMissing or empty required variable: API_JWT_SECRET\t\nfail\tAPI_PORT=abc is not a valid port (1-65535)\t\n'
+# Warnings exit 0, so they only reach the report through the report file.
+EXTRA_NEEDLES=("? Kodus does not know 1 variable(s) set in .env: TYPO_VAR." "Fix: Check them for typos")
+check "env schema warnings reach the report as ?" 0 "Reviews: OK" STUB_APP_TSV="$APP_OK" 'STUB_VALIDATE_ENV_REPORT=unknown\tKodus does not know 1 variable(s) set in .env: TYPO_VAR.\tCheck them for typos against .env.example.\n'
+
+# validate-env.sh itself, on a fixture schema and .env, with the docker stub
+# answering the drift check.
+VE="$WORK/ve"
+mkdir -p "$VE/scripts"
+cp "$ROOT/scripts/validate-env.sh" "$VE/scripts/"
+cp "$ROOT/docker-compose.yml" "$VE/"
+printf 'KODUS_REQUIRED_VARS=(API_PORT)\nKODUS_AUTOGEN_SECRETS=("API_JWT_SECRET=base64-32")\n' > "$VE/scripts/schema-vars.sh"
+cat > "$VE/.env.example" <<'EOF'
+## ----  SERVER  ----
+# (type: port)
+API_PORT=3001
+API_RABBITMQ_URI=amqp://kodus:kodus@rabbitmq:5672/kodus-ai
+RUN_MIGRATIONS=true
+# (secret, type: url, opt-in: uncomment to enable)
+# MONGODB_URI=
+EOF
+cat > "$VE/.env" <<'EOF'
+API_PORT=3001
+API_RABBITMQ_URI=amqp://kodus:N3wPassw0rd@rabbitmq:5672/kodus-ai
+RUN_MIGRATIONS=true
+KODUS_LICENSE_KEY=lic-abc
+ANALYTICS_PG_DB_HOST=
+ANALYTICS_INGESTION_CRON=*/30 * * * *
+MONGODB_URI=mongodb+srv://u:p@cluster0.example.net/kodus
+TYPO_VAR=1
+EOF
+rm -f "$VE/report"
+ve_out=$(env PATH="$WORK/bin:$PATH" VALIDATE_ENV_REPORT="$VE/report" \
+    'STUB_ENV_worker=RUN_MIGRATIONS=false\nAPI_PORT=3001\nAPI_RABBITMQ_URI=amqp://kodus:OldPassw0rd@rabbitmq:5672/kodus-ai\n' \
+    bash "$VE/scripts/validate-env.sh" 2>&1 | sed 's/\x1b\[[0-9;]*m//g')
+ve_ok=true
+for needle in "TYPO_VAR is set but not in the self-hosted schema" "worker API_RABBITMQ_URI drift"; do
+    printf '%s' "$ve_out" | grep -qF -- "$needle" || { ve_ok=false; echo "    missing: $needle"; }
+done
+for needle in N3wPassw0rd OldPassw0rd "RUN_MIGRATIONS drift" "KODUS_LICENSE_KEY is set" "ANALYTICS_PG_DB_HOST is set" "ANALYTICS_INGESTION_CRON is set" "MONGODB_URI is set"; do
+    printf '%s' "$ve_out" | grep -qF -- "$needle" && { ve_ok=false; echo "    unexpected: $needle"; }
+done
+grep -qF "$(printf 'unknown\tKodus does not know 1 variable(s) set in .env: TYPO_VAR.')" "$VE/report" 2>/dev/null || { ve_ok=false; echo "    report lacks the unknown-variable line"; }
+grep -qF "$(printf 'unknown\tThe worker service runs with values that differ from .env: API_RABBITMQ_URI.')" "$VE/report" 2>/dev/null || { ve_ok=false; echo "    report lacks the drift line"; }
+if $ve_ok; then
+    pass=$((pass + 1)); echo "ok   validate-env: known app vars, masked URIs, compose overrides are not drift, report file"
+else
+    fail=$((fail + 1)); echo "FAIL validate-env"; printf '%s\n' "$ve_out" | sed 's/^/    | /' | tail -30
+fi
 
 # A tunnel or reverse proxy in front of the webhooks service is a valid setup,
 # and WEB_HOSTNAME_API (how the web reaches the api) is not where webhooks go:
