@@ -28,6 +28,8 @@ while [ $# -gt 0 ]; do
     esac
 done
 case "$OUT_DIR" in /*) ;; *) OUT_DIR="$PWD/$OUT_DIR" ;; esac
+# Fail now, not after a minute of collecting: tar cannot create the directory.
+mkdir -p "$OUT_DIR" 2>/dev/null || { echo "Cannot create the output directory $OUT_DIR"; exit 1; }
 
 command -v docker >/dev/null 2>&1 || { echo "docker not found"; exit 1; }
 if docker compose version >/dev/null 2>&1; then
