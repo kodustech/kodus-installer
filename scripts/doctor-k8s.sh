@@ -140,6 +140,19 @@ if [ -z "$DEPLOYS$STS" ]; then
 else
   for d in $DEPLOYS; do check_rollout deployment "$d"; done
   for s in $STS;     do check_rollout statefulset "$s"; done
+  # Without these, reviews do not run (or nobody can sign in) even though every
+  # pod that does exist is healthy. The api is checked under "Reviews".
+  for svc in worker webhooks web; do
+    if ! printf '%s\n' "$DEPLOYS" | grep -qx "${RELEASE}-${svc}"; then
+      bad "deployment ${RELEASE}-${svc} not found" \
+        "$(case $svc in worker) echo "No review runs: nothing takes the review jobs." ;; webhooks) echo "Kodus is not told about new pull requests, so none is reviewed." ;; web) echo "Nobody can sign in or change settings." ;; esac)" \
+        "Enable it (services.${svc}.enabled=true) and run helm upgrade."
+    elif [ "$($K get deploy "${RELEASE}-${svc}" -o jsonpath='{.spec.replicas}' 2>/dev/null)" = "0" ]; then
+      bad "deployment ${RELEASE}-${svc} is scaled to 0 replicas" \
+        "$(case $svc in worker) echo "No review runs: nothing takes the review jobs." ;; webhooks) echo "Kodus is not told about new pull requests, so none is reviewed." ;; web) echo "Nobody can sign in or change settings." ;; esac)" \
+        "Scale it back up: $K scale deploy/${RELEASE}-${svc} --replicas=1 (or set services.${svc}.replicas and run helm upgrade)."
+    fi
+  done
 fi
 
 # No MongoDB 8.3 release starts on Linux kernels 6.19+ (SERVER-121912), and the
@@ -391,7 +404,10 @@ fi
 doctor_render
 [ -n "$FINGERPRINT" ] && { echo; echo -e "$FINGERPRINT"; }
 
-if doctor_has_fail; then
+# 1 = reviews do not run, 2 = could not verify (doctor-lib.sh). --profile dev
+# keeps the api's own ✘ and UNVERIFIED out of it (see DOCTOR_SOFT_APP_FAILS).
+rc=$(doctor_exit_code)
+if [ "$rc" = 1 ]; then
   echo -e "${RED}Some checks failed.${NC} Inspect with:  $K get pods,events --sort-by=.lastTimestamp | tail"
-  exit 1
 fi
+exit "$rc"

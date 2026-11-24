@@ -138,6 +138,9 @@ validate_webhook_url() {
 DOCTOR_SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=scripts/doctor-lib.sh
 . "$DOCTOR_SCRIPT_DIR/doctor-lib.sh"
+# .env and docker compose are read from the installer root: run from anywhere
+# else, every check would fail on a missing .env or compose project.
+cd "$DOCTOR_SCRIPT_DIR/.." || exit 1
 
 for arg in "$@"; do
     case "$arg" in
@@ -349,9 +352,12 @@ if [ "$env_loaded" = true ]; then
         done
     fi
 
-    api_rabbitmq_enabled=$(printf '%s' "$API_RABBITMQ_ENABLED" | tr '[:upper:]' '[:lower:]')
-    if [ "$api_rabbitmq_enabled" != "true" ]; then
-        warn "API_RABBITMQ_ENABLED is not true (RabbitMQ is required)."
+    # The app turns the queue off only for the exact value "false"; unset or
+    # anything else means on (libs/core/infrastructure/config/loaders/rabbitmq.loader.ts).
+    if [ "${API_RABBITMQ_ENABLED:-}" = "false" ]; then
+        err "API_RABBITMQ_ENABLED=false turns the message queue off." \
+            "No review job is queued or taken, so no review runs." \
+            "Set API_RABBITMQ_ENABLED=true in .env (or remove the line) and run '$DOCKER_COMPOSE up -d'."
     fi
 
     if [ -n "$API_RABBITMQ_URI" ] && ! printf '%s' "$API_RABBITMQ_URI" | grep -Eq '/kodus-ai$'; then
@@ -401,11 +407,55 @@ fi
 
 is_optional_service() {
     local svc=$1
-    for opt in "${optional_services[@]}"; do
+    for opt in ${optional_services[@]+"${optional_services[@]}"}; do
         if [ "$opt" = "$svc" ]; then
             return 0
         fi
     done
+    return 1
+}
+
+# What a stopped service costs decides its mark: ✘ when reviews (or the whole
+# app) stop, ! when a feature the admin turned on stops, ? for a service this
+# script does not know. Bundled datastores only get here when they are in use
+# (otherwise they are optional above).
+service_down_status() {
+    case "$1" in
+        api|worker|webhooks|kodus-web|rabbitmq|db_kodus_postgres|db_kodus_mongodb) echo fail ;;
+        kodus-mcp-manager|worker-analytics) echo warn ;;
+        *) echo unknown ;;
+    esac
+}
+
+service_down_impact() {
+    case "$1" in
+        api) echo "Nothing can be reviewed, and the review checks cannot run." ;;
+        worker) echo "No review runs: pull request events wait in the queue until a worker takes them." ;;
+        webhooks) echo "Kodus is not told about new pull requests, so none is reviewed." ;;
+        kodus-web) echo "Nobody can sign in or change settings." ;;
+        rabbitmq) echo "No review job can be queued or taken, so no review runs." ;;
+        db_kodus_postgres|db_kodus_mongodb) echo "Kodus has no database: nothing works until it is back." ;;
+        kodus-mcp-manager) echo "Reviews run without the MCP tools your organizations connected." ;;
+        worker-analytics) echo "Cockpit analytics stop updating; reviews are not affected." ;;
+    esac
+}
+
+# Services found stopped, so later checks do not report the same cause again (#2021).
+down_services=" "
+
+# report_service_down <service> <title> [fix]
+report_service_down() {
+    local svc=$1 title=$2 fix=${3:-} status
+    status=$(service_down_status "$svc")
+    down_services+="$svc "
+    [ -n "$fix" ] || fix="Start it with '$DOCKER_COMPOSE up -d $svc'; if it stops again, '$DOCKER_COMPOSE logs --tail 200 $svc' shows why."
+    echo -e "${RED}DOWN${NC} $title"
+    [ "$status" = fail ] && errors=$((errors + 1))
+    doctor_add "$status" infra "" "$title" "$(service_down_impact "$svc")" "$fix"
+}
+
+is_down() {
+    case "$down_services" in *" $1 "*) return 0 ;; esac
     return 1
 }
 
@@ -414,31 +464,33 @@ if [ -z "$services" ]; then
     warn "No services found in compose config."
 else
     for service in $services; do
-        container_id=$($DOCKER_COMPOSE ps -q "$service")
-        if [ -z "$container_id" ]; then
+        # -a: a stopped container is still listed, so its state can be told.
+        container_id=$($DOCKER_COMPOSE ps -a -q "$service" 2>/dev/null | head -1)
+        state=""
+        [ -n "$container_id" ] && state=$(docker inspect -f '{{.State.Status}}|{{.State.ExitCode}}|{{if .State.Health}}{{.State.Health.Status}}{{end}}' "$container_id" 2>/dev/null)
+        IFS='|' read -r status exit_code health <<< "$state"
+        if [ "$status" != "running" ]; then
             if [ "$service" = "migration" ]; then
                 ok "Service ${service} is not running (one-off)."
             elif is_optional_service "$service"; then
                 ok "Service ${service} is not running (disabled by config)."
+            elif [ -z "$status" ]; then
+                report_service_down "$service" "The ${service} service is not running."
+            elif [ "$status" = "exited" ]; then
+                report_service_down "$service" "The ${service} service is stopped (exited with code ${exit_code:-?})."
             else
-                warn "Service ${service} is not running."
+                report_service_down "$service" "The ${service} service is ${status}."
             fi
             continue
         fi
 
-        status=$(docker inspect -f '{{.State.Status}}' "$container_id" 2>/dev/null)
-        if [ "$status" = "running" ]; then
-            ok "Service ${service} is running."
-        else
-            err "Service ${service} status is ${status}."
-        fi
-
-        health=$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{end}}' "$container_id" 2>/dev/null)
+        ok "Service ${service} is running."
         if [ -n "$health" ]; then
             if [ "$health" = "healthy" ]; then
                 ok "Service ${service} is healthy."
             elif [ "$health" = "unhealthy" ]; then
-                err "Service ${service} is unhealthy."
+                report_service_down "$service" "The ${service} service is unhealthy." \
+                    "'$DOCKER_COMPOSE logs --tail 200 $service' shows why its health check fails."
             else
                 warn "Service ${service} health is ${health}."
             fi
@@ -451,7 +503,8 @@ section "Connectivity checks"
 postgres_id=$($DOCKER_COMPOSE ps -q db_kodus_postgres 2>/dev/null)
 if [ "$use_local_db" = "true" ]; then
     if [ -z "$postgres_id" ]; then
-        warn "Skipping Postgres check (container not running)."
+        # Already reported by the service status section (#2021).
+        echo -e "${YELLOW}NOTE${NC} Skipping Postgres check (container not running)."
     else
         if $DOCKER_COMPOSE exec -T db_kodus_postgres sh -c 'pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"' &> /dev/null; then
             ok "Postgres is accepting connections."
@@ -469,7 +522,7 @@ if [ "$use_local_db" = "true" ]; then
                 "Kodus has no database until MongoDB starts." \
                 "Set KODUS_MONGO_IMAGE=docker.io/mongo:8.2.11 in .env and run docker compose up -d db_kodus_mongodb."
         else
-            warn "Skipping MongoDB check (container not running)."
+            echo -e "${YELLOW}NOTE${NC} Skipping MongoDB check (container not running)."
         fi
     else
         # Credentials as quoted flags, not in a URI: a password with @ : / %
@@ -593,9 +646,16 @@ web_port=${WEB_PORT:-3000}
 api_port=${API_PORT:-3001}
 webhooks_port=${API_WEBHOOKS_PORT:-${WEBHOOKS_PORT:-3332}}
 
-http_check "kodus-web" "http://localhost:${web_port}/health"
-http_check "api" "http://localhost:${api_port}/health"
-http_check "webhooks" "http://localhost:${webhooks_port}/health"
+# A stopped service was reported above; probing its port would only say it again.
+for probe in "kodus-web|http://localhost:${web_port}/api/health" \
+             "api|http://localhost:${api_port}/health" \
+             "webhooks|http://localhost:${webhooks_port}/health"; do
+    if is_down "${probe%%|*}"; then
+        echo -e "${YELLOW}NOTE${NC} Skipping ${probe%%|*} HTTP check (service not running)."
+    else
+        http_check "${probe%%|*}" "${probe#*|}"
+    fi
+done
 
 if [ "$api_mcp_enabled" = "true" ]; then
     http_check_optional "kodus-mcp-manager" "http://localhost:${mcp_manager_port}/health"
@@ -606,7 +666,7 @@ section "Database structure checks"
 if [ "$use_local_db" != "true" ]; then
     note "Skipping schema and seed checks (USE_LOCAL_DB=false)."
 elif [ -z "$postgres_id" ]; then
-    warn "Skipping schema and seed checks (Postgres not running)."
+    echo -e "${YELLOW}NOTE${NC} Skipping schema and seed checks (Postgres not running)."
 else
     schemas=(public kodus_workflow)
     api_mcp_enabled=$(printf '%s' "$API_MCP_SERVER_ENABLED" | tr '[:upper:]' '[:lower:]')
@@ -652,17 +712,17 @@ fi
 
 section "Reviews"
 
-if [ -z "$($DOCKER_COMPOSE ps -q api 2>/dev/null)" ]; then
+if is_down api; then
+    echo -e "${YELLOW}NOTE${NC} Skipping the review checks (the api is not running; reported above)."
+elif [ -z "$($DOCKER_COMPOSE ps -q api 2>/dev/null)" ]; then
     doctor_add fail reviews.api "" "The api service is not running." \
         "Nothing can be reviewed, and the review checks cannot run." \
-        "Start it with '$DOCKER_COMPOSE up -d api' and check '$DOCKER_COMPOSE logs api'."
+        "Start it with '$DOCKER_COMPOSE up -d api' and check '$DOCKER_COMPOSE logs --tail 200 api'."
 else
     doctor_run_app_checks "$DOCKER_COMPOSE exec -T api"
 fi
 
 doctor_render
 
-if doctor_has_fail; then
-    exit 1
-fi
-exit 0
+# 1 = reviews do not run, 2 = could not verify (doctor-lib.sh).
+exit "$(doctor_exit_code)"

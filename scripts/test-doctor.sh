@@ -34,11 +34,19 @@ EOF
 cat > "$WORK/bin/docker" <<'EOF'
 #!/usr/bin/env bash
 # Minimal docker / docker compose stand-in for doctor.sh.
+#   STUB_DOWN="svc ..."       no container at all for these services
+#   STUB_STATE_<svc>=...      docker inspect answer for one service (- becomes _)
+[ "${STUB_API_DOWN:-}" = "1" ] && STUB_DOWN="${STUB_DOWN:-} api"
+[ "${STUB_RABBIT_DOWN:-}" = "1" ] && STUB_DOWN="${STUB_DOWN:-} rabbitmq"
 case "$1" in
   info) exit 0 ;;
   network) exit 0 ;;
   inspect)
-    case "$3" in
+    # docker inspect -f <format> <id>
+    fmt=$3; svc=${4#id-}
+    var="STUB_STATE_$(printf '%s' "$svc" | tr -- '-' '_')"
+    case "$fmt" in
+      *ExitCode*) echo "${!var:-running|0|healthy}" ;;
       *Health*) echo "healthy" ;;
       *) echo "running" ;;
     esac
@@ -52,9 +60,8 @@ case "$1" in
     [ "${2:-}" = "--services" ] && printf '%s\n' api worker webhooks rabbitmq db_kodus_postgres db_kodus_mongodb kodus-web
     exit 0 ;;
   ps)
-    svc="${3:-}"
-    [ "$svc" = "api" ] && [ "${STUB_API_DOWN:-}" = "1" ] && exit 0
-    [ "$svc" = "rabbitmq" ] && [ "${STUB_RABBIT_DOWN:-}" = "1" ] && exit 0
+    for svc in "$@"; do :; done   # the service is the last argument
+    case " ${STUB_DOWN:-} " in *" $svc "*) exit 0 ;; esac
     echo "id-$svc"; exit 0 ;;
   exec)
     svc="$3"; shift 3
@@ -103,7 +110,7 @@ check() {
     local ok=true
     [ "$rc" = "$expect_rc" ] || ok=false
     [ "$first" = "$expect_first" ] || ok=false
-    for needle in "${EXTRA_NEEDLES[@]}"; do
+    for needle in ${EXTRA_NEEDLES[@]+"${EXTRA_NEEDLES[@]}"}; do
         printf '%s' "$out" | grep -qF -- "$needle" || { ok=false; echo "    missing: $needle"; }
     done
     for needle in ${ABSENT_NEEDLES[@]+"${ABSENT_NEEDLES[@]}"}; do
@@ -138,8 +145,9 @@ check "app problem: NOT RUNNING first, exit 1" 1 "Reviews: NOT RUNNING" STUB_APP
 EXTRA_NEEDLES=("! The message queue stops any job that runs longer than 30 minutes.")
 check "consumer_timeout 30 min: DEGRADED" 0 "Reviews: RUNNING, DEGRADED" STUB_APP_TSV="$APP_OK" "STUB_CONSUMER_TIMEOUT={ok,1800000}"
 
+# The review checks never ran, so reviews cannot be called OK: COULD NOT VERIFY, exit 2.
 EXTRA_NEEDLES=("? The review checks are not available in this Kodus version.")
-check "image without the doctor client: ? line, exit 0" 0 "Reviews: OK" STUB_APP_RC=42
+check "image without the doctor client: COULD NOT VERIFY, exit 2" 2 "Reviews: COULD NOT VERIFY" STUB_APP_RC=42
 
 # A malformed app line keeps its ✘: a tab inside provider text must not hide a failure.
 EXTRA_NEEDLES=("✘ One review check line could not be read." "== Review checks (api output) ==" "too many")
@@ -192,11 +200,50 @@ ABSENT_NEEDLES=("✘ API_GITHUB_CODE_MANAGEMENT_WEBHOOK" "host must match WEB_HO
 check "webhook behind a tunnel: one ? line, verdict stays OK" 0 "Reviews: OK" STUB_APP_TSV="$APP_OK"
 cp "$WORK/env.orig" "$WORK/install/.env"
 
-# A stopped bundled broker is one cause: the api reports it, the service line
-# says so, and nothing else repeats it or calls the bundled broker external (#2021).
-EXTRA_NEEDLES=("Service rabbitmq is not running.")
+# A stopped bundled broker stops every review: one ✘ for it, and nothing else
+# repeats it or calls the bundled broker external (#2021).
+EXTRA_NEEDLES=("✘ The rabbitmq service is not running.")
 ABSENT_NEEDLES=("Skipping RabbitMQ check" "(external RabbitMQ)")
-check "bundled RabbitMQ stopped: no repeated or mislabelled lines" 0 "Reviews: OK" STUB_APP_TSV="$APP_OK" STUB_RABBIT_DOWN=1
+check "bundled RabbitMQ stopped: one ✘, no repeated or mislabelled lines" 1 "Reviews: NOT RUNNING" STUB_APP_TSV="$APP_OK" STUB_RABBIT_DOWN=1
+
+EXTRA_NEEDLES=("✘ The worker service is not running." "Impact: No review runs")
+check "worker stopped: NOT RUNNING, exit 1" 1 "Reviews: NOT RUNNING" STUB_APP_TSV="$APP_OK" STUB_DOWN=worker
+
+EXTRA_NEEDLES=("✘ The webhooks service is stopped (exited with code 1)." "logs --tail 200 webhooks")
+ABSENT_NEEDLES=("webhooks is not responding")
+check "webhooks exited: one ✘, its HTTP probe not repeated" 1 "Reviews: NOT RUNNING" STUB_APP_TSV="$APP_OK" "STUB_STATE_webhooks=exited|1|"
+
+EXTRA_NEEDLES=("? The review checks did not run:")
+check "api checks fail to answer: COULD NOT VERIFY, exit 2" 2 "Reviews: COULD NOT VERIFY" STUB_APP_RC=3
+
+# The api's own UNVERIFIED verdict holds even when every line it sent is ✔.
+check "api says UNVERIFIED: COULD NOT VERIFY, exit 2" 2 "Reviews: COULD NOT VERIFY" 'STUB_APP_TSV=#verdict\tUNVERIFIED\n#version\t2.4.0\nok\tllm.completion\tacme\tThe review model answered a test request.\t\t\n'
+# Unknown verdict values from a newer api change nothing.
+check "api sends an unknown verdict: still OK" 0 "Reviews: OK" 'STUB_APP_TSV=#verdict\tSOMETHING_NEW\n#version\t2.4.0\nok\tllm.completion\tacme\tThe review model answered a test request.\t\t\n'
+# A ✘ is a definite answer: it wins over UNVERIFIED.
+EXTRA_NEEDLES=("✘ The worker service is not running.")
+check "✘ beats COULD NOT VERIFY" 1 "Reviews: NOT RUNNING" STUB_APP_RC=42 STUB_DOWN=worker
+
+# Unset means enabled for the app (anything but "false").
+sed -i.bak '/^API_RABBITMQ_ENABLED=/d' "$WORK/install/.env" && rm -f "$WORK/install/.env.bak"
+ABSENT_NEEDLES=("API_RABBITMQ_ENABLED")
+check "API_RABBITMQ_ENABLED unset: no line, OK" 0 "Reviews: OK" STUB_APP_TSV="$APP_OK"
+echo "API_RABBITMQ_ENABLED=false" >> "$WORK/install/.env"
+EXTRA_NEEDLES=("✘ API_RABBITMQ_ENABLED=false turns the message queue off.")
+check "API_RABBITMQ_ENABLED=false: ✘" 1 "Reviews: NOT RUNNING" STUB_APP_TSV="$APP_OK"
+cp "$WORK/env.orig" "$WORK/install/.env"
+
+# 7,200,000 ms (2 h) is what the docs ask for and what the fix line says.
+EXTRA_NEEDLES=("! The message queue stops any job that runs longer than 110 minutes." "consumer_timeout = 7200000")
+check "consumer_timeout below 2 h: DEGRADED" 0 "Reviews: RUNNING, DEGRADED" STUB_APP_TSV="$APP_OK" "STUB_CONSUMER_TIMEOUT={ok,6600000}"
+
+# Run from another directory: .env and the compose project are still found.
+out=$(cd "$WORK" && env PATH="$WORK/bin:$PATH" STUB_APP_TSV="$APP_OK" ./install/scripts/doctor.sh 2>&1 | sed 's/\x1b\[[0-9;]*m//g')
+if [ "$(printf '%s\n' "$out" | head -1)" = "Reviews: OK" ] && ! printf '%s' "$out" | grep -q '.env file not found'; then
+    pass=$((pass + 1)); echo "ok   run from another directory: OK"
+else
+    fail=$((fail + 1)); echo "FAIL run from another directory"; printf '%s\n' "$out" | sed 's/^/    | /' | head -20
+fi
 
 # Problems before the passing summary, worst first.
 out=$(run STUB_APP_TSV="$APP_FAIL" "STUB_CONSUMER_TIMEOUT={ok,1800000}")
