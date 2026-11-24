@@ -177,7 +177,7 @@ When support asks for more, build a support bundle:
 ```
 
 It is read-only and holds the host and Docker versions, each container's image,
-state and restarts, the last 24 hours of Docker events, the last 500 log lines
+state and restarts, recent Docker events, the last 500 log lines
 of every service, `.env` key names (never values), `validate-env.sh` and RabbitMQ
 status, and the doctor's output. Every file goes through a redactor that removes
 credentials in URLs, tokens, keys and any secret value from your `.env`; still,

@@ -167,8 +167,12 @@ done
 section 03-images.txt "Images and versions" containers_info
 section 04-ps.txt "docker compose ps -a" $DC ps -a
 section 05-state.txt "Container state" container_state
-section 06-events-24h.txt "docker events, last 24 hours (project $project)" \
-    docker events --since 24h --until "$(date +%s)" --filter "label=com.docker.compose.project=$project"
+# Lifecycle events only: the health-check execs would fill the file. The
+# daemon keeps just its last 256 events, so on a busy host "24h" is minutes.
+section 06-events.txt "docker events of project $project (--since 24h; the daemon keeps only its last 256 events)" \
+    docker events --since 24h --until "$(date +%s)" --filter "label=com.docker.compose.project=$project" \
+        --filter event=create --filter event=start --filter event=restart --filter event=die \
+        --filter event=oom --filter event=kill --filter event=stop --filter event=destroy --filter event=health_status
 
 # --- Logs ------------------------------------------------------------------------
 for svc in $services; do

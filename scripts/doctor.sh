@@ -458,8 +458,10 @@ RESTART_LOOP_MINUTES=5
 loop_cutoff=$(date -u -d "-${RESTART_LOOP_MINUTES} minutes" +%Y-%m-%dT%H:%M:%S 2>/dev/null \
     || date -u -v-"${RESTART_LOOP_MINUTES}"M +%Y-%m-%dT%H:%M:%S 2>/dev/null)
 
-# Containers the kernel killed for memory in the last 24 hours. .State.OOMKilled
-# alone misses one that already restarted, as Docker clears it on start.
+# Containers the kernel killed for memory recently. .State.OOMKilled alone
+# misses one that already restarted, as Docker clears it on start. The daemon
+# keeps only its last 256 events (minutes on a host with health checks), so this
+# catches recent kills only; it never reports an old one.
 oom_names=" $(docker events --since 24h --until "$(date +%s)" --filter event=oom \
     --format '{{.Actor.Attributes.name}}' 2>/dev/null | sort -u | tr '\n' ' ') "
 
@@ -495,9 +497,17 @@ else
         [ -n "$container_id" ] && state=$(docker inspect -f '{{.State.Status}}|{{.State.ExitCode}}|{{if .State.Health}}{{.State.Health.Status}}{{end}}|{{.RestartCount}}|{{.State.OOMKilled}}|{{.State.StartedAt}}|{{.Name}}' "$container_id" 2>/dev/null)
         IFS='|' read -r status exit_code health restarts oom_killed started cname <<< "$state"
         cname=${cname#/}
+        oom=false
         if [ "$oom_killed" = "true" ] || { [ -n "$cname" ] && [ "${oom_names#* "$cname" }" != "$oom_names" ]; }; then
-            is_optional_service "$service" || report_service_oom "$service"
+            oom=true
         fi
+        # Killed for memory and still down: one line, with the memory fix.
+        if [ "$oom" = true ] && [ "$status" = "exited" ] && ! is_optional_service "$service"; then
+            report_service_down "$service" "The ${service} service was killed for running out of memory (exited with code ${exit_code:-?})." \
+                "Give the machine more memory, or remove a memory limit set on ${service}, then '$DOCKER_COMPOSE up -d $service'; '$DOCKER_COMPOSE logs --tail 200 $service' shows what it was doing."
+            continue
+        fi
+        [ "$oom" = true ] && ! is_optional_service "$service" && report_service_oom "$service"
         if [ "$status" != "running" ]; then
             if [ "$service" = "migration" ]; then
                 ok "Service ${service} is not running (one-off)."
@@ -702,7 +712,7 @@ for probe in "kodus-web|http://localhost:${web_port}/api/health" \
     fi
 done
 
-if [ "$api_mcp_enabled" = "true" ]; then
+if [ "$api_mcp_enabled" = "true" ] && ! is_down kodus-mcp-manager; then
     http_check_optional "kodus-mcp-manager" "http://localhost:${mcp_manager_port}/health"
 fi
 

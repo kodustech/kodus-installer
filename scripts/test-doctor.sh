@@ -381,8 +381,11 @@ check "old restarts, long uptime: no loop" 0 "Reviews: OK" STUB_APP_TSV="$APP_OK
 
 EXTRA_NEEDLES=("! The worker service was killed for running out of memory." "Give the machine more memory")
 check "OOMKilled: ! naming memory" 0 "Reviews: RUNNING, DEGRADED" STUB_APP_TSV="$APP_OK" "STUB_STATE_worker=running|0||1|true|2020-01-01T00:00:00Z|/kodus-worker-prod"
+EXTRA_NEEDLES=("✘ The worker service was killed for running out of memory (exited with code 137)." "Give the machine more memory")
+ABSENT_NEEDLES=("The worker service is stopped")
+check "OOMKilled and still down: one ✘ naming memory" 1 "Reviews: NOT RUNNING" STUB_APP_TSV="$APP_OK" "STUB_STATE_worker=exited|137||0|true|2020-01-01T00:00:00Z|/kodus-worker-prod"
 EXTRA_NEEDLES=("! The worker service was killed for running out of memory.")
-check "OOM event in the last 24 h after a restart: !" 0 "Reviews: RUNNING, DEGRADED" STUB_APP_TSV="$APP_OK" "STUB_STATE_worker=running|0||1|false|2020-01-01T00:00:00Z|/kodus-worker-prod" STUB_OOM_EVENTS=kodus-worker-prod
+check "recent OOM event after a restart: !" 0 "Reviews: RUNNING, DEGRADED" STUB_APP_TSV="$APP_OK" "STUB_STATE_worker=running|0||1|false|2020-01-01T00:00:00Z|/kodus-worker-prod" STUB_OOM_EVENTS=kodus-worker-prod
 
 # Run from another directory: .env and the compose project are still found.
 out=$(cd "$WORK" && env PATH="$WORK/bin:$PATH" STUB_APP_TSV="$APP_OK" ./install/scripts/doctor.sh 2>&1 | sed 's/\x1b\[[0-9;]*m//g')
@@ -637,7 +640,7 @@ cb_ok=true
 if [ -z "$tarball" ] || ! mkdir -p "$WORK/cbundle/x" || ! tar -xzf "$tarball" -C "$WORK/cbundle/x"; then
     cb_ok=false; echo "    no archive"
 else
-    for f in 00-host.txt 01-docker.txt 02-installer.txt 03-images.txt 05-state.txt 06-events-24h.txt 08-env-keys.txt 09-validate-env.txt 11-doctor.txt 12-api-doctor.json logs/api.log logs/rabbitmq.log; do
+    for f in 00-host.txt 01-docker.txt 02-installer.txt 03-images.txt 05-state.txt 06-events.txt 08-env-keys.txt 09-validate-env.txt 11-doctor.txt 12-api-doctor.json logs/api.log logs/rabbitmq.log; do
         ls "$WORK/cbundle/x"/*/"$f" >/dev/null 2>&1 || { cb_ok=false; echo "    missing file: $f"; }
     done
     grep -rq 'LEAK[0-9]' "$WORK/cbundle/x" && { cb_ok=false; grep -rn 'LEAK[0-9]' "$WORK/cbundle/x" | head -5 | sed 's/^/    | /'; }
