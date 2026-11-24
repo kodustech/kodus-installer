@@ -93,6 +93,10 @@ case "$1" in
 esac
 exit 0
 EOF
+# Host-side datastore clients: an external datastore must never be probed from here.
+for tool in pg_isready mongosh nc; do
+    printf '#!/usr/bin/env bash\necho "%s $*" >> "%s/host-probes"\nexit 1\n' "$tool" "$WORK" > "$WORK/bin/$tool"
+done
 chmod +x "$WORK/bin/"*
 
 APP_OK='#verdict\tOK\n#version\t2.4.0\nok\tllm.completion\tacme\tThe review model answered a test request.\t\t\n'
@@ -240,6 +244,40 @@ cp "$WORK/env.orig" "$WORK/install/.env"
 # 7,200,000 ms (2 h) is what the docs ask for and what the fix line says.
 EXTRA_NEEDLES=("! The message queue stops any job that runs longer than 110 minutes." "consumer_timeout = 7200000")
 check "consumer_timeout below 2 h: DEGRADED" 0 "Reviews: RUNNING, DEGRADED" STUB_APP_TSV="$APP_OK" "STUB_CONSUMER_TIMEOUT={ok,6600000}"
+
+# External datastores: no probe from the host (it cannot resolve
+# host.docker.internal, private DNS or mongodb+srv, and ignores the URI the app
+# uses); one info line each says the api checks them.
+cat >> "$WORK/install/.env" <<'EOF'
+USE_LOCAL_DB=false
+USE_LOCAL_RABBITMQ=false
+API_PG_DB_HOST=host.docker.internal
+MONGODB_URI=mongodb+srv://kodus:p%40ss@cluster0.example.mongodb.net/kodus
+API_RABBITMQ_URI=amqps://kodus:secret@broker.internal:5671/kodus-ai
+EOF
+rm -f "$WORK/host-probes"
+EXTRA_NEEDLES=("i Postgres is external (USE_LOCAL_DB=false)" "i MongoDB is external (MONGODB_URI)" "i RabbitMQ is external (USE_LOCAL_RABBITMQ=false)" "from inside the api")
+ABSENT_NEEDLES=("External Postgres" "External MongoDB" "External RabbitMQ" "p%40ss" "secret@")
+check "external datastores: no host probe, info lines" 0 "Reviews: OK" STUB_APP_TSV="$APP_OK"
+if [ -s "$WORK/host-probes" ]; then
+    fail=$((fail + 1)); echo "FAIL external datastores were probed from the host: $(cat "$WORK/host-probes")"
+else
+    pass=$((pass + 1)); echo "ok   external datastores: nothing probed from the host"
+fi
+cp "$WORK/env.orig" "$WORK/install/.env"
+# MONGODB_URI wins over the bundled container even with USE_LOCAL_DB=true.
+echo "API_MG_DB_URI=mongodb://kodus:pw@mongo.internal:27017/kodus" >> "$WORK/install/.env"
+EXTRA_NEEDLES=("i MongoDB is external (API_MG_DB_URI)")
+ABSENT_NEEDLES=("Postgres is external")
+check "API_MG_DB_URI set: Mongo checked from the api" 0 "Reviews: OK" STUB_APP_TSV="$APP_OK"
+cp "$WORK/env.orig" "$WORK/install/.env"
+
+# http works for a Git server on the same network, and the app does not require https.
+echo "API_GITLAB_CODE_MANAGEMENT_WEBHOOK=http://api.example.com/gitlab/webhook" >> "$WORK/install/.env"
+EXTRA_NEEDLES=("? The GitLab webhook URL uses http:// (API_GITLAB_CODE_MANAGEMENT_WEBHOOK).")
+ABSENT_NEEDLES=("✘ API_GITLAB_CODE_MANAGEMENT_WEBHOOK")
+check "http webhook: ?, not ✘" 0 "Reviews: OK" STUB_APP_TSV="$APP_OK"
+cp "$WORK/env.orig" "$WORK/install/.env"
 
 # A resource alarm blocks every publisher while check_running still passes (#1694).
 EXTRA_NEEDLES=("✘ The message queue is blocking new jobs (RabbitMQ disk alarm)." "1.2 times the machine's RAM" "disk_free_limit.relative = 1.2")

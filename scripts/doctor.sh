@@ -100,9 +100,22 @@ validate_webhook_url() {
         return 0
     fi
 
-    if [[ "$url" != https://* ]]; then
-        err "${var_name} (${label}) must start with https://"
-    fi
+    case "$url" in
+        https://*) ;;
+        http://*)
+            # The app does not require https, and a Git server on the same
+            # network (GitLab, Forgejo, Bitbucket Data Center) works over http.
+            warnings=$((warnings + 1))
+            doctor_add unknown infra "" \
+                "The ${label} webhook URL uses http:// (${var_name})." "" \
+                "Nothing to do if your Git server reaches it on your network; a Git provider on the internet should get an https:// URL."
+            ;;
+        *)
+            err "${var_name} (${label}) must be a full URL starting with https:// or http://." \
+                "${label} cannot be told about new pull requests: saving repositories fails or no webhook is delivered." \
+                "Set ${var_name} to the URL your Git provider uses to reach the webhooks service, ending in ${expected_path%%|*}."
+            ;;
+    esac
 
     local host
     host=$(normalize_host "$url")
@@ -363,14 +376,6 @@ if [ "$env_loaded" = true ]; then
     if [ -n "$API_RABBITMQ_URI" ] && ! printf '%s' "$API_RABBITMQ_URI" | grep -Eq '/kodus-ai$'; then
         warn "API_RABBITMQ_URI does not end with /kodus-ai."
     fi
-
-    if [ "$use_local_db" != "true" ]; then
-        note "USE_LOCAL_DB=false: skipping local DB container checks."
-    fi
-
-    if [ "$use_local_rabbitmq" != "true" ]; then
-        note "USE_LOCAL_RABBITMQ=false: skipping local RabbitMQ container checks."
-    fi
 fi
 
 section "Docker networks"
@@ -549,7 +554,45 @@ fi
 
 section "Connectivity checks"
 
+# An external datastore is reached by the app, not by this machine. Probing it
+# from the host gave false ✘: host.docker.internal and private DNS resolve only
+# inside the containers, mongodb+srv (Atlas), TLS and the MONGODB_URI /
+# API_MG_DB_URI the app prefers were ignored, and a password with @ or : broke
+# the URI. The review checks run inside the api with the app's own settings and
+# report Postgres and MongoDB there. The bundled containers are still checked.
+uri_host() { local u=${1#*://}; u=${u%%/*}; u=${u##*@}; printf '%s' "${u%%:*}"; }
+pg_source=""; mongo_source=""; rabbit_source=""
+if [ "$use_local_db" != "true" ]; then
+    pg_source="USE_LOCAL_DB=false"; mongo_source="USE_LOCAL_DB=false"
+fi
+case "${API_PG_DB_HOST:-db_kodus_postgres}" in
+    db_kodus_postgres) ;;
+    *) [ -n "$pg_source" ] || pg_source="API_PG_DB_HOST=${API_PG_DB_HOST}" ;;
+esac
+if [ -n "${MONGODB_URI:-}" ]; then
+    mongo_source="MONGODB_URI"
+elif [ -n "${API_MG_DB_URI:-}" ]; then
+    mongo_source="API_MG_DB_URI"
+else
+    case "${API_MG_DB_HOST:-db_kodus_mongodb}" in
+        db_kodus_mongodb) ;;
+        *) [ -n "$mongo_source" ] || mongo_source="API_MG_DB_HOST=${API_MG_DB_HOST}" ;;
+    esac
+fi
+if [ "$use_local_rabbitmq" != "true" ]; then
+    rabbit_source="USE_LOCAL_RABBITMQ=false"
+elif [ -n "${API_RABBITMQ_URI:-}" ]; then
+    case "$(uri_host "$API_RABBITMQ_URI")" in
+        rabbitmq|rabbitmq-prod|"${RABBITMQ_HOSTNAME:-rabbitmq}") ;;
+        *) rabbit_source="API_RABBITMQ_URI host $(uri_host "$API_RABBITMQ_URI")" ;;
+    esac
+fi
+[ -n "$pg_source" ] && note "Postgres is external (${pg_source}): the review checks test it from inside the api, with the app's own settings."
+[ -n "$mongo_source" ] && note "MongoDB is external (${mongo_source}): the review checks test it from inside the api, with the app's own settings."
+[ -n "$rabbit_source" ] && note "RabbitMQ is external (${rabbit_source}): the review checks test it from inside the api, with the app's own settings."
+
 postgres_id=$($DOCKER_COMPOSE ps -q db_kodus_postgres 2>/dev/null)
+is_down db_kodus_postgres && postgres_id=""
 if [ "$use_local_db" = "true" ]; then
     if [ -z "$postgres_id" ]; then
         # Already reported by the service status section (#2021).
@@ -573,7 +616,7 @@ if [ "$use_local_db" = "true" ]; then
         else
             echo -e "${YELLOW}NOTE${NC} Skipping MongoDB check (container not running)."
         fi
-    else
+    elif ! is_down db_kodus_mongodb; then
         # Credentials as quoted flags, not in a URI: a password with @ : / %
         # would break the URI and report a healthy MongoDB as down.
         if $DOCKER_COMPOSE exec -T db_kodus_mongodb sh -c 'mongosh --quiet --host 127.0.0.1 -u "$MONGO_INITDB_ROOT_USERNAME" -p "$MONGO_INITDB_ROOT_PASSWORD" --authenticationDatabase admin --eval "db.runCommand({ ping: 1 }).ok" | grep -q 1' &> /dev/null; then
@@ -581,26 +624,6 @@ if [ "$use_local_db" = "true" ]; then
         else
             err "MongoDB is not accepting connections."
         fi
-    fi
-else
-    if command -v pg_isready &> /dev/null; then
-        if PGPASSWORD="$API_PG_DB_PASSWORD" pg_isready -h "$API_PG_DB_HOST" -p "${API_PG_DB_PORT:-5432}" -U "$API_PG_DB_USERNAME" -d "$API_PG_DB_DATABASE" &> /dev/null; then
-            ok "External Postgres is accepting connections."
-        else
-            err "External Postgres is not accepting connections."
-        fi
-    else
-        note "pg_isready not found; skipping external Postgres check."
-    fi
-
-    if command -v mongosh &> /dev/null; then
-        if mongosh --quiet "mongodb://${API_MG_DB_USERNAME}:${API_MG_DB_PASSWORD}@${API_MG_DB_HOST}:${API_MG_DB_PORT:-27017}/admin" --eval "db.runCommand({ ping: 1 }).ok" | grep -q 1; then
-            ok "External MongoDB is accepting connections."
-        else
-            err "External MongoDB is not accepting connections."
-        fi
-    else
-        note "mongosh not found; skipping external MongoDB check."
     fi
 fi
 
@@ -626,26 +649,6 @@ if [ "$use_local_rabbitmq" = "true" ]; then
         else
             err "RabbitMQ is not running."
         fi
-    fi
-else
-    if command -v nc &> /dev/null; then
-        rabbit_uri="${API_RABBITMQ_URI}"
-        rabbit_no_scheme="${rabbit_uri#*://}"
-        rabbit_hostport="${rabbit_no_scheme%%/*}"
-        rabbit_hostport="${rabbit_hostport#*@}"
-        rabbit_host="${rabbit_hostport%%:*}"
-        rabbit_port="${rabbit_hostport##*:}"
-        if [ "$rabbit_hostport" = "$rabbit_host" ]; then
-            rabbit_port="5672"
-        fi
-
-        if nc -z -w 3 "$rabbit_host" "$rabbit_port" &> /dev/null; then
-            ok "External RabbitMQ is reachable at ${rabbit_host}:${rabbit_port}."
-        else
-            err "External RabbitMQ is not reachable at ${rabbit_host}:${rabbit_port}."
-        fi
-    else
-        note "nc not found; skipping external RabbitMQ check."
     fi
 fi
 
@@ -722,8 +725,10 @@ fi
 
 section "Database structure checks"
 
-if [ "$use_local_db" != "true" ]; then
-    note "Skipping schema and seed checks (USE_LOCAL_DB=false)."
+if [ -n "$pg_source" ]; then
+    # The bundled container is not the database the app uses: its schemas say
+    # nothing. The api's own checks read the real one.
+    echo -e "${YELLOW}NOTE${NC} Skipping schema and seed checks (Postgres is external: ${pg_source})."
 elif [ -z "$postgres_id" ]; then
     echo -e "${YELLOW}NOTE${NC} Skipping schema and seed checks (Postgres not running)."
 else
@@ -758,7 +763,9 @@ fi
 
 section "Message queue job time limit"
 
-if [ "$use_local_rabbitmq" = "true" ] && [ -n "$rabbit_id" ]; then
+if [ -n "$rabbit_source" ] && [ "$use_local_rabbitmq" = "true" ]; then
+    echo -e "${YELLOW}NOTE${NC} Skipping the job time limit check (the app uses another broker: ${rabbit_source})."
+elif [ "$use_local_rabbitmq" = "true" ] && [ -n "$rabbit_id" ]; then
     doctor_check_consumer_timeout "$($DOCKER_COMPOSE exec -T rabbitmq rabbitmqctl eval 'application:get_env(rabbit, consumer_timeout).' 2>/dev/null)"
 elif [ "$use_local_rabbitmq" = "true" ]; then
     # Bundled broker, stopped: already reported, and not "external" (#2021).

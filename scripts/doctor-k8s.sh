@@ -253,21 +253,44 @@ else
   ok "WEB_HOSTNAME_API=$HOSTAPI (web→api, in-cluster)"
 fi
 # Guide the user: connecting a repo registers this URL as the provider webhook,
-# so it must be a PUBLIC https URL reaching the webhooks service at /<provider>/webhook.
-if [ -z "$($K get configmap "$CM" -o jsonpath='{.data.API_GITHUB_CODE_MANAGEMENT_WEBHOOK}{.data.API_GITLAB_CODE_MANAGEMENT_WEBHOOK}' 2>/dev/null)" ]; then
-  warn "no Git webhook configured — connecting a repo won't register a webhook. Set API_<GITHUB|GITLAB>_CODE_MANAGEMENT_WEBHOOK to a PUBLIC https URL reaching the webhooks service, e.g. https://<public-webhooks-host>/github/webhook"
-fi
-for prov in GITHUB GITLAB; do
-  key="API_${prov}_CODE_MANAGEMENT_WEBHOOK"
+# so it must reach the webhooks service at /<provider>/webhook from the Git
+# provider. http is fine for a Git server on the same network (the app does not
+# require https); localhost never reaches a pod.
+any_webhook=""
+for entry in API_GITHUB_CODE_MANAGEMENT_WEBHOOK:github:GitHub \
+             API_GITLAB_CODE_MANAGEMENT_WEBHOOK:gitlab:GitLab \
+             GLOBAL_BITBUCKET_CODE_MANAGEMENT_WEBHOOK:bitbucket:Bitbucket \
+             GLOBAL_AZURE_REPOS_CODE_MANAGEMENT_WEBHOOK:azure-repos:Azure-Repos \
+             API_FORGEJO_CODE_MANAGEMENT_WEBHOOK:forgejo:Forgejo; do
+  key=${entry%%:*}; seg=${entry#*:}; label=${seg#*:}; seg=${seg%%:*}; label=${label//-/ }
   url=$($K get configmap "$CM" -o jsonpath="{.data.$key}" 2>/dev/null)
   [ -z "$url" ] && continue
-  provlc=$(echo "$prov" | tr '[:upper:]' '[:lower:]')
+  any_webhook=1
+  path_ok=""
   case "$url" in
-    https://*localhost*|http://*) notprod "$key is http/localhost ($url) — the provider will reject it, so 'save repositories' fails. Use a public https URL like https://<public-webhooks-host>/${provlc}/webhook." ;;
-    https://*/${provlc}/webhook) ok "$prov webhook: $url" ;;
-    https://*) warn "$prov webhook is https but the path looks off ($url) — expected .../${provlc}/webhook" ;;
+    */${seg}/webhook) path_ok=1 ;;
+    */azdevops/webhook) [ "$seg" = azure-repos ] && path_ok=1 ;;
+  esac
+  case "$url" in
+    *://localhost*|*://127.0.0.1*|*://0.0.0.0*)
+      notprod "$key points at localhost ($url) — the Git provider cannot reach it, so 'save repositories' fails. Use a URL your Git provider reaches, like https://<webhooks-host>/${seg}/webhook." ;;
+    http://*|https://*)
+      if [ -z "$path_ok" ]; then
+        warn "$label webhook path looks off ($url) — expected .../${seg}/webhook"
+      elif [ "${url#http://}" != "$url" ]; then
+        warn "$label webhook uses http:// ($url) — fine if your Git server reaches it on your network; a Git provider on the internet should get https"
+      else
+        ok "$label webhook: $url"
+      fi ;;
+    *)
+      bad "$key is not a URL ($url)" \
+        "$label cannot be told about new pull requests: saving repositories fails or no webhook is delivered." \
+        "Set it to the URL your Git provider uses to reach the webhooks service, like https://<webhooks-host>/${seg}/webhook, and run helm upgrade." ;;
   esac
 done
+if [ -z "$any_webhook" ]; then
+  warn "no Git webhook configured — connecting a repo won't register a webhook. Set API_<PROVIDER>_CODE_MANAGEMENT_WEBHOOK (GLOBAL_ for Bitbucket and Azure Repos) to a URL reaching the webhooks service, e.g. https://<webhooks-host>/github/webhook"
+fi
 NEXTA=$($K get configmap "$CM" -o jsonpath='{.data.NEXTAUTH_URL}' 2>/dev/null)
 case "$NEXTA" in
   https://*) ok "NEXTAUTH_URL is https" ;;
