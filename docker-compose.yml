@@ -44,6 +44,10 @@ services:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
+      # Only with COMPOSE_PROFILES=pgbouncer; ignored otherwise.
+      db_kodus_pgbouncer:
+        condition: service_healthy
+        required: false
 
   worker:
     image: ${KODUS_REGISTRY:-ghcr.io/kodustech}/kodus-ai-worker:${IMAGE_TAG:-latest}
@@ -78,6 +82,10 @@ services:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
+      # Only with COMPOSE_PROFILES=pgbouncer; ignored otherwise.
+      db_kodus_pgbouncer:
+        condition: service_healthy
+        required: false
 
   # Analytics ingestion worker (Enterprise / Cockpit). Same image as `worker`,
   # only WORKER_ROLE differs: this process runs the cockpit warehouse ingestion
@@ -119,6 +127,10 @@ services:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
+      # Only with COMPOSE_PROFILES=pgbouncer; ignored otherwise.
+      db_kodus_pgbouncer:
+        condition: service_healthy
+        required: false
 
   webhooks:
     image: ${KODUS_REGISTRY:-ghcr.io/kodustech}/kodus-ai-webhook:${IMAGE_TAG:-latest}
@@ -152,6 +164,10 @@ services:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
+      # Only with COMPOSE_PROFILES=pgbouncer; ignored otherwise.
+      db_kodus_pgbouncer:
+        condition: service_healthy
+        required: false
 
   kodus-mcp-manager:
     image: ${KODUS_REGISTRY:-ghcr.io/kodustech}/kodus-mcp-manager:${IMAGE_TAG:-latest}
@@ -165,6 +181,14 @@ services:
       - OBSERVABILITY_MONGO_ENABLED=${OBSERVABILITY_MONGO_ENABLED:-false}
     env_file:
       - .env
+    # It creates its schema on boot and exits if the database is not there yet.
+    depends_on:
+      db_kodus_postgres:
+        condition: service_healthy
+      # Only with COMPOSE_PROFILES=pgbouncer; ignored otherwise.
+      db_kodus_pgbouncer:
+        condition: service_healthy
+        required: false
     networks:
       - kodus-backend-services
       - shared-network
