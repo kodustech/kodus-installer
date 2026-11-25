@@ -275,13 +275,13 @@ services:
     # The image's entrypoint writes pgbouncer.ini whenever the file is missing
     # (whatever the command), then runs the command: `true` here, so the line
     # Kodus needs can be added before pgbouncer starts. A restarted container
-    # keeps its file, so the line is added once.
+    # keeps its file, so the exact line is added once.
     entrypoint:
       - /bin/sh
       - -c
       - >-
         /entrypoint.sh true &&
-        { grep -q '^track_extra_parameters' /etc/pgbouncer/pgbouncer.ini ||
+        { grep -qxF 'track_extra_parameters = statement_timeout,idle_in_transaction_session_timeout' /etc/pgbouncer/pgbouncer.ini ||
         echo 'track_extra_parameters = statement_timeout,idle_in_transaction_session_timeout' >> /etc/pgbouncer/pgbouncer.ini; } &&
         exec pgbouncer /etc/pgbouncer/pgbouncer.ini
     depends_on:

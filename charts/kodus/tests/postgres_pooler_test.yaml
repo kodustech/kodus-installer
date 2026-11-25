@@ -52,6 +52,13 @@ tests:
           path: metadata.name
           value: a-very-long-release-name-for-kodus-in-production-01-postgres-po
 
+  - it: refuses a release name too long for the CNPG Services, instead of pointing the app at a host that cannot exist
+    release:
+      name: a-very-long-release-name-for-kodus-in-production-012
+    asserts:
+      - failedTemplate:
+          errorPattern: "needs a release name of at most 51 characters"
+
   - it: always tracks the timeouts Kodus sends at connect, even when the user overrides parameters
     set:
       postgres.operator.pooler:

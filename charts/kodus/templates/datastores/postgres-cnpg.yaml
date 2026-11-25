@@ -1,4 +1,9 @@
 {{- if eq .Values.postgres.mode "operator" }}
+{{- /* CNPG names its Services <cluster>-rw/-ro/-r after the Cluster
+       <release>-postgres, and a Service name is a 63-character DNS label. */}}
+{{- if gt (len .Release.Name) 51 }}
+{{- fail (printf "postgres.mode=operator needs a release name of at most 51 characters (%q has %d): CloudNativePG names its Service %s-postgres-rw, which must fit in 63" .Release.Name (len .Release.Name) .Release.Name) }}
+{{- end }}
 {{- if not .Values.postgres.operator.image }}
 {{- fail "postgres.operator.image is required when postgres.mode=operator — it MUST include the pgvector extension (the standard ghcr.io/cloudnative-pg/postgresql:16 image does; minimal variants do not)." }}
 {{- end }}
