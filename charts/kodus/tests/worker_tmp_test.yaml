@@ -1,0 +1,38 @@
+suite: Worker scratch space for the local sandbox
+templates:
+  - templates/deployment.yaml
+  - templates/configmap.yaml
+  - templates/secrets.yaml
+  - templates/migration-job.yaml
+  - templates/datastores/bundled-postgres.yaml
+  - templates/datastores/bundled-mongodb.yaml
+  - templates/datastores/bundled-rabbitmq.yaml
+release:
+  name: kodus
+tests:
+  - it: gives the worker room in /tmp to clone the repository under review
+    documentSelector:
+      path: metadata.name
+      value: kodus-worker
+    asserts:
+      - contains:
+          path: spec.template.spec.volumes
+          content: {"name":"tmp","emptyDir":{"sizeLimit":"10Gi"}}
+  - it: keeps the small /tmp on pods that do not run the sandbox
+    documentSelector:
+      path: metadata.name
+      value: kodus-api
+    asserts:
+      - contains:
+          path: spec.template.spec.volumes
+          content: {"name":"tmp","emptyDir":{"sizeLimit":"100Mi"}}
+  - it: lets the worker /tmp be sized for very large monorepos
+    set:
+      services.worker.emptyDir.sizeLimits.tmp: 40Gi
+    documentSelector:
+      path: metadata.name
+      value: kodus-worker
+    asserts:
+      - contains:
+          path: spec.template.spec.volumes
+          content: {"name":"tmp","emptyDir":{"sizeLimit":"40Gi"}}

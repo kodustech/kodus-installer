@@ -332,6 +332,14 @@ services:
     resources:
       requests: { cpu: 250m, memory: 512Mi }
       limits:   { cpu: "1", memory: 1536Mi }
+    # /tmp is where the local sandbox (SANDBOX_PROVIDER=local, the default)
+    # clones the repository under review (shallow, about the size of its working
+    # tree). The 100Mi every other pod gets evicted the worker on any repository
+    # bigger than that. A ceiling, not a reservation: it takes no node disk until
+    # used. Raise it for very large monorepos.
+    emptyDir:
+      sizeLimits:
+        tmp: 10Gi
 
   # Analytics ingestion worker (Cockpit / self-hosted Enterprise). Harmless when
   # the Enterprise features are unused — it just consumes its queues — so it ships
