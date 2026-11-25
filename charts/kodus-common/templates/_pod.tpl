@@ -92,14 +92,16 @@ before the app container starts — prevents CrashLoopBackOff during the DB/queu
 warm-up race. Call with root ctx. Callers skip it when waitForDeps.enabled=false.
 */}}
 {{- define "kodus-common.waitForDeps" -}}
-{{- /* Every Postgres endpoint the app opens: with a pooler in front, the app
-       queries through it and migrations/LISTEN use the direct host, so a pod
-       that waited for only one of them starts against the other cold. */}}
+{{- /* Every Postgres endpoint the values name: with a pooler in front, the
+       app queries through it and migrations/LISTEN use the direct host, so a
+       pod that waited for only one of them starts against the other cold. An
+       endpoint inside a Secret's connection string (external.directUrlKey)
+       is not known here and is not waited for. */}}
 {{- $pg := list }}
 {{- if eq .Values.postgres.mode "bundled" }}{{- $pg = append $pg (printf "%s-postgres 5432" .Release.Name) }}
 {{- else if eq .Values.postgres.mode "operator" }}
 {{- $pg = append $pg (printf "%s-postgres-rw 5432" .Release.Name) }}
-{{- if and .Values.postgres.operator.pooler .Values.postgres.operator.pooler.enabled }}{{- $pg = append $pg (printf "%s-postgres-pooler-rw 5432" .Release.Name) }}{{- end }}
+{{- if include "kodus-common.pgPooled" . }}{{- $pg = append $pg (printf "%s 5432" (include "kodus-common.pgPoolerName" .)) }}{{- end }}
 {{- else }}
 {{- $pg = append $pg (printf "%s %s" (.Values.postgres.external.host | toString) (.Values.postgres.external.port | default 5432 | toString)) }}
 {{- with .Values.postgres.external.directHost }}{{- $pg = append $pg (printf "%s %s" (. | toString) ($.Values.postgres.external.directPort | default 5432 | toString)) }}{{- end }}

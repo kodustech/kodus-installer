@@ -272,12 +272,17 @@ services:
       AUTH_TYPE: scram-sha-256
       MAX_CLIENT_CONN: "1000"
       DEFAULT_POOL_SIZE: "40"
+    # The image's entrypoint writes pgbouncer.ini whenever the file is missing
+    # (whatever the command), then runs the command: `true` here, so the line
+    # Kodus needs can be added before pgbouncer starts. A restarted container
+    # keeps its file, so the line is added once.
     entrypoint:
       - /bin/sh
       - -c
       - >-
         /entrypoint.sh true &&
-        echo 'track_extra_parameters = statement_timeout,idle_in_transaction_session_timeout' >> /etc/pgbouncer/pgbouncer.ini &&
+        { grep -q '^track_extra_parameters' /etc/pgbouncer/pgbouncer.ini ||
+        echo 'track_extra_parameters = statement_timeout,idle_in_transaction_session_timeout' >> /etc/pgbouncer/pgbouncer.ini; } &&
         exec pgbouncer /etc/pgbouncer/pgbouncer.ini
     depends_on:
       db_kodus_postgres:

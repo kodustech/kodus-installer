@@ -167,3 +167,24 @@ Call with (dict "image" $svc.image "root" $ "name" $name).
 {{- if $img.digest }}{{ $ref = printf "%s@%s" $img.repository $img.digest }}{{ else }}{{ $ref = printf "%s:%s" $img.repository $tag }}{{ end -}}
 {{- include "kodus-common.regPrefix" .root }}{{ $ref }}
 {{- end }}
+
+{{/*
+"true" when the CloudNativePG Pooler is on, "" otherwise. `enabled` is
+compared as a string, so true and "true" agree, and a missing pooler block,
+null, or "false" means off (a plain `if` would take "false" as on).
+*/}}
+{{- define "kodus-common.pgPooled" -}}
+{{- if eq .Values.postgres.mode "operator" -}}
+{{- $pooler := .Values.postgres.operator.pooler | default dict -}}
+{{- if eq (toString $pooler.enabled) "true" -}}true{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+The Pooler's name, which CloudNativePG also gives its Service: cut to 63
+characters, the DNS label limit, so a long release name still gets a Service
+the app can reach.
+*/}}
+{{- define "kodus-common.pgPoolerName" -}}
+{{- printf "%s-postgres-pooler-rw" .Release.Name | trunc 63 | trimSuffix "-" -}}
+{{- end -}}

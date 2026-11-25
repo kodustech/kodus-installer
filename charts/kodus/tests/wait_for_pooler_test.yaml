@@ -27,6 +27,29 @@ tests:
           path: spec.template.spec.initContainers[0].command[2]
           pattern: nc -z kodus-postgres-rw 5432
 
+  - it: with a long release name, the app connects to and waits for the Pooler Service under its cut name
+    template: templates/deployment.yaml
+    release:
+      name: a-very-long-release-name-for-kodus-in-production-01
+    set:
+      postgres:
+        mode: operator
+        operator:
+          image: ghcr.io/example/cnpg-pgvector:16
+          pooler: { enabled: true }
+    documentSelector:
+      path: metadata.name
+      value: a-very-long-release-name-for-kodus-in-production-01-api
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.initContainers[0].command[2]
+          pattern: nc -z a-very-long-release-name-for-kodus-in-production-01-postgres-po 5432
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: API_PG_DB_HOST
+            value: a-very-long-release-name-for-kodus-in-production-01-postgres-po
+
   - it: with an external pooler, the migration Job waits for the pooler and for the direct host
     template: templates/migration-job.yaml
     set:

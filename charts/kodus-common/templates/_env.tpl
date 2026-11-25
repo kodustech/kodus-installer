@@ -31,11 +31,11 @@ Call with root ctx.
 - name: API_PG_DB_DATABASE
   value: {{ .Values.postgres.bundled.database | quote }}
 {{- else if eq .Values.postgres.mode "operator" }}
-{{- $pooled := and .Values.postgres.operator.pooler .Values.postgres.operator.pooler.enabled }}
+{{- $pooled := eq (include "kodus-common.pgPooled" .) "true" }}
 {{- /* With the CNPG Pooler on, queries go through PgBouncer while migrations
        and the LISTEN connection stay on the -rw service (direct). */}}
 - name: API_PG_DB_HOST
-  value: {{ printf (ternary "%s-postgres-pooler-rw" "%s-postgres-rw" $pooled) .Release.Name | quote }}
+  value: {{ ternary (include "kodus-common.pgPoolerName" .) (printf "%s-postgres-rw" .Release.Name) $pooled | quote }}
 - name: API_PG_DB_PORT
   value: "5432"
 {{- if $pooled }}

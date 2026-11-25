@@ -281,11 +281,27 @@ tests:
       path: metadata.name
       value: kodus-api
     asserts:
+      # By name: no value of either variable may come back.
       - notContains:
           path: spec.template.spec.containers[0].env
-          content: { name: API_PG_DB_DIRECT_HOST, value: kodus-postgres-rw }
+          content: { name: API_PG_DB_DIRECT_HOST }
           any: true
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content: { name: API_PG_DB_DIRECT_PORT }
+          any: true
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: { name: API_PG_DB_HOST, value: kodus-postgres-rw }
 
+  - it: a pooler flag that is not a boolean is refused at install, before any template runs
+    set:
+      postgres:
+        mode: operator
+        operator: { pooler: { enabled: "true" } }
+    asserts:
+      - failedTemplate:
+          errorPattern: "/postgres/operator/pooler/enabled': got string, want boolean"
   - it: in external mode, directHost sends migrations and LISTEN to PostgreSQL on 5432, not to the pooler's port
     set:
       postgres:

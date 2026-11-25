@@ -35,23 +35,24 @@ spec:
     {{- with .Values.postgres.operator.storage.storageClass }}
     storageClass: {{ . }}
     {{- end }}
+{{- if include "kodus-common.pgPooled" . }}
 {{- with .Values.postgres.operator.pooler }}
-{{- if .enabled }}
 {{- if not (has .poolMode (list "transaction" "session")) }}
 {{- fail (printf "postgres.operator.pooler.poolMode must be transaction or session, got %q" .poolMode) }}
 {{- end }}
 ---
 {{/*
 PgBouncer in front of the -rw service, run by CloudNativePG. CNPG names the
-Service after the Pooler, so the app reaches it at <release>-postgres-pooler-rw
-(kodus-common.dbEnv). The pool parameters are the user's; the timeouts Kodus
+Service after the Pooler, so the app reaches it at <release>-postgres-pooler-rw,
+cut to 63 characters (kodus-common.pgPoolerName, which kodus-common.dbEnv and
+wait-for-deps use too). The pool parameters are the user's; the timeouts Kodus
 sends when it connects are always tracked, or PgBouncer refuses every Kodus
 connection ("unsupported startup parameter: statement_timeout").
 */}}
 apiVersion: postgresql.cnpg.io/v1
 kind: Pooler
 metadata:
-  name: {{ $.Release.Name }}-postgres-pooler-rw
+  name: {{ include "kodus-common.pgPoolerName" $ }}
   labels:
     {{- include "kodus.labels" $ | nindent 4 }}
 spec:

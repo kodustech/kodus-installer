@@ -39,6 +39,19 @@ tests:
           path: spec.pgbouncer.poolMode
           value: transaction
 
+  - it: a long release name still gets a Pooler (and Service) name within the 63-character DNS limit
+    release:
+      name: a-very-long-release-name-for-kodus-in-production-01
+    set:
+      postgres.operator.pooler.enabled: true
+    documentSelector:
+      path: kind
+      value: Pooler
+    asserts:
+      - equal:
+          path: metadata.name
+          value: a-very-long-release-name-for-kodus-in-production-01-postgres-po
+
   - it: always tracks the timeouts Kodus sends at connect, even when the user overrides parameters
     set:
       postgres.operator.pooler:
