@@ -12,13 +12,15 @@ set -eu
 need=statement_timeout,idle_in_transaction_session_timeout
 
 # Adds the parameters Kodus needs to <ini>, read once:
-# - into each track_extra_parameters line, keeping the ones already there (the
-#   last assignment wins, so a second line would drop them);
+# - appended to each track_extra_parameters line that lacks one, whose text is
+#   otherwise kept as written (the last assignment wins, so a second line
+#   would drop the parameters already there);
 # - else as a line right under [pgbouncer];
 # - else with a [pgbouncer] section at the end.
-# The file is written back, in place so a mounted file works, only when a
-# parameter was missing: an ini that already has them can be mounted
-# read-only. An empty file is left as it is.
+# awk exits 10 when nothing is missing, and only then is the file left alone:
+# an ini that already has them can be mounted read-only, whatever its line
+# endings. Otherwise it is written back in place, so a mounted file works.
+# An empty file is left as it is.
 merge() {
 	ini=$1
 	[ -s "$ini" ] || return 0
@@ -35,26 +37,40 @@ merge() {
 			for (i = 1; i <= NR; i++) {
 				out = line[i]
 				if (i in tracked) {
-					cr = ""; if (out ~ /\r$/) cr = "\r"
-					v = out; sub(/\r$/, "", v); sub(/^[^=]*=/, "", v); gsub(/[ \t]/, "", v)
-					added = 0
+					cr = ""; if (out ~ /\r$/) { cr = "\r"; sub(/\r$/, "", out) }
+					v = out; sub(/^[^=]*=/, "", v); gsub(/[ \t]/, "", v)
+					missing = ""
 					for (j = 1; j <= n; j++)
-						if (index("," v ",", "," req[j] ",") == 0) { v = (v == "" ? "" : v ",") req[j]; added = 1 }
-					if (added) out = "track_extra_parameters = " v cr
+						if (index("," v ",", "," req[j] ",") == 0) missing = missing (missing == "" ? "" : ",") req[j]
+					if (missing != "") {
+						sub(/[ \t]+$/, "", out)
+						out = out (v == "" ? " " : ",") missing
+						changed = 1
+					}
+					out = out cr
 				}
 				print out
-				if (i == head && !ntracked) print "track_extra_parameters = " need
+				if (i == head && !ntracked) { print "track_extra_parameters = " need; changed = 1 }
 			}
-			if (!head && !ntracked) { print ""; print "[pgbouncer]"; print "track_extra_parameters = " need }
+			if (!head && !ntracked) { print ""; print "[pgbouncer]"; print "track_extra_parameters = " need; changed = 1 }
+			exit changed ? 0 : 10
 		}
-	' "$ini" >"$merged"
-	if [ -s "$merged" ] && ! cmp -s "$merged" "$ini"; then
-		if ! cat "$merged" >"$ini"; then
+	' "$ini" >"$merged" || status=$?
+	case ${status:-0} in
+	10) ;;
+	0)
+		if ! [ -s "$merged" ] || ! cat "$merged" >"$ini"; then
 			rm -f "$merged"
 			echo "kodus: $ini must set track_extra_parameters to include $need, and it cannot be written" >&2
 			exit 1
 		fi
-	fi
+		;;
+	*)
+		rm -f "$merged"
+		echo "kodus: could not read $ini" >&2
+		exit 1
+		;;
+	esac
 	rm -f "$merged"
 }
 

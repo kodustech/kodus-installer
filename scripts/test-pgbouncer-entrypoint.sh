@@ -15,13 +15,17 @@ failed=0
 case_() {
 	local name=$1 mode=$2 want_code=$3 input=$4 want=$5 code=0
 	printf '%s' "$input" >"$work/ini"
+	printf '%s' "$want" >"$work/want"
+	# The container runs as the image's postgres user, not the file's owner.
+	chmod 666 "$work/ini"
 	docker run --rm -v "$script:/e.sh:ro" -v "$work/ini:/w/pgbouncer.ini:$mode" \
 		--entrypoint sh "$image" /e.sh merge /w/pgbouncer.ini >"$work/out" 2>&1 || code=$?
-	if [ "$code" != "$want_code" ] || [ "$(cat "$work/ini")" != "$(printf '%s' "$want")" ]; then
+	# Byte for byte: a command substitution would drop trailing newlines.
+	if [ "$code" != "$want_code" ] || ! cmp -s "$work/ini" "$work/want"; then
 		failed=1
 		echo "FAIL $name (exit $code, want $want_code)"
 		echo "--- got";  cat "$work/ini"; echo
-		echo "--- want"; printf '%s\n' "$want"
+		echo "--- want"; cat "$work/want"; echo
 		echo "--- output"; cat "$work/out"
 	else
 		echo "ok   $name"
@@ -51,6 +55,15 @@ case_ 'header with a comment and CRLF endings' rw 0 \
 case_ 'CRLF line missing one: merged, CR kept' rw 0 \
 	$'[pgbouncer]\r\ntrack_extra_parameters = lock_timeout\r\n' \
 	$'[pgbouncer]\r\ntrack_extra_parameters = lock_timeout,statement_timeout,idle_in_transaction_session_timeout\r\n'
+case_ 'already there, no final newline: read-only mount starts' ro 0 \
+	$'[pgbouncer]\n'"$need" $'[pgbouncer]\n'"$need"
+case_ 'missing, no final newline: line added' rw 0 \
+	$'[pgbouncer]\nlisten_port = 5432' $'[pgbouncer]\n'"$need"$'\nlisten_port = 5432\n'
+case_ 'line text kept as written, missing names appended' rw 0 \
+	$'[pgbouncer]\ntrack_extra_parameters = lock_timeout ; set by ops  \n' \
+	$'[pgbouncer]\ntrack_extra_parameters = lock_timeout ; set by ops,statement_timeout,idle_in_transaction_session_timeout\n'
+case_ 'empty value: names added' rw 0 \
+	$'[pgbouncer]\ntrack_extra_parameters =\n' $'[pgbouncer]\n'"$need"$'\n'
 case_ 'missing and read-only: refuses to start' ro 1 \
 	"$generated" "$generated"
 case_ 'empty file: left as it is' rw 0 '' ''
