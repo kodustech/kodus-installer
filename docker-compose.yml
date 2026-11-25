@@ -273,17 +273,30 @@ services:
       MAX_CLIENT_CONN: "1000"
       DEFAULT_POOL_SIZE: "40"
     # The image's entrypoint writes pgbouncer.ini whenever the file is missing
-    # (whatever the command), then runs the command: `true` here, so the line
-    # Kodus needs can be added before pgbouncer starts. A restarted container
-    # keeps its file, so the exact line is added once.
+    # (whatever the command), then runs the command: `true` here, so the
+    # parameters Kodus needs can be added before pgbouncer starts. They are
+    # merged into a track_extra_parameters line the file already has (the last
+    # assignment wins, so a second line would drop the others), or put under
+    # [pgbouncer]. The file is rewritten in place, so a mounted ini works too,
+    # and a restarted container keeps its file with nothing new to add.
     entrypoint:
       - /bin/sh
       - -c
-      - >-
+      - |
         /entrypoint.sh true &&
-        { grep -qxF 'track_extra_parameters = statement_timeout,idle_in_transaction_session_timeout' /etc/pgbouncer/pgbouncer.ini ||
-        echo 'track_extra_parameters = statement_timeout,idle_in_transaction_session_timeout' >> /etc/pgbouncer/pgbouncer.ini; } &&
-        exec pgbouncer /etc/pgbouncer/pgbouncer.ini
+        ini=/etc/pgbouncer/pgbouncer.ini &&
+        awk -v need=statement_timeout,idle_in_transaction_session_timeout '
+          NR == FNR { if ($$0 ~ /^[ \t]*track_extra_parameters[ \t]*=/) has = 1; next }
+          /^[ \t]*track_extra_parameters[ \t]*=/ {
+            v = $$0; sub(/^[^=]*=/, "", v); gsub(/[ \t]/, "", v)
+            n = split(need, req, ",")
+            for (i = 1; i <= n; i++) if (index("," v ",", "," req[i] ",") == 0) v = (v == "" ? "" : v ",") req[i]
+            print "track_extra_parameters = " v; next
+          }
+          { print }
+          /^[ \t]*\[pgbouncer\][ \t]*$$/ && !has { print "track_extra_parameters = " need }
+        ' "$$ini" "$$ini" > /tmp/pgbouncer.ini && cat /tmp/pgbouncer.ini > "$$ini" &&
+        exec pgbouncer "$$ini"
     depends_on:
       db_kodus_postgres:
         condition: service_healthy
