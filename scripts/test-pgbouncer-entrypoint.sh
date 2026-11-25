@@ -18,7 +18,8 @@ case_() {
 	printf '%s' "$want" >"$work/want"
 	# The container runs as the image's postgres user, not the file's owner.
 	chmod 666 "$work/ini"
-	docker run --rm -v "$script:/e.sh:ro" -v "$work/ini:/w/pgbouncer.ini:$mode" \
+	# status=10 in the environment: the script must not read it as awk's.
+	docker run --rm -e status=10 -v "$script:/e.sh:ro" -v "$work/ini:/w/pgbouncer.ini:$mode" \
 		--entrypoint sh "$image" /e.sh merge /w/pgbouncer.ini >"$work/out" 2>&1 || code=$?
 	# Byte for byte: a command substitution would drop trailing newlines.
 	if [ "$code" != "$want_code" ] || ! cmp -s "$work/ini" "$work/want"; then

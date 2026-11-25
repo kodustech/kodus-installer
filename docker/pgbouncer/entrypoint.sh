@@ -25,6 +25,7 @@ merge() {
 	ini=$1
 	[ -s "$ini" ] || return 0
 	merged=$(mktemp)
+	status=0
 	awk -v need="$need" '
 		{
 			line[NR] = $0
@@ -56,7 +57,7 @@ merge() {
 			exit changed ? 0 : 10
 		}
 	' "$ini" >"$merged" || status=$?
-	case ${status:-0} in
+	case $status in
 	10) ;;
 	0)
 		if ! [ -s "$merged" ] || ! cat "$merged" >"$ini"; then
