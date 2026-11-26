@@ -59,11 +59,13 @@ required to be writable.
 {{- index $localLimits .name | default (index $globalLimits .name) | default $global.defaultSizeLimit | default .fallback -}}
 {{- end }}
 
-{{/* Accept the original root context as well as {root, config} for per-component limits. */}}
+{{/* Accept the original root context as well as {root, config, fallback} for per-component limits.
+fallback is the component's own default, used only when no limit is set at any level. */}}
 {{- define "kodus-common.tmpVolume" -}}
 {{- $root := .root | default . -}}
 {{- $config := .config | default dict -}}
+{{- $fallback := .fallback | default "100Mi" -}}
 - name: tmp
   emptyDir:
-    sizeLimit: {{ include "kodus-common.emptyDirSizeLimit" (dict "root" $root "config" $config "name" "tmp" "fallback" "100Mi") | quote }}
+    sizeLimit: {{ include "kodus-common.emptyDirSizeLimit" (dict "root" $root "config" $config "name" "tmp" "fallback" $fallback) | quote }}
 {{- end }}

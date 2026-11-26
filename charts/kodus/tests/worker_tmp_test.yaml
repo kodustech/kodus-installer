@@ -36,3 +36,33 @@ tests:
       - contains:
           path: spec.template.spec.volumes
           content: {"name":"tmp","emptyDir":{"sizeLimit":"40Gi"}}
+  - it: keeps a /tmp limit set for every pod, over the worker's own default
+    set:
+      emptyDir.sizeLimits.tmp: 20Gi
+    documentSelector:
+      path: metadata.name
+      value: kodus-worker
+    asserts:
+      - contains:
+          path: spec.template.spec.volumes
+          content: {"name":"tmp","emptyDir":{"sizeLimit":"20Gi"}}
+  - it: keeps a default limit set for every volume, over the worker's own default
+    set:
+      emptyDir.defaultSizeLimit: 500Mi
+    documentSelector:
+      path: metadata.name
+      value: kodus-worker
+    asserts:
+      - contains:
+          path: spec.template.spec.volumes
+          content: {"name":"tmp","emptyDir":{"sizeLimit":"500Mi"}}
+  - it: leaves the other pods on their 100Mi when only the worker is sized
+    set:
+      services.worker.emptyDir.sizeLimits.tmp: 40Gi
+    documentSelector:
+      path: metadata.name
+      value: kodus-webhooks
+    asserts:
+      - contains:
+          path: spec.template.spec.volumes
+          content: {"name":"tmp","emptyDir":{"sizeLimit":"100Mi"}}
