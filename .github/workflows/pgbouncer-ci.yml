@@ -1,0 +1,32 @@
+name: Compose PgBouncer CI
+
+on:
+  pull_request:
+    paths:
+      - 'docker/pgbouncer/**'
+      - 'scripts/test-pgbouncer-entrypoint.sh'
+      - 'docker-compose.yml'
+      - '.github/workflows/pgbouncer-ci.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'docker/pgbouncer/**'
+      - 'scripts/test-pgbouncer-entrypoint.sh'
+      - 'docker-compose.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  pgbouncer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: shellcheck
+        run: shellcheck -S warning docker/pgbouncer/entrypoint.sh scripts/test-pgbouncer-entrypoint.sh
+
+      # The entrypoint in the image Compose runs: the ini it leaves, when it
+      # writes it, and pgbouncer starting with it.
+      - name: Entrypoint scenarios
+        run: ./scripts/test-pgbouncer-entrypoint.sh

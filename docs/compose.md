@@ -80,6 +80,9 @@ MongoDB connection.
   ```bash
   docker compose --profile analytics up -d worker-analytics
   ```
+- **PgBouncer** — behind the `pgbouncer` Compose profile, in transaction mode,
+  in front of the bundled Postgres. See
+  [PostgreSQL behind a pooler](#postgresql-behind-a-pooler-or-an-ha-cluster).
 
 ## Your first review
 
@@ -115,6 +118,43 @@ API_RABBITMQ_URI=amqp://user:pass@your-rabbitmq-host:5672/kodus-ai
 With `false`, `install.sh` doesn't start (or health-check) the corresponding local
 service. The RabbitMQ vhost must be `kodus-ai`, and the URI credentials must match
 `RABBITMQ_DEFAULT_USER` / `RABBITMQ_DEFAULT_PASS` when using the bundled broker.
+
+### PostgreSQL behind a pooler or an HA cluster
+
+Kodus works behind PgBouncer in session or transaction mode. Give it two
+endpoints: the pooler for queries, and PostgreSQL itself (the current primary)
+for migrations and the LISTEN connection that carries live events between api
+and worker. Neither works through a transaction-mode pooler.
+
+```bash
+API_PG_DB_HOST=your-pgbouncer-host
+API_PG_DB_PORT=6432
+API_PG_DB_DIRECT_HOST=your-postgres-primary   # not the pooler
+API_PG_DB_DIRECT_PORT=5432
+```
+
+PgBouncer must track the two timeouts Kodus sets when it connects, or it
+refuses every connection with `unsupported startup parameter: statement_timeout`:
+
+```ini
+track_extra_parameters = statement_timeout,idle_in_transaction_session_timeout
+```
+
+For an HA cluster, point both hosts at endpoints that always reach the primary
+(a VIP, HAProxy with Patroni health checks). Kodus takes one host per
+connection and does not use read replicas.
+
+To try it with the bundled Postgres, start the `pgbouncer` profile and set
+`API_PG_DB_HOST=db_kodus_pgbouncer`, `API_PG_DB_PORT=5432` and
+`API_PG_DB_DIRECT_HOST=db_kodus_postgres`:
+
+```bash
+COMPOSE_PROFILES=pgbouncer docker compose up -d
+```
+
+`./scripts/doctor.sh` reports the result under `database.locks` and
+`database.listen`. Full reference:
+[PostgreSQL behind a connection pooler](https://docs.kodus.io/how_to_deploy/en/deploy_kodus/postgres_pooler).
 
 ## Updating to a new version
 

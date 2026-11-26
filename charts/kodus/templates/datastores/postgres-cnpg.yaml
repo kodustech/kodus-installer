@@ -1,6 +1,11 @@
 {{- if eq .Values.postgres.mode "operator" }}
+{{- /* CNPG names its Services <cluster>-rw/-ro/-r after the Cluster
+       <release>-postgres, and a Service name is a 63-character DNS label. */}}
+{{- if gt (len .Release.Name) 51 }}
+{{- fail (printf "postgres.mode=operator needs a release name of at most 51 characters (%q has %d): CloudNativePG names its Service %s-postgres-rw, which must fit in 63" .Release.Name (len .Release.Name) .Release.Name) }}
+{{- end }}
 {{- if not .Values.postgres.operator.image }}
-{{- fail "postgres.operator.image is required when postgres.mode=operator — it MUST include the pgvector extension (a stock CloudNativePG image does not)." }}
+{{- fail "postgres.operator.image is required when postgres.mode=operator — it MUST include the pgvector extension (the standard ghcr.io/cloudnative-pg/postgresql:16 image does; minimal variants do not)." }}
 {{- end }}
 {{/*
 CloudNativePG Cluster. Requires the cloudnative-pg operator pre-installed.
@@ -35,4 +40,52 @@ spec:
     {{- with .Values.postgres.operator.storage.storageClass }}
     storageClass: {{ . }}
     {{- end }}
+{{- if include "kodus-common.pgPooled" . }}
+{{- with .Values.postgres.operator.pooler }}
+{{- if not (has .poolMode (list "transaction" "session")) }}
+{{- fail (printf "postgres.operator.pooler.poolMode must be transaction or session, got %q" .poolMode) }}
+{{- end }}
+---
+{{/*
+PgBouncer in front of the -rw service, run by CloudNativePG. CNPG names the
+Service after the Pooler, so the app reaches it at <release>-postgres-pooler-rw,
+cut to 63 characters (kodus-common.pgPoolerName, which kodus-common.dbEnv and
+wait-for-deps use too). The pool parameters are the user's; the timeouts Kodus
+sends when it connects are always tracked, or PgBouncer refuses every Kodus
+connection ("unsupported startup parameter: statement_timeout").
+*/}}
+apiVersion: postgresql.cnpg.io/v1
+kind: Pooler
+metadata:
+  name: {{ include "kodus-common.pgPoolerName" $ }}
+  labels:
+    {{- include "kodus.labels" $ | nindent 4 }}
+spec:
+  cluster:
+    name: {{ $.Release.Name }}-postgres
+  instances: {{ .instances | default 2 }}
+  type: rw
+  # Same labels as the Cluster's inheritedMetadata, so the allow-intra-app
+  # NetworkPolicy lets the app reach the pooler pods.
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/part-of: kodus
+        app.kubernetes.io/instance: {{ $.Release.Name }}
+    spec:
+      containers:
+        - name: pgbouncer
+          {{- with .resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+  pgbouncer:
+    poolMode: {{ .poolMode }}
+    parameters:
+      {{- range $key, $value := (omit (.parameters | default dict) "track_extra_parameters") }}
+      {{ $key }}: {{ $value | toString | quote }}
+      {{- end }}
+      track_extra_parameters: "statement_timeout,idle_in_transaction_session_timeout"
+{{- end }}
+{{- end }}
 {{- end }}

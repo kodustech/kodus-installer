@@ -249,3 +249,97 @@ tests:
     asserts:
       - failedTemplate:
           errorPattern: rabbitmq\.bundled\.existingSecret is required
+
+  # ---- Postgres behind a pooler ------------------------------------------------
+  # Kodus runs migrations and its LISTEN connection (live events api↔worker) on
+  # API_PG_DB_DIRECT_*. Through PgBouncer in transaction mode neither works, so
+  # whenever the app's host is a pooler the direct host must reach PostgreSQL.
+
+  - it: with the CNPG Pooler on, queries go through the pooler and migrations/LISTEN stay on -rw
+    set:
+      postgres:
+        mode: operator
+        operator: { pooler: { enabled: true } }
+    documentSelector:
+      path: metadata.name
+      value: kodus-api
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: { name: API_PG_DB_HOST, value: kodus-postgres-pooler-rw }
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: { name: API_PG_DB_DIRECT_HOST, value: kodus-postgres-rw }
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: { name: API_PG_DB_DIRECT_PORT, value: "5432" }
+
+  - it: without the pooler, operator mode sets no direct host (everything on -rw, as before)
+    set:
+      postgres: { mode: operator }
+    documentSelector:
+      path: metadata.name
+      value: kodus-api
+    asserts:
+      # By name: no value of either variable may come back.
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content: { name: API_PG_DB_DIRECT_HOST }
+          any: true
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content: { name: API_PG_DB_DIRECT_PORT }
+          any: true
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: { name: API_PG_DB_HOST, value: kodus-postgres-rw }
+
+  - it: a pooler flag that is not a boolean is refused at install, before any template runs
+    set:
+      postgres:
+        mode: operator
+        operator: { pooler: { enabled: "true" } }
+    asserts:
+      - failedTemplate:
+          errorPattern: "/postgres/operator/pooler/enabled': got string, want boolean"
+  - it: in external mode, directHost sends migrations and LISTEN to PostgreSQL on 5432, not to the pooler's port
+    set:
+      postgres:
+        mode: external
+        external:
+          host: pgbouncer.db
+          port: 6432
+          existingSecret: pg
+          directHost: pg-primary.db
+    documentSelector:
+      path: metadata.name
+      value: kodus-worker
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: { name: API_PG_DB_HOST, value: pgbouncer.db }
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: { name: API_PG_DB_DIRECT_HOST, value: pg-primary.db }
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: { name: API_PG_DB_DIRECT_PORT, value: "5432" }
+
+  - it: in external mode, directUrlKey gives every app process the direct connection string from the user's Secret
+    set:
+      postgres:
+        mode: external
+        external:
+          host: pgbouncer.db
+          port: 6432
+          existingSecret: pg
+          directUrlKey: direct-url
+    documentSelector:
+      path: metadata.name
+      value: kodus-worker
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DATABASE_DIRECT_URL
+            valueFrom: { secretKeyRef: { name: pg, key: direct-url } }

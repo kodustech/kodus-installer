@@ -179,7 +179,33 @@
         "secrets": { "type": "object" }
       }
     },
-    "postgres": { "$ref": "#/definitions/store" },
+    "postgres": {
+      "allOf": [{ "$ref": "#/definitions/store" }],
+      "properties": {
+        "external": {
+          "properties": {
+            "directHost": { "type": "string", "description": "PostgreSQL itself, when host/port is a pooler or proxy. Migrations and the LISTEN connection use it. Empty = host." },
+            "directPort": { "type": ["integer", "string"], "description": "Port of directHost. Defaults to 5432, not to port." },
+            "directUrlKey": { "type": "string", "description": "Key in existingSecret with a full direct connection string (own database, user, sslmode). Wins over directHost." }
+          }
+        },
+        "operator": {
+          "properties": {
+            "operatorNamespace": { "type": "string", "minLength": 1, "description": "Namespace of the CloudNativePG operator. The NetworkPolicy lets it reach the instances' status port (8000)." },
+            "pooler": {
+              "type": "object",
+              "properties": {
+                "enabled": { "type": "boolean", "description": "Run a CloudNativePG Pooler (PgBouncer) in front of <release>-postgres-rw." },
+                "instances": { "type": "integer", "minimum": 1 },
+                "poolMode": { "enum": ["transaction", "session"] },
+                "parameters": { "type": "object", "additionalProperties": { "type": ["string", "integer"] }, "description": "CNPG-allowed PgBouncer parameters. The chart always sets track_extra_parameters." },
+                "resources": { "type": "object" }
+              }
+            }
+          }
+        }
+      }
+    },
     "mongodb": {
       "allOf": [{ "$ref": "#/definitions/store" }],
       "properties": {

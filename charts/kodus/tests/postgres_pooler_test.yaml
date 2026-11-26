@@ -1,0 +1,91 @@
+suite: CloudNativePG Pooler (PgBouncer) for Postgres
+# The Pooler fronts <release>-postgres-rw. Kodus sends statement_timeout and
+# idle_in_transaction_session_timeout when it connects; PgBouncer refuses every
+# such connection unless they are tracked, so the chart always adds them.
+templates:
+  - templates/datastores/postgres-cnpg.yaml
+release:
+  name: kodus
+set:
+  postgres:
+    mode: operator
+    operator:
+      image: ghcr.io/example/cnpg-pgvector:16
+tests:
+  - it: renders no Pooler unless enabled
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: Cluster
+
+  - it: renders a transaction-mode Pooler named for the Service the app connects to
+    set:
+      postgres.operator.pooler.enabled: true
+    documentSelector:
+      path: kind
+      value: Pooler
+    asserts:
+      - equal:
+          path: metadata.name
+          value: kodus-postgres-pooler-rw
+      - equal:
+          path: spec.cluster.name
+          value: kodus-postgres
+      - equal:
+          path: spec.type
+          value: rw
+      - equal:
+          path: spec.pgbouncer.poolMode
+          value: transaction
+
+  - it: a long release name still gets a Pooler (and Service) name within the 63-character DNS limit
+    release:
+      name: a-very-long-release-name-for-kodus-in-production-01
+    set:
+      postgres.operator.pooler.enabled: true
+    documentSelector:
+      path: kind
+      value: Pooler
+    asserts:
+      - equal:
+          path: metadata.name
+          value: a-very-long-release-name-for-kodus-in-production-01-postgres-po
+
+  - it: refuses a release name too long for the CNPG Services, instead of pointing the app at a host that cannot exist
+    release:
+      name: a-very-long-release-name-for-kodus-in-production-012
+    asserts:
+      - failedTemplate:
+          errorPattern: "needs a release name of at most 51 characters"
+
+  - it: always tracks the timeouts Kodus sends at connect, even when the user overrides parameters
+    set:
+      postgres.operator.pooler:
+        enabled: true
+        parameters:
+          max_client_conn: "500"
+          track_extra_parameters: "something_else"
+    documentSelector:
+      path: kind
+      value: Pooler
+    asserts:
+      - equal:
+          path: spec.pgbouncer.parameters.track_extra_parameters
+          value: statement_timeout,idle_in_transaction_session_timeout
+      - equal:
+          path: spec.pgbouncer.parameters.max_client_conn
+          value: "500"
+
+  - it: labels the pooler pods so the intra-app NetworkPolicy admits the app
+    set:
+      postgres.operator.pooler.enabled: true
+    documentSelector:
+      path: kind
+      value: Pooler
+    asserts:
+      - equal:
+          path: spec.template.metadata.labels
+          value:
+            app.kubernetes.io/part-of: kodus
+            app.kubernetes.io/instance: kodus

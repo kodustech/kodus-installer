@@ -165,6 +165,13 @@ services:
       - OBSERVABILITY_MONGO_ENABLED=${OBSERVABILITY_MONGO_ENABLED:-false}
     env_file:
       - .env
+    # It creates its schema on boot and exits if the database is not there yet.
+    # Not on the optional pooler: `required: false` needs Compose 2.20+, and
+    # install.sh also accepts older docker-compose. The pooler waits for the
+    # same Postgres, so both come up together.
+    depends_on:
+      db_kodus_postgres:
+        condition: service_healthy
     networks:
       - kodus-backend-services
       - shared-network
@@ -239,6 +246,45 @@ services:
       timeout: 3s
       retries: 5
       start_period: 30s
+
+  # Optional PgBouncer in transaction mode in front of db_kodus_postgres, as a
+  # reference for installs that pool connections. Enable with
+  # `COMPOSE_PROFILES=pgbouncer` and point the app at it in .env:
+  #   API_PG_DB_HOST=db_kodus_pgbouncer
+  #   API_PG_DB_DIRECT_HOST=db_kodus_postgres   # migrations + live events
+  # The image has no env for track_extra_parameters, which Kodus needs (it
+  # sends statement_timeout and idle_in_transaction_session_timeout when it
+  # connects): docker/pgbouncer/entrypoint.sh adds them to the ini before
+  # pgbouncer starts. See docs/compose.md → PostgreSQL behind a pooler.
+  db_kodus_pgbouncer:
+    image: docker.io/edoburu/pgbouncer:v1.26.1-p0
+    container_name: db_kodus_pgbouncer
+    profiles:
+      - pgbouncer
+    restart: unless-stopped
+    environment:
+      DB_HOST: db_kodus_postgres
+      DB_PORT: "5432"
+      DB_USER: ${API_PG_DB_USERNAME}
+      DB_PASSWORD: ${API_PG_DB_PASSWORD}
+      DB_NAME: ${API_PG_DB_DATABASE}
+      POOL_MODE: transaction
+      AUTH_TYPE: scram-sha-256
+      MAX_CLIENT_CONN: "1000"
+      DEFAULT_POOL_SIZE: "40"
+    entrypoint: ["/bin/sh", "/kodus/pgbouncer-entrypoint.sh"]
+    volumes:
+      - ./docker/pgbouncer/entrypoint.sh:/kodus/pgbouncer-entrypoint.sh:ro
+    depends_on:
+      db_kodus_postgres:
+        condition: service_healthy
+    networks:
+      - kodus-backend-services
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -p 5432"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
 
   db_kodus_mongodb:
     # Pinned, never floating: `mongo:8` moved under existing installs and is how

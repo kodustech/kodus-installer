@@ -1,0 +1,42 @@
+suite: Migration Job behind a pooler
+# Migrations SET statement_timeout and then CREATE INDEX CONCURRENTLY: two
+# statements that must share one session. The Job reads the same dbEnv as the
+# app, so it must get the direct host whenever the app's host is a pooler.
+templates:
+  - templates/migration-job.yaml
+release:
+  name: kodus
+tests:
+  - it: runs the migrations against PostgreSQL itself when the app goes through a pooler
+    set:
+      postgres:
+        mode: external
+        external:
+          host: pgbouncer.db
+          port: 6432
+          existingSecret: pg
+          directHost: pg-primary.db
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: { name: API_PG_DB_DIRECT_HOST, value: pg-primary.db }
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: { name: API_PG_DB_DIRECT_PORT, value: "5432" }
+
+  - it: takes the direct connection string from the user's Secret when the pooler names the database or user differently
+    set:
+      postgres:
+        mode: external
+        external:
+          host: pgbouncer.db
+          port: 6432
+          database: kodus          # the pooler's alias
+          existingSecret: pg
+          directUrlKey: direct-url
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DATABASE_DIRECT_URL
+            valueFrom: { secretKeyRef: { name: pg, key: direct-url } }
