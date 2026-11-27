@@ -310,6 +310,14 @@
     "resourceQuota": {
       "type": "object",
       "properties": { "enabled": { "type": "boolean" } }
+    },
+    "skills": {
+      "type": "object",
+      "properties": {
+        "mountPath": { "type": "string" },
+        "services": { "type": "array", "items": { "type": "string" } },
+        "overrides": { "type": "object", "additionalProperties": { "type": "string" } }
+      }
     }
   }
 }

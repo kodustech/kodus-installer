@@ -1,4 +1,5 @@
 {{- range $name, $svc := .Values.services }}
+{{- $skills := and $.Values.skills.overrides (has $name $.Values.skills.services) }}
 {{- if or (kindIs "invalid" $svc.enabled) $svc.enabled }}
 ---
 apiVersion: apps/v1
@@ -28,6 +29,9 @@ spec:
         # secrets.yaml uses `lookup` for stability, so auto-generated values don't
         # churn this hash — only a real change rolls the pods.
         checksum/secrets: {{ include (print $.Template.BasePath "/secrets.yaml") $ | sha256sum }}
+        {{- if $skills }}
+        checksum/skills: {{ include (print $.Template.BasePath "/skills-configmap.yaml") $ | sha256sum }}
+        {{- end }}
     spec:
       {{- /*
         DERIVED from the app's own drain timeout, never written by hand. Kubernetes
@@ -103,6 +107,14 @@ spec:
             - name: writable-{{ $i }}
               mountPath: {{ $path | quote }}
             {{- end }}
+            {{- if $skills }}
+            {{- range $i, $path := (keys $.Values.skills.overrides | sortAlpha) }}
+            - name: skills-overrides
+              mountPath: {{ printf "%s/%s" $.Values.skills.mountPath $path | quote }}
+              subPath: file-{{ $i }}
+              readOnly: true
+            {{- end }}
+            {{- end }}
       volumes:
         {{- /* The worker clones the repository under review into /tmp (local sandbox). */}}
         {{- include "kodus-common.tmpVolume" (dict "root" $ "config" $svc "fallback" (ternary "10Gi" "100Mi" (eq $name "worker"))) | nindent 8 }}
@@ -113,6 +125,11 @@ spec:
         - name: writable-{{ $i }}
           emptyDir:
             sizeLimit: {{ include "kodus-common.emptyDirSizeLimit" (dict "root" $ "config" $svc "name" (printf "writable-%d" $i) "fallback" ($svc.writablePathsSizeLimit | default "256Mi")) | quote }}
+        {{- end }}
+        {{- if $skills }}
+        - name: skills-overrides
+          configMap:
+            name: {{ include "kodus.fullname" $ }}-skills
         {{- end }}
 {{- end }}
 {{- end }}

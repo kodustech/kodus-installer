@@ -765,3 +765,15 @@ rabbitmq:
     storage:
       size: 8Gi
       storageClass: ""
+
+# Skill overrides. Replace individual Kodus skill files (SKILL.md, references/*,
+# overrides/teams/<team>.md) without building a custom image. Each key is a path
+# relative to the skills directory, written as <skill>/<file>; files not listed
+# here keep the content baked into the image. Mounted read-only, per file, into
+# the services listed below; changing a text rolls those pods.
+skills:
+  mountPath: /usr/src/app/libs/agents/skills
+  services: [api, worker, worker-analytics]
+  overrides: {}
+  #  business-rules-validation/SKILL.md: |
+  #    Your custom skill instructions.

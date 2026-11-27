@@ -1,0 +1,24 @@
+{{- if .Values.skills.overrides }}
+{{- range $path, $_ := .Values.skills.overrides }}
+{{- $segments := splitList "/" $path }}
+{{- if lt (len $segments) 2 }}
+{{- fail (printf "skills.overrides: invalid path %q, expected <skill>/<file>" $path) }}
+{{- end }}
+{{- range $segments }}
+{{- if or (eq . "") (eq . ".") (eq . "..") }}
+{{- fail (printf "skills.overrides: invalid path %q, expected <skill>/<file> without leading /, empty, . or .. segments" $path) }}
+{{- end }}
+{{- end }}
+{{- end }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "kodus.fullname" . }}-skills
+  labels:
+    {{- include "kodus.labels" . | nindent 4 }}
+data:
+  {{- /* Keys are indexes in the sorted path list: a path contains "/", which a ConfigMap key cannot. */}}
+  {{- range $i, $path := (keys .Values.skills.overrides | sortAlpha) }}
+  file-{{ $i }}: {{ get $.Values.skills.overrides $path | quote }}
+  {{- end }}
+{{- end }}

@@ -1,0 +1,222 @@
+suite: Skill overrides
+templates:
+  - templates/deployment.yaml
+  - templates/skills-configmap.yaml
+  - templates/configmap.yaml
+  - templates/secrets.yaml
+chart:
+  version: 0.0.0
+  appVersion: 0.0.0
+release:
+  name: kodus
+tests:
+  - it: creates the skills ConfigMap
+    set:
+      skills.overrides: {"business-rules-validation/SKILL.md": "CUSTOM SKILL"}
+    template: templates/skills-configmap.yaml
+    asserts:
+      - containsDocument:
+          kind: ConfigMap
+          apiVersion: v1
+          name: kodus-skills
+      - equal:
+          path: data.file-0
+          value: CUSTOM SKILL
+
+  - it: mounts the override read-only into api
+    set:
+      skills.overrides: {"business-rules-validation/SKILL.md": "CUSTOM SKILL"}
+    template: templates/deployment.yaml
+    documentSelector: {path: metadata.name, value: kodus-api}
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: skills-overrides
+            mountPath: /usr/src/app/libs/agents/skills/business-rules-validation/SKILL.md
+            subPath: file-0
+            readOnly: true
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: skills-overrides
+            configMap: {name: kodus-skills}
+
+  - it: mounts the override read-only into worker
+    set:
+      skills.overrides: {"business-rules-validation/SKILL.md": "CUSTOM SKILL"}
+    template: templates/deployment.yaml
+    documentSelector: {path: metadata.name, value: kodus-worker}
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: skills-overrides
+            mountPath: /usr/src/app/libs/agents/skills/business-rules-validation/SKILL.md
+            subPath: file-0
+            readOnly: true
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: skills-overrides
+            configMap: {name: kodus-skills}
+
+  - it: mounts the override read-only into worker-analytics
+    set:
+      skills.overrides: {"business-rules-validation/SKILL.md": "CUSTOM SKILL"}
+    template: templates/deployment.yaml
+    documentSelector: {path: metadata.name, value: kodus-worker-analytics}
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: skills-overrides
+            mountPath: /usr/src/app/libs/agents/skills/business-rules-validation/SKILL.md
+            subPath: file-0
+            readOnly: true
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: skills-overrides
+            configMap: {name: kodus-skills}
+
+  - it: does not mount overrides into services outside skills.services
+    set:
+      skills.overrides: {"business-rules-validation/SKILL.md": "CUSTOM SKILL"}
+    documentSelector: {path: metadata.name, value: kodus-webhooks}
+    template: templates/deployment.yaml
+    asserts:
+      - notExists:
+          path: spec.template.metadata.annotations["checksum/skills"]
+      - notContains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: skills-overrides
+            mountPath: /usr/src/app/libs/agents/skills/business-rules-validation/SKILL.md
+            subPath: file-0
+            readOnly: true
+
+  - it: renders no ConfigMap, volume, mount or annotation without overrides
+    asserts:
+      - hasDocuments:
+          count: 0
+        template: templates/skills-configmap.yaml
+      - notExists:
+          path: spec.template.metadata.annotations["checksum/skills"]
+        template: templates/deployment.yaml
+        documentSelector: {path: metadata.name, value: kodus-api}
+      - notContains:
+          path: spec.template.spec.volumes
+          content: {name: skills-overrides, configMap: {name: kodus-skills}}
+        template: templates/deployment.yaml
+        documentSelector: {path: metadata.name, value: kodus-api}
+
+  - it: rejects a path without a skill folder
+    set:
+      skills.overrides: {"SKILL.md": "x"}
+    template: templates/skills-configmap.yaml
+    asserts:
+      - failedTemplate:
+          errorPattern: 'invalid path "SKILL.md", expected <skill>/<file>'
+
+  - it: rejects a path with a .. segment
+    set:
+      skills.overrides: {"skill/../../etc/passwd": "x"}
+    template: templates/skills-configmap.yaml
+    asserts:
+      - failedTemplate:
+          errorPattern: 'invalid path "skill/../../etc/passwd"'
+
+  - it: rejects an absolute path
+    set:
+      skills.overrides: {"/etc/passwd": "x"}
+    template: templates/skills-configmap.yaml
+    asserts:
+      - failedTemplate:
+          errorPattern: 'invalid path "/etc/passwd"'
+
+  - it: rejects a path with an empty segment
+    set:
+      skills.overrides: {"skill//SKILL.md": "x"}
+    template: templates/skills-configmap.yaml
+    asserts:
+      - failedTemplate:
+          errorPattern: 'invalid path "skill//SKILL.md"'
+
+  # Pin the chart version so these hashes track the rendered skills ConfigMap.
+  - it: rolls api and worker pods on override text ONE
+    set:
+      skills.overrides: {"business-rules-validation/SKILL.md": "ONE"}
+    template: templates/deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.metadata.annotations["checksum/skills"]
+          value: 3851c6eb1ed47e31a8663bb04a3602a758ec217423271400f88a208be4b49344
+        documentSelector: {path: metadata.name, value: kodus-api}
+      - equal:
+          path: spec.template.metadata.annotations["checksum/skills"]
+          value: 3851c6eb1ed47e31a8663bb04a3602a758ec217423271400f88a208be4b49344
+        documentSelector: {path: metadata.name, value: kodus-worker}
+
+  - it: rolls api and worker pods differently on override text TWO
+    set:
+      skills.overrides: {"business-rules-validation/SKILL.md": "TWO"}
+    template: templates/deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.metadata.annotations["checksum/skills"]
+          value: 1e4797c9779f25d5ceba559ebc297f5ac5703132106c29d0ee49829d3d99bf9b
+        documentSelector: {path: metadata.name, value: kodus-api}
+      - equal:
+          path: spec.template.metadata.annotations["checksum/skills"]
+          value: 1e4797c9779f25d5ceba559ebc297f5ac5703132106c29d0ee49829d3d99bf9b
+        documentSelector: {path: metadata.name, value: kodus-worker}
+
+  - it: mounts deep paths and no extra mounts or env entries in worker
+    set:
+      skills.overrides:
+        "business-rules-validation/references/output-format.md": "A"
+        "business-rules-validation/overrides/teams/t1.md": "B"
+    template: templates/deployment.yaml
+    documentSelector: {path: metadata.name, value: kodus-worker}
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: skills-overrides
+            mountPath: /usr/src/app/libs/agents/skills/business-rules-validation/overrides/teams/t1.md
+            subPath: file-0
+            readOnly: true
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: skills-overrides
+            mountPath: /usr/src/app/libs/agents/skills/business-rules-validation/references/output-format.md
+            subPath: file-1
+            readOnly: true
+      - lengthEqual:
+          path: spec.template.spec.containers[0].volumeMounts
+          count: 3
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: skills-overrides
+          any: true
+
+  - it: does not mount overrides into mcp-manager
+    set:
+      skills.overrides: {"business-rules-validation/SKILL.md": "x"}
+    template: templates/deployment.yaml
+    documentSelector: {path: metadata.name, value: kodus-mcp-manager}
+    asserts:
+      - notExists:
+          path: spec.template.metadata.annotations["checksum/skills"]
+
+  - it: does not mount overrides into web
+    set:
+      skills.overrides: {"business-rules-validation/SKILL.md": "x"}
+    template: templates/deployment.yaml
+    documentSelector: {path: metadata.name, value: kodus-web}
+    asserts:
+      - notExists:
+          path: spec.template.metadata.annotations["checksum/skills"]
