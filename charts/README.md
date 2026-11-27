@@ -284,6 +284,23 @@ neither works through a transaction-mode pooler. The chart wires both:
   the pooler and PostgreSQL, put a full direct connection string in
   `existingSecret` and name its key in `directUrlKey` instead of `directHost`.
 
+It needs a Kodus release later than 2.2.12 in every service's image: `imageTag`,
+and any `services.<name>.image.tag` or `image.digest` you set, which win over
+it. 2.2.12 and earlier ignore the direct connection, so migrations, LISTEN and
+locks would go through the pooler. Setting the direct connection also moves
+Kodus's locks from session locks to rows, which pods still on the old settings
+do not see, so stop them for the upgrade that turns the pooler on, and start
+them again after it. The HPA does not scale a Deployment up from 0, and the
+chart leaves `replicas` to it:
+
+```bash
+kubectl -n <ns> scale deploy <release>-api <release>-worker \
+  <release>-worker-analytics <release>-webhooks --replicas=0
+helm upgrade <release> ... -n <ns>
+kubectl -n <ns> scale deploy <release>-api <release>-worker \
+  <release>-worker-analytics <release>-webhooks --replicas=2   # autoscaling.minReplicas
+```
+
 For an HA cluster, both hosts must always reach the current primary (CNPG's
 `-rw`, a VIP, HAProxy with Patroni checks). `./scripts/doctor-k8s.sh` reports
 `database.locks` and `database.listen`. Full reference:
