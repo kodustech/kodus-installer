@@ -23,7 +23,7 @@ services:
       - kodus-backend-services
     restart: unless-stopped
     env_file:
-      - .env
+      - ../.env
 
   api:
     image: ${KODUS_REGISTRY:-ghcr.io/kodustech}/kodus-ai-api:${IMAGE_TAG:-latest}
@@ -48,7 +48,7 @@ services:
       - kodus-backend-services
     restart: unless-stopped
     env_file:
-      - .env
+      - ../.env
     depends_on:
       db_kodus_postgres:
         condition: service_healthy
@@ -82,7 +82,7 @@ services:
       - kodus-backend-services
     restart: unless-stopped
     env_file:
-      - .env
+      - ../.env
     depends_on:
       db_kodus_postgres:
         condition: service_healthy
@@ -123,7 +123,7 @@ services:
       - kodus-backend-services
     restart: unless-stopped
     env_file:
-      - .env
+      - ../.env
     depends_on:
       db_kodus_postgres:
         condition: service_healthy
@@ -156,7 +156,7 @@ services:
       - kodus-backend-services
     restart: unless-stopped
     env_file:
-      - .env
+      - ../.env
     depends_on:
       db_kodus_postgres:
         condition: service_healthy
@@ -176,7 +176,7 @@ services:
       - API_MCP_MANAGER_NODE_ENV=${API_MCP_MANAGER_NODE_ENV:-production}
       - OBSERVABILITY_MONGO_ENABLED=${OBSERVABILITY_MONGO_ENABLED:-false}
     env_file:
-      - .env
+      - ../.env
     # It creates its schema on boot and exits if the database is not there yet.
     depends_on:
       db_kodus_postgres:
@@ -201,7 +201,7 @@ services:
       - shared-network
     environment:
       - RABBITMQ_DEFAULT_USER=${RABBITMQ_DEFAULT_USER:-kodus}
-      - RABBITMQ_DEFAULT_PASS=${RABBITMQ_DEFAULT_PASS:-kodus}
+      - RABBITMQ_DEFAULT_PASS=${RABBITMQ_DEFAULT_PASS:?RABBITMQ_DEFAULT_PASS must be set and nonempty}
       - RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS=-rabbit heartbeat 60
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "-q", "check_running"]
