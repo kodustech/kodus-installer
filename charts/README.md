@@ -884,6 +884,32 @@ collisions across envFrom sources, the last source wins. Values are literal YAML
 without Helm tpl evaluation. Quote string values such as "true" and "5432".
 Changes to referenced Secrets/ConfigMaps require a rollout to reload environment.
 
+## Skill overrides
+
+Kodus agents read skill files (`SKILL.md`, `references/*`, `overrides/teams/<team>.md`)
+from the image. `skills.overrides` replaces single files without building a custom
+image. Each key is a path under the skills directory, each value is the file text.
+
+```yaml
+skills:
+  overrides:
+    business-rules-validation/SKILL.md: |
+      Your custom skill instructions.
+    business-rules-validation/overrides/teams/payments.md: |
+      Extra rules for the payments team.
+```
+
+- The path must be `<skill>/<file>` or deeper: no leading `/`, no empty, `.` or `..`
+  segments. Otherwise the chart refuses to render and names the path.
+- Files are stored in a ConfigMap `<release>-skills` and mounted read-only, one
+  file at a time, under `skills.mountPath` (default `/usr/src/app/libs/agents/skills`)
+  into the services in `skills.services` (default `api`, `worker`, `worker-analytics`).
+- Files you do not list keep the content from the image.
+- `overrides/teams/<team>.md` is appended to the skill's `SKILL.md`; it does not
+  replace it. To replace the skill text, override `SKILL.md`.
+- Pods carry a `checksum/skills` annotation, so changing an override text restarts
+  them. Without overrides the chart renders no ConfigMap, volume, mount or annotation.
+
 ## EmptyDir size limits
 
 Configure all chart-created emptyDir volumes with a global default or by volume
