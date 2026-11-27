@@ -1,0 +1,321 @@
+# Coolify-compatible Docker Compose stack for Kodus.
+#
+# Mirrors the root docker-compose.yml with three changes required by Coolify:
+#   1. Services use `expose` instead of host `ports` bindings so Coolify's
+#      Traefik proxy routes traffic over the Docker network and internal
+#      datastores stay off the host's public interface.
+#   2. Networks are created by Compose (`driver: bridge`) instead of marked
+#      `external: true`, since Coolify runs Compose directly without install.sh.
+#   3. Relative bind-mount paths point up one level (`../`) to the repo root.
+#
+# See coolify/README.md for setup instructions.
+
+services:
+  kodus-web:
+    image: ${KODUS_REGISTRY:-ghcr.io/kodustech}/kodus-ai-web:${IMAGE_TAG:-latest}
+    container_name: kodus-web-prod
+    expose:
+      - "${WEB_PORT:-3000}"
+    environment:
+      - NODE_ENV=production
+    networks:
+      - shared-network
+      - kodus-backend-services
+    restart: unless-stopped
+    env_file:
+      - ../.env
+
+  api:
+    image: ${KODUS_REGISTRY:-ghcr.io/kodustech}/kodus-ai-api:${IMAGE_TAG:-latest}
+    platform: linux/amd64
+    container_name: ${GLOBAL_API_CONTAINER_NAME:-kodus-api}
+    volumes:
+      - log_volume:/app/logs
+    logging:
+      options:
+        max-size: "200m"
+        max-file: "10"
+    expose:
+      - "3001"
+    environment:
+      - ENV=production
+      - NODE_ENV=production
+      # Self-hosted defaults off because this exporter persists logs and
+      # telemetry in MongoDB. Operators can opt in explicitly from .env.
+      - OBSERVABILITY_MONGO_ENABLED=${OBSERVABILITY_MONGO_ENABLED:-false}
+    networks:
+      - shared-network
+      - kodus-backend-services
+    restart: unless-stopped
+    env_file:
+      - ../.env
+    depends_on:
+      db_kodus_postgres:
+        condition: service_healthy
+      db_kodus_mongodb:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+  worker:
+    image: ${KODUS_REGISTRY:-ghcr.io/kodustech}/kodus-ai-worker:${IMAGE_TAG:-latest}
+    platform: linux/amd64
+    container_name: kodus-worker-prod
+    volumes:
+      - log_volume:/app/logs
+    logging:
+      options:
+        max-size: "200m"
+        max-file: "10"
+    environment:
+      - ENV=production
+      - NODE_ENV=production
+      - OBSERVABILITY_MONGO_ENABLED=${OBSERVABILITY_MONGO_ENABLED:-false}
+      # Only `api` runs DB migrations on boot — it runs the OLTP *and* the
+      # analytics-warehouse migrations from the shared prod-entrypoint. If
+      # worker/webhooks/worker-analytics also migrated concurrently they would
+      # race on CREATE TYPE (duplicate key pg_type_typname_nsp_index) and
+      # crash-loop the first boot. Override the .env default to false here.
+      - RUN_MIGRATIONS=false
+    networks:
+      - shared-network
+      - kodus-backend-services
+    restart: unless-stopped
+    env_file:
+      - ../.env
+    depends_on:
+      db_kodus_postgres:
+        condition: service_healthy
+      db_kodus_mongodb:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+  # Analytics ingestion worker (Enterprise / Cockpit). Same image as `worker`,
+  # only WORKER_ROLE differs: this process runs the cockpit warehouse ingestion
+  # + PR classifier crons and writes the `analytics` Postgres schema. The main
+  # `worker` stays role=code-review and never touches analytics.
+  #
+  # Opt-in: gated behind the `analytics` compose profile so community installs
+  # don't pay for an idle worker. Enable with `COMPOSE_PROFILES=analytics`
+  # (and set the ANALYTICS_* block in .env). See docs → Analytics Worker.
+  worker-analytics:
+    image: ${KODUS_REGISTRY:-ghcr.io/kodustech}/kodus-ai-worker:${IMAGE_TAG:-latest}
+    platform: linux/amd64
+    container_name: kodus-worker-analytics
+    profiles:
+      - analytics
+    volumes:
+      - log_volume:/app/logs
+    logging:
+      options:
+        max-size: "200m"
+        max-file: "10"
+    environment:
+      - ENV=production
+      - NODE_ENV=production
+      - WORKER_ROLE=analytics
+      - OBSERVABILITY_MONGO_ENABLED=${OBSERVABILITY_MONGO_ENABLED:-false}
+      # Migrations belong to `api` only — see the note on the `worker` service.
+      - RUN_MIGRATIONS=false
+    networks:
+      - shared-network
+      - kodus-backend-services
+    restart: unless-stopped
+    env_file:
+      - ../.env
+    depends_on:
+      db_kodus_postgres:
+        condition: service_healthy
+      db_kodus_mongodb:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+  webhooks:
+    image: ${KODUS_REGISTRY:-ghcr.io/kodustech}/kodus-ai-webhook:${IMAGE_TAG:-latest}
+    platform: linux/amd64
+    container_name: kodus-webhooks-prod
+    volumes:
+      - log_volume:/app/logs
+    logging:
+      options:
+        max-size: "200m"
+        max-file: "10"
+    expose:
+      - "${API_WEBHOOKS_PORT:-3332}"
+    environment:
+      - ENV=production
+      - NODE_ENV=production
+      - API_WEBHOOKS_PORT=${API_WEBHOOKS_PORT:-3332}
+      - OBSERVABILITY_MONGO_ENABLED=${OBSERVABILITY_MONGO_ENABLED:-false}
+      # Migrations belong to `api` only — see the note on the `worker` service.
+      - RUN_MIGRATIONS=false
+    networks:
+      - shared-network
+      - kodus-backend-services
+    restart: unless-stopped
+    env_file:
+      - ../.env
+    depends_on:
+      db_kodus_postgres:
+        condition: service_healthy
+      db_kodus_mongodb:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+  kodus-mcp-manager:
+    image: ${KODUS_REGISTRY:-ghcr.io/kodustech}/kodus-mcp-manager:${IMAGE_TAG:-latest}
+    platform: linux/amd64
+    container_name: kodus-mcp-manager
+    expose:
+      - "${API_MCP_MANAGER_PORT:-3101}"
+    environment:
+      - NODE_ENV=${API_MCP_MANAGER_NODE_ENV:-production}
+      - API_MCP_MANAGER_NODE_ENV=${API_MCP_MANAGER_NODE_ENV:-production}
+      - OBSERVABILITY_MONGO_ENABLED=${OBSERVABILITY_MONGO_ENABLED:-false}
+    env_file:
+      - ../.env
+    # It creates its schema on boot and exits if the database is not there yet.
+    depends_on:
+      db_kodus_postgres:
+        condition: service_healthy
+    networks:
+      - kodus-backend-services
+      - shared-network
+    restart: unless-stopped
+
+  rabbitmq:
+    # Pre-built image bundling the rabbitmq_delayed_message_exchange plugin
+    # (required by Kodus workflow delayed retries — see kodus-ai issue #873).
+    image: ${KODUS_REGISTRY:-ghcr.io/kodustech}/kodus-rabbitmq:4.2.2-kodus.1
+    container_name: rabbitmq-prod
+    hostname: ${RABBITMQ_HOSTNAME:-rabbitmq}
+    expose:
+      - "5672"
+      - "15672"
+      - "15692"
+    networks:
+      - monitoring-network
+      - shared-network
+    environment:
+      - RABBITMQ_DEFAULT_USER=${RABBITMQ_DEFAULT_USER:-kodus}
+      - RABBITMQ_DEFAULT_PASS=${RABBITMQ_DEFAULT_PASS:?RABBITMQ_DEFAULT_PASS must be set and nonempty}
+      - RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS=-rabbit heartbeat 60
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "check_running"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+    volumes:
+      - rabbitmq-data-prod:/var/lib/rabbitmq
+    command: /usr/local/bin/init-definitions.sh
+    restart: unless-stopped
+
+  db_kodus_postgres:
+    image: docker.io/pgvector/pgvector:pg16
+    container_name: db_kodus_postgres
+    restart: unless-stopped
+    expose:
+      - "5432"
+    environment:
+      POSTGRES_USER: ${API_PG_DB_USERNAME}
+      POSTGRES_PASSWORD: ${API_PG_DB_PASSWORD}
+      POSTGRES_DB: ${API_PG_DB_DATABASE}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ../docker-entrypoint-initdb.d:/docker-entrypoint-initdb.d
+    networks:
+      - kodus-backend-services
+    healthcheck:
+      test:
+        # -h 127.0.0.1 forces TCP. On a fresh volume the entrypoint first runs
+        # a temporary server on the Unix socket only (listen_addresses='') to
+        # create the role and run docker-entrypoint-initdb.d; a socket probe
+        # would call that one ready and release the app before init.sql ran.
+        ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U ${API_PG_DB_USERNAME} -d ${API_PG_DB_DATABASE}"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 30s
+
+  # Optional PgBouncer in transaction mode in front of db_kodus_postgres.
+  # Enable with `COMPOSE_PROFILES=pgbouncer` and see docs/compose.md.
+  db_kodus_pgbouncer:
+    image: docker.io/edoburu/pgbouncer:v1.26.1-p0
+    container_name: db_kodus_pgbouncer
+    profiles:
+      - pgbouncer
+    restart: unless-stopped
+    environment:
+      DB_HOST: db_kodus_postgres
+      DB_PORT: "5432"
+      DB_USER: ${API_PG_DB_USERNAME}
+      DB_PASSWORD: ${API_PG_DB_PASSWORD}
+      DB_NAME: ${API_PG_DB_DATABASE}
+      POOL_MODE: transaction
+      AUTH_TYPE: scram-sha-256
+      MAX_CLIENT_CONN: "1000"
+      DEFAULT_POOL_SIZE: "40"
+    entrypoint: ["/bin/sh", "/kodus/pgbouncer-entrypoint.sh"]
+    volumes:
+      - ../docker/pgbouncer/entrypoint.sh:/kodus/pgbouncer-entrypoint.sh:ro
+    depends_on:
+      db_kodus_postgres:
+        condition: service_healthy
+    networks:
+      - kodus-backend-services
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -p 5432"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  db_kodus_mongodb:
+    # Pinned to 8.3.13 by default; set KODUS_MONGO_IMAGE=docker.io/mongo:8.2.11
+    # on Linux kernels 6.19+ (see root docker-compose.yml for details).
+    image: ${KODUS_MONGO_IMAGE:-docker.io/mongo:8.3.13}
+    container_name: db_kodus_mongodb
+    restart: unless-stopped
+    expose:
+      - "27017"
+    volumes:
+      - mongodbdata:/data/db
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${API_MG_DB_USERNAME}
+      MONGO_INITDB_ROOT_PASSWORD: ${API_MG_DB_PASSWORD}
+      MONGO_INITDB_DATABASE: ${API_MG_DB_DATABASE}
+    networks:
+      - kodus-backend-services
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "mongosh --quiet --host 127.0.0.1 -u \"$${MONGO_INITDB_ROOT_USERNAME}\" -p \"$${MONGO_INITDB_ROOT_PASSWORD}\" --authenticationDatabase admin --eval 'db.runCommand({ ping: 1 }).ok' | grep -q 1",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+
+volumes:
+  log_volume:
+  rabbitmq-data-prod:
+    name: rabbitmq-data-prod
+  pgdata:
+  mongodbdata:
+
+networks:
+  shared-network:
+    driver: bridge
+  monitoring-network:
+    driver: bridge
+    name: monitoring-network
+  kodus-backend-services:
+    driver: bridge
+    name: kodus-backend-services
