@@ -126,6 +126,12 @@ endpoints: the pooler for queries, and PostgreSQL itself (the current primary)
 for migrations and the LISTEN connection that carries live events between api
 and worker. Neither works through a transaction-mode pooler.
 
+It needs a Kodus release later than 2.2.12 in `IMAGE_TAG`: 2.2.12 and earlier
+ignore the direct connection, so migrations, LISTEN and locks would go through
+the pooler. Setting the direct connection also moves Kodus's locks from session
+locks to rows, which containers still on the old settings do not see: run
+`docker compose down` before starting with the new `.env`.
+
 ```bash
 API_PG_DB_HOST=your-pgbouncer-host
 API_PG_DB_PORT=6432

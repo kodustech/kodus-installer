@@ -284,6 +284,13 @@ neither works through a transaction-mode pooler. The chart wires both:
   the pooler and PostgreSQL, put a full direct connection string in
   `existingSecret` and name its key in `directUrlKey` instead of `directHost`.
 
+It needs a Kodus release later than 2.2.12 in `imageTag`: 2.2.12 and earlier
+ignore the direct connection, so migrations, LISTEN and locks would go through
+the pooler. Setting the direct connection also moves Kodus's locks from session
+locks to rows, which pods still on the old settings do not see: scale `api`,
+`worker`, `worker-analytics` and `webhooks` to 0 before the `helm upgrade` that
+turns the pooler on.
+
 For an HA cluster, both hosts must always reach the current primary (CNPG's
 `-rw`, a VIP, HAProxy with Patroni checks). `./scripts/doctor-k8s.sh` reports
 `database.locks` and `database.listen`. Full reference:
