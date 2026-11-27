@@ -5,6 +5,8 @@ on:
     paths:
       - 'docker/pgbouncer/**'
       - 'scripts/test-pgbouncer-entrypoint.sh'
+      - 'scripts/install.sh'
+      - 'scripts/test-install.sh'
       - 'docker-compose.yml'
       - '.github/workflows/pgbouncer-ci.yml'
   push:
@@ -12,6 +14,8 @@ on:
     paths:
       - 'docker/pgbouncer/**'
       - 'scripts/test-pgbouncer-entrypoint.sh'
+      - 'scripts/install.sh'
+      - 'scripts/test-install.sh'
       - 'docker-compose.yml'
 
 permissions:
@@ -24,9 +28,14 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: shellcheck
-        run: shellcheck -S warning docker/pgbouncer/entrypoint.sh scripts/test-pgbouncer-entrypoint.sh
+        run: shellcheck -S warning docker/pgbouncer/entrypoint.sh scripts/test-pgbouncer-entrypoint.sh scripts/test-install.sh
 
       # The entrypoint in the image Compose runs: the ini it leaves, when it
       # writes it, and pgbouncer starting with it.
       - name: Entrypoint scenarios
         run: ./scripts/test-pgbouncer-entrypoint.sh
+
+      # install.sh against a stubbed docker: the services it starts, the
+      # pooler included when its profile is on.
+      - name: install.sh services
+        run: ./scripts/test-install.sh
