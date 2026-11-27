@@ -75,6 +75,10 @@ case_ 'pgbouncer profile on: the pooler is started' \
     db_kodus_pgbouncer yes
 case_ 'pgbouncer among other profiles: the pooler is started' \
     $'COMPOSE_PROFILES=analytics,pgbouncer' db_kodus_pgbouncer yes
+case_ 'every profile (*): the pooler is started' \
+    $'COMPOSE_PROFILES=*' db_kodus_pgbouncer yes
+case_ 'a profile that only contains the name: the pooler is not started' \
+    $'COMPOSE_PROFILES=nopgbouncer' db_kodus_pgbouncer no
 case_ 'no profile: the pooler is not started' '' db_kodus_pgbouncer no
 case_ 'no profile: the bundled Postgres is started' '' db_kodus_postgres yes
 
