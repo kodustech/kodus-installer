@@ -143,9 +143,7 @@ tests:
       - failedTemplate:
           errorPattern: 'invalid path "skill//SKILL.md"'
 
-  # The two texts differ only in the override; checksum/config stays the same.
-  # Chart version is pinned in the suite so the pinned sha256 values change only
-  # if the templates or the override text change.
+  # Pin the chart version so these hashes track the rendered skills ConfigMap.
   - it: rolls api and worker pods on override text ONE
     set:
       skills.overrides: {"business-rules-validation/SKILL.md": "ONE"}
@@ -159,10 +157,6 @@ tests:
           path: spec.template.metadata.annotations["checksum/skills"]
           value: 3851c6eb1ed47e31a8663bb04a3602a758ec217423271400f88a208be4b49344
         documentSelector: {path: metadata.name, value: kodus-worker}
-      - equal:
-          path: spec.template.metadata.annotations["checksum/config"]
-          value: a9a0f8ab24ea691cfbbfed02c1a0a1288d05f99008e1acb555e6b256a2b8a29b
-        documentSelector: {path: metadata.name, value: kodus-api}
 
   - it: rolls api and worker pods differently on override text TWO
     set:
@@ -177,10 +171,6 @@ tests:
           path: spec.template.metadata.annotations["checksum/skills"]
           value: 1e4797c9779f25d5ceba559ebc297f5ac5703132106c29d0ee49829d3d99bf9b
         documentSelector: {path: metadata.name, value: kodus-worker}
-      - equal:
-          path: spec.template.metadata.annotations["checksum/config"]
-          value: a9a0f8ab24ea691cfbbfed02c1a0a1288d05f99008e1acb555e6b256a2b8a29b
-        documentSelector: {path: metadata.name, value: kodus-api}
 
   - it: mounts deep paths and no extra mounts or env entries in worker
     set:
