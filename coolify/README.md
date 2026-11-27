@@ -37,7 +37,7 @@ Key variables to verify:
 | `WEB_HOSTNAME_API` | `api` *(internal Docker service name; if using a public HTTPS URL instead, include the `https://` scheme)* |
 | `WEB_PORT_API` | `3001` *(or `443` when `WEB_HOSTNAME_API` uses `https://`)* |
 | `NEXTAUTH_URL` | `https://kodus.yourdomain.com` |
-| `API_<provider>_CODE_MANAGEMENT_WEBHOOK` | `https://webhooks.kodus.yourdomain.com/github/webhook` *(GitHub, GitLab, Forgejo; use `GLOBAL_BITBUCKET_CODE_MANAGEMENT_WEBHOOK` for Bitbucket and `GLOBAL_AZURE_REPOS_CODE_MANAGEMENT_WEBHOOK` for Azure Repos)* |
+| `API_<provider>_CODE_MANAGEMENT_WEBHOOK` | `https://webhooks.kodus.yourdomain.com/<provider>/webhook` — GitHub (`/github/webhook`), GitLab (`/gitlab/webhook`), Forgejo (`/forgejo/webhook`); for Bitbucket use `GLOBAL_BITBUCKET_CODE_MANAGEMENT_WEBHOOK` (`.../bitbucket/webhook`) and for Azure Repos use `GLOBAL_AZURE_REPOS_CODE_MANAGEMENT_WEBHOOK` (`.../azure-repos/webhook`) |
 | `API_RABBITMQ_ENABLED` | `true` |
 | `API_OPEN_AI_API_KEY` | Your OpenAI or Anthropic key *(or configure later under **Settings → BYOK**)* |
 
