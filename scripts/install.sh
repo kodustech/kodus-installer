@@ -421,6 +421,13 @@ if [ "$use_local_rabbitmq" = "true" ]; then
 fi
 if [ "$use_local_db" = "true" ]; then
     services+=(db_kodus_postgres db_kodus_mongodb)
+    # The optional PgBouncer in front of it (docs/compose.md). Compose starts
+    # only the services named here, so a profile in COMPOSE_PROFILES alone
+    # leaves the pooler down and the apps pointed at it restart forever.
+    # `*` is Compose's "every profile".
+    case ",${COMPOSE_PROFILES:-}," in
+        *,pgbouncer,* | *,\*,*) services+=(db_kodus_pgbouncer) ;;
+    esac
 fi
 $DOCKER_COMPOSE up -d --force-recreate "${services[@]}"
 
